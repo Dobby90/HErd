@@ -93,4 +93,16 @@
 
 > docs/README.md와 docs/00-scope-and-architecture.md를 읽고, docs/02-erd-editor.md의 2단계를 구현해줘. 1단계 모델을 유지하면서 실제 편집·참조 정리·복구 흐름까지 검증해줘.
 
-구현 기록: 미착수.
+## 구현 기록
+
+2단계 구현 후보에는 스키마 명령과 실행 취소·다시 실행, React Flow 기반 뷰, PostgreSQL 17 타입·후보키 검증, IndexedDB 복구가 포함된다. 설치·실행 방법과 탭 충돌 시 복구본 선택 방법은 [저장소 README](../README.md)에서 확인할 수 있다. ENUM·SEQUENCE·IDENTITY는 v1 데이터로 보존한다. DDL 입출력과 해당 기능의 검증은 이후 단계에서 진행한다.
+
+호스트의 Docker 환경 준비에서 Chromium과 선언한 의존성을 설치하고 pnpm lockfile을 생성했다. 검증 결과는 후속 Tester가 기록할 예정이다.
+
+| 호스트 명령 | 결과 또는 보고서 |
+| --- | --- |
+| `build_1`, `build_2`, `build_3` | 빌드·타입 검사·lint 결과 대기 |
+| `node-test_4` | 모델·브라우저 Vitest 결과 대기. `build/test.xml` |
+| `node-test_5` | PostgreSQL 17 통합 Vitest 결과 대기. `build/test_integration.xml` |
+
+완료 체크리스트는 후보에 대한 호스트 검증 결과가 확인되면 갱신한다.

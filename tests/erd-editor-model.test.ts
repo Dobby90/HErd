@@ -124,3 +124,8 @@ it('previews and removes dependencies atomically while keeping unsafe expression
   expect(hide.document.catalog).toEqual(document.catalog);
   expect(hide.document.views[1]).toEqual(document.views[1]);
 });
+
+it('leaves a pristine sample out of the undo and recovery workflow when its title is reapplied', () => {
+  const history = documentHistory(sampleDocument);
+  expect(commitDocument(history, { kind: 'title', name: sampleDocument.name }).history).toBe(history);
+});

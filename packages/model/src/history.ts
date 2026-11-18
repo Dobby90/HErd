@@ -1,5 +1,6 @@
 import { applyCommand } from './lifecycle.js';
 import type { DocumentCommand } from './lifecycle.js';
+import { erdDocumentSchema } from './schema.js';
 import type { ErdDocument } from './schema.js';
 
 export interface DocumentHistory {
@@ -9,7 +10,7 @@ export interface DocumentHistory {
 }
 
 export function documentHistory(document: ErdDocument): DocumentHistory {
-  return { present: document, past: [], future: [] };
+  return { present: erdDocumentSchema.parse(document), past: [], future: [] };
 }
 
 export function commitDocument(history: DocumentHistory, command: DocumentCommand) {

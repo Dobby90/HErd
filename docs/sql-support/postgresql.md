@@ -6,10 +6,13 @@
 
 | 기능 | 모델 | 편집 UI | DDL import | DDL export |
 | --- | --- | --- | --- | --- |
-| Namespace, 테이블, 컬럼 | 지원 | 단계 2 예정 | `not-implemented` (5단계 예정) | `not-implemented` (4단계 예정) |
-| 표준 타입, JSONB, 배열, UUID, 인용 식별자 | 타입·식별자 기록 | 단계 2 예정 | `not-implemented` (5단계 예정) | `not-implemented` (4단계 예정) |
-| PK, UNIQUE, FK, CHECK, DEFAULT | 지원 | 단계 2 예정 | `not-implemented` (5단계 예정) | `not-implemented` (4단계 예정) |
-| 일반·고유·식 인덱스, enum, sequence, identity | 지원 | 단계 2 예정 | `not-implemented` (5단계 예정) | `not-implemented` (4단계 예정) |
+| Namespace, 테이블, 컬럼 | 지원 | 생성·이름·설명·소속·컬럼 순서 편집 | `not-implemented` (5단계 예정) | `not-implemented` (4단계 예정) |
+| 표준 타입, JSONB, 배열, UUID, 인용 식별자 | 타입·식별자 기록 | 등록 타입·인수·배열 차원과 물리명 편집 | `not-implemented` (5단계 예정) | `not-implemented` (4단계 예정) |
+| PK, UNIQUE, FK, CHECK, DEFAULT | 지원 | 순서 있는 키·FK 대응 및 참조 동작, CHECK·DEFAULT 식 편집 | `not-implemented` (5단계 예정) | `not-implemented` (4단계 예정) |
+| 일반·고유·식 인덱스 | 지원 | 컬럼·식 키 순서와 부분 인덱스 조건 편집 | `not-implemented` (5단계 예정) | `not-implemented` (4단계 예정) |
+| ENUM·SEQUENCE·IDENTITY | 지원 | 기존 데이터 보존 | `not-implemented` (5단계 예정) | `not-implemented` (4단계 예정) |
+
+2단계 편집 범위는 구현 후보 기준이며 호스트 검증 결과를 기다립니다. UI와 서버 adapter는 동일한 PostgreSQL 의미 검증을 사용합니다. 빈 이름, 명명 범위 내 중복과 참조 불가 후보키를 객체별로 표시합니다.
 
 adapter의 import/export는 `not-implemented`를 반환합니다. 등록되지 않은 dialect와 인증되지 않은 엔진 버전은 실패 진단을 반환합니다. 알 수 없는 버전의 확장과 무효화된 식은 문서에 보존되고 SQL 생성은 차단됩니다.
 

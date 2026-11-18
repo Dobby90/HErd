@@ -61,8 +61,8 @@
 
 ## 현재 진행 상태
 
-- [ ] 1단계: 개발 기반과 도메인 모델. PostgreSQL 17 인증 근거 기록, 검토 후 수정 후보 검증 대기.
-- [ ] 2단계: 로컬 ERD 편집기
+- [x] 1단계 개발 기반과 도메인 모델 완료. 당시 후보의 PostgreSQL 17 인증과 검증 근거는 `step-72`에 기록했다. [구현 기록](./01-foundation-and-domain.md)
+- [ ] 2단계 로컬 ERD 편집기 구현 후보. 고정 호스트 검증과 최종 승인을 기다린다. [실행 및 복구 안내](../README.md)
 - [ ] 3단계: 프로젝트·인증·서버 저장
 - [ ] 4단계: PostgreSQL DDL export
 - [ ] 5단계: PostgreSQL DDL import
