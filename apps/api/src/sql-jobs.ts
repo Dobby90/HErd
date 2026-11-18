@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { ApiError, objectBody, uuid } from './api-error.js';
 import type { Authenticate } from './auth.js';
-import { defaultSqlInputBytes } from './config.js';
+import { defaultSqlActive, defaultSqlInputBytes } from './config.js';
 import type { DocumentLimits } from './config.js';
 import { transaction } from './database.js';
 import { findDocument, findProject, requireRole, storedDocument } from './projects.js';
@@ -84,6 +84,12 @@ export function registerSqlJobs(api: FastifyInstance, pool: Pool, authenticate: 
       if (input.kind === 'generate' && row?.revision !== input.revision) {
         throw new ApiError(409, 'REVISION_CONFLICT', '최신 서버 리비전으로 SQL 작업을 다시 요청하세요.', { revision: row?.revision });
       }
+      await client.query('SELECT pg_advisory_xact_lock(171504032)');
+      const { rows: [{ total }] } = await client.query<{ total: number }>(
+        "SELECT count(*)::integer AS total FROM sql_jobs WHERE state IN ('queued', 'running')");
+      if (total >= (queue.settings.maxActive ?? defaultSqlActive)) {
+        throw new ApiError(429, 'SQL_QUEUE_FULL', 'SQL 작업 대기열이 가득 찼습니다. 잠시 후 다시 시도하세요.');
+      }
       const { rows: [{ active }] } = await client.query<{ active: number }>(
         "SELECT count(*)::integer AS active FROM sql_jobs WHERE user_id = $1 AND state IN ('queued', 'running')", [user.id]);
       if (active >= queue.settings.userLimit) throw new ApiError(429, 'SQL_JOB_LIMIT', '진행 중인 SQL 작업을 완료하거나 취소한 뒤 다시 시도하세요.');
@@ -104,6 +110,7 @@ export function registerSqlJobs(api: FastifyInstance, pool: Pool, authenticate: 
       return created;
     });
     queue.wake();
+    request.log.info({ jobId: job.id, kind: job.kind, status: job.state }, 'SQL job submitted');
     return reply.code(202).send(job);
   });
 
@@ -125,6 +132,7 @@ export function registerSqlJobs(api: FastifyInstance, pool: Pool, authenticate: 
       return cancelled;
     });
     if (job.state === 'cancelled') queue.cancel(id);
+    request.log.info({ jobId: id, kind: job.kind, status: job.state }, 'SQL job cancellation requested');
     return job;
   });
 }

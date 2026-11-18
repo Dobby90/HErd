@@ -8,10 +8,12 @@ import config from '../vite.config.js';
 import { freePort } from './support/tcp.js';
 
 it('keeps the development and Docker validation toolchain pins aligned', async () => {
-  const [packageJson, environmentJson, nodeVersionFile] = await Promise.all([
+  const [packageJson, environmentJson, nodeVersionFile, compose, dockerfile] = await Promise.all([
     readFile('package.json', 'utf8'),
     readFile('devorchestra.environment.json', 'utf8'),
     readFile('.node-version', 'utf8'),
+    readFile('compose.yaml', 'utf8'),
+    readFile('Dockerfile', 'utf8'),
   ]);
   const manifest = JSON.parse(packageJson);
   const environment = JSON.parse(environmentJson);
@@ -21,6 +23,9 @@ it('keeps the development and Docker validation toolchain pins aligned', async (
   expect(environment.pnpm).toMatch(/^\d+\.\d+\.\d+$/);
   expect(manifest.engines.pnpm).toBe(environment.pnpm);
   expect(manifest.packageManager).toBe('pnpm@' + environment.pnpm);
+  expect(environment.image).toMatch(/^postgres:17\.12-bookworm@sha256:[a-f0-9]{64}$/);
+  expect(compose).toContain('image: ' + environment.image);
+  expect(dockerfile).toContain('FROM ' + environment.image + ' AS verify');
 });
 
 it('starts both development servers, proxies API requests and shuts down', async () => {

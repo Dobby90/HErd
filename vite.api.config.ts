@@ -5,6 +5,6 @@ export default defineConfig({
   ssr: { noExternal: [/^@erd\//], external: ['pgsql-parser'] },
   build: {
     ssr: true, outDir: 'dist/api', target: 'node24',
-    rollupOptions: { input: { main: 'apps/api/src/main.ts', 'sql-worker': 'apps/api/src/sql-worker.ts' } },
+    rollupOptions: { input: { main: 'apps/api/src/main.ts', 'sql-worker': 'apps/api/src/sql-worker.ts', migrate: 'apps/api/src/migrate.ts' } },
   },
 });

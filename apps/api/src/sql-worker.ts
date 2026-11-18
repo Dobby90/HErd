@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { parentPort, workerData } from 'node:worker_threads';
 import { SqlService } from '@erd/sql-service';
 import type { GenerateRequest, ParseJobOutput, ParseRequest, SqlJobOutput } from '@erd/sql-contract';
 import { createSqlRegistry } from './sql-registry.js';
@@ -32,14 +31,18 @@ async function generateJob(service: SqlService, task: Exclude<Task, { kind: 'par
   return { state: result.status === 'generated' ? 'succeeded' : 'failed', output };
 }
 
-const port = parentPort;
-if (!port) throw new Error('SQL worker requires a parent port.');
-const task = workerData as Task;
+if (!process.send) throw new Error('SQL worker requires an IPC channel.');
+const send = process.send.bind(process);
+process.once('disconnect', () => process.exit(1));
+const task = await new Promise<Task>(resolve => {
+  process.once('message', message => resolve(message as Task));
+  send({ ready: true });
+});
 try {
   const service = new SqlService(createSqlRegistry());
-  port.postMessage(await (task.kind === 'parse' ? parseJob(service, task) : generateJob(service, task)));
+  send(await (task.kind === 'parse' ? parseJob(service, task) : generateJob(service, task)));
 } catch {
-  port.postMessage({ state: 'failed', output: {
+  send({ state: 'failed', output: {
     diagnostics: [{ code: 'SQL_WORKER_ERROR', severity: 'error', message: 'SQL 작업 중 오류가 발생했습니다.' }], dependencies: [],
   } });
 }

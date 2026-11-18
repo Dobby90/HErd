@@ -17,7 +17,9 @@ export const defaultCheckpointSettings = { intervalMs: 600_000, keep: 50 };
 export type CheckpointSettings = typeof defaultCheckpointSettings;
 export const defaultSqlJobSettings = { timeoutMs: 10_000, ttlMs: 10 * 60_000, userLimit: 2, workers: 2 };
 export const defaultSqlInputBytes = 5 * 1024 * 1024;
-export type SqlJobSettings = typeof defaultSqlJobSettings & { maxInputBytes?: number };
+export const defaultSqlActive = 64;
+export const defaultSqlHeapMb = 256;
+export type SqlJobSettings = typeof defaultSqlJobSettings & { maxInputBytes?: number; maxActive?: number; heapMb?: number };
 
 function readLimit(env: NodeJS.ProcessEnv, key: string, fallback: number) {
   const value = env[key] === undefined ? fallback : Number(env[key]);
@@ -68,6 +70,8 @@ export function readConfig(env: NodeJS.ProcessEnv) {
     userLimit: readLimit(env, 'SQL_JOB_USER_LIMIT', defaultSqlJobSettings.userLimit),
     workers: readLimit(env, 'SQL_JOB_WORKERS', defaultSqlJobSettings.workers),
     maxInputBytes: readLimit(env, 'SQL_JOB_MAX_INPUT_BYTES', defaultSqlInputBytes),
+    maxActive: readLimit(env, 'SQL_JOB_MAX_ACTIVE', defaultSqlActive),
+    heapMb: readLimit(env, 'SQL_WORKER_HEAP_MB', defaultSqlHeapMb),
   };
   const checkpoints = {
     intervalMs: readLimit(env, 'ERD_CHECKPOINT_INTERVAL_MS', defaultCheckpointSettings.intervalMs),

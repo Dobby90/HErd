@@ -14,7 +14,9 @@ export function configureErrors(api: FastifyInstance) {
         : typeof error === 'object' && error && 'statusCode' in error && [400, 415].includes(Number(error.statusCode))
           ? new ApiError(400, 'INVALID_REQUEST', '요청 형식이 올바르지 않습니다.')
           : new ApiError(500, 'INTERNAL_ERROR', '서버에서 요청을 처리하지 못했습니다.');
-    if (issue.status >= 500) request.log.error({ requestId: request.id, code: issue.code }, 'Request failed');
+    const event = { requestId: request.id, status: issue.status, code: issue.code };
+    if (issue.status >= 500) request.log.error(event, 'Request failed');
+    else request.log.info(event, 'Request declined');
     void reply.code(issue.status).send({ code: issue.code, message: issue.message, details: issue.details, requestId: request.id });
   });
   api.setNotFoundHandler(request => {

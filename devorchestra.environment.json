@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "backend": "docker",
-  "image": "postgres:17-bookworm",
+  "image": "postgres:17.12-bookworm@sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b",
   "node": "24.12.0",
   "pnpm": "10.11.0",
   "packages": ["chromium"]

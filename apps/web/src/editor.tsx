@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { XYPosition } from '@xyflow/react';
 import { createDocument, deletionImpact, validateDocumentStructure } from '@erd/model';
@@ -245,16 +245,19 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
     profile.status === 'certified') ? registered : undefined;
   const run: Run = command => !readOnly && !session.loading && session.run(command, (before, after) => {
     if (!dialect) return [];
-    const issues = (document: ErdDocument) => document.catalog.constraints.flatMap(key => key.kind === 'fk'
-      ? dialect.validateForeignKey(document, key) : []);
+    const issues = (document: ErdDocument) => {
+      const foreignKeys = dialect.inspectForeignKeys?.(document);
+      return document.catalog.constraints.flatMap(key => key.kind !== 'fk' ? []
+        : foreignKeys ? foreignKeys.validate(key) : dialect.validateForeignKey(document, key));
+    };
     const previous = new Set(issues(before).map(issue => issue.code + ':' + issue.objectId));
     return issues(after).filter(issue => !previous.has(issue.code + ':' + issue.objectId))
       .map((issue): ModelDiagnostic => ({ ...issue, severity: 'error' }));
   });
   const capability = dialect?.capabilities(document.target);
   const view = document.views.find(item => item.id === chosenView) ?? document.views[0];
-  const structure = validateDocumentStructure(document);
-  const semantic = dialect?.validate(document, { target: document.target }) ?? [];
+  const structure = useMemo(() => validateDocumentStructure(document), [document]);
+  const semantic = useMemo(() => dialect?.validate(document, { target: document.target }) ?? [], [dialect, document]);
   const issues = [...session.diagnostics.filter(issue => !semantic.some(item => item.code === issue.code && item.objectId === issue.objectId)), ...semantic];
   const search = query.toLocaleLowerCase().trim();
   const matches = (text: string) => text.toLocaleLowerCase().includes(search);

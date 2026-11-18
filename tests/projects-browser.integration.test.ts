@@ -147,8 +147,14 @@ it('creates and restores server ERDs, preserves later edits across delayed respo
         await context.setOffline(true);
         await rename(page, '오프라인 편집');
         await status(page, '오프라인');
+        let reconnects = 0;
+        const reconnectRoute = '**/api/erds/' + forked;
+        await page.route(reconnectRoute, route => route.request().method() === 'PUT' && ++reconnects === 1
+          ? route.abort('failed') : route.continue());
         await context.setOffline(false);
         await status(page, '서버 저장됨 · 리비전 2');
+        expect(reconnects).toBeGreaterThanOrEqual(2);
+        await page.unroute(reconnectRoute);
         await page.reload();
         await heading(page, '오프라인 편집');
         await status(page, '서버 저장됨 · 리비전 2');

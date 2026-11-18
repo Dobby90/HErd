@@ -12,5 +12,8 @@ export default defineConfig({
     strictPort: true,
     proxy: { '/api': 'http://127.0.0.1:' + Number(process.env.API_PORT ?? 3001) },
   },
-  build: { outDir: resolve(import.meta.dirname, 'dist/web'), emptyOutDir: true },
+  build: {
+    outDir: resolve(import.meta.dirname, 'dist/web'), emptyOutDir: true,
+    rollupOptions: { output: { manualChunks: id => id.includes('/node_modules/') ? 'vendor' : undefined } },
+  },
 });

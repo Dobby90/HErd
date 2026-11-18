@@ -1,0 +1,35 @@
+name: PostgreSQL MVP verification
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: Build verification image
+        run: docker build --target verify -t herd-verify .
+      - name: Audit locked dependencies
+        run: docker run --rm herd-verify pnpm audit
+      - name: Run isolated tests and compile production assets
+        run: |
+          docker run --rm --network none -e CI=1 -e NO_COLOR=1 herd-verify sh -ec '
+            test "$(pg_config --version | cut -d " " -f 2)" = 17.12
+            chromium --version
+            pnpm typecheck
+            pnpm lint
+            pnpm test
+            pnpm test:integration
+            pnpm build
+            pnpm test:release
+          '
+      - name: Verify the Compose deployment package
+        run: sh scripts/release-compose.sh

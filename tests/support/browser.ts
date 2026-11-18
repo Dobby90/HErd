@@ -2,10 +2,11 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import type { BrowserContext } from 'playwright-core';
-import { createServer } from 'vite';
+import { createServer, preview } from 'vite';
 import { freePort } from './tcp.js';
 
-export async function withBrowser(run: (context: BrowserContext, origin: string) => Promise<void>, ports?: { web: number; api: number }) {
+export async function withBrowser(run: (context: BrowserContext, origin: string) => Promise<void>,
+  ports?: { web: number; api: number; production?: boolean }) {
   const output = resolve('build/erd-browser');
   await mkdir(output, { recursive: true });
   const directory = await mkdtemp(resolve(output, 'run-'));
@@ -17,17 +18,18 @@ export async function withBrowser(run: (context: BrowserContext, origin: string)
     ? '/proc/' + process.pid + '/cwd/' + relative(process.cwd(), temp)
     : temp;
   let context: BrowserContext | undefined;
-  let server: Awaited<ReturnType<typeof createServer>> | undefined;
+  let server: Awaited<ReturnType<typeof createServer | typeof preview>> | undefined;
   let failed = true;
   try {
-    server = await createServer({
-      configFile: resolve('vite.config.ts'), cacheDir: resolve(directory, 'vite'), logLevel: 'silent',
-      server: {
-        host: '127.0.0.1', port: ports?.web ?? await freePort(), hmr: false, watch: null,
-        ...(ports && { proxy: { '/api': 'http://127.0.0.1:' + ports.api } }),
-      },
-    });
-    await server.listen();
+    const config = { configFile: resolve('vite.config.ts'), cacheDir: resolve(directory, 'vite'), logLevel: 'silent' as const };
+    const network = { host: '127.0.0.1', port: ports?.web ?? await freePort(), strictPort: true,
+      ...(ports && { proxy: { '/api': 'http://127.0.0.1:' + ports.api } }) };
+    if (ports?.production) server = await preview({ ...config, preview: network });
+    else {
+      const dev = await createServer({ ...config, server: { ...network, hmr: false, watch: null, ws: false } });
+      server = dev;
+      await dev.listen();
+    }
     const address = server.httpServer?.address();
     if (!address || typeof address === 'string') throw new Error('Vite did not open a loopback port.');
     const origin = 'http://127.0.0.1:' + address.port;

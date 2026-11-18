@@ -4,7 +4,8 @@ import { resolve } from 'node:path';
 import { freePort } from './tcp.js';
 
 export async function withPostgres<T>(test: (cluster: {
-  connectionString: string; query(sql: string, database?: string): string; dump(schema: string, database?: string): string; restart(): void;
+  connectionString: string; query(sql: string, database?: string): string; dump(schema: string, database?: string): string;
+  start(): void; stop(): void; restart(): void;
 }) => Promise<T>): Promise<T> {
   const root = process.getuid?.() === 0;
   const postgresId = (flag: string) => Number(execFileSync('id', [flag, 'postgres'], { encoding: 'utf8' }).trim());
@@ -50,6 +51,8 @@ export async function withPostgres<T>(test: (cluster: {
       connectionString: `postgresql://postgres@${host}:${port}/postgres`,
       query: (sql, database = 'postgres') => run('psql', [...connection.slice(0, -1), database, '-X', '-At', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=verbose'], sql).trim(),
       dump: (schema, database = 'postgres') => run('pg_dump', [...connection.slice(0, -1), database, '--schema-only', '--schema=' + schema]),
+      start,
+      stop,
       restart() { stop(); start(); },
     });
   } finally {

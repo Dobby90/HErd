@@ -68,7 +68,12 @@ function assertBytes(value: string, limits: DocumentLimits) {
 
 export function inputDocument(value: unknown, limits: DocumentLimits): ErdDocument {
   if (value === undefined) throw new ApiError(400, 'INVALID_DOCUMENT', 'ERD 문서를 입력하세요.');
-  assertBytes(JSON.stringify(value), limits);
+  const serialized = JSON.stringify(value);
+  assertBytes(serialized, limits);
+  // JSON.stringify writes a literal surrogate pair as UTF-8. Escaped lone surrogates and NULs cannot enter jsonb.
+  if (/(?<!\\)(?:\\\\)*\\u(?:0000|d[89a-f][0-9a-f]{2})/i.test(serialized)) {
+    throw new ApiError(400, 'INVALID_DOCUMENT', '문서에 저장할 수 없는 유니코드 문자가 있습니다.');
+  }
   const shape = erdDocumentSchema.safeParse(value);
   if (!shape.success) {
     throw new ApiError(400, 'INVALID_DOCUMENT', 'ERD 문서 형식이 올바르지 않습니다.',
@@ -210,17 +215,6 @@ async function saveDocument(pool: Pool, userId: string, id: string, body: Record
 
 export function registerProjects(api: FastifyInstance, pool: Pool, authenticate: Authenticate, sql: SqlService,
   limits: DocumentLimits, checkpoints: CheckpointSettings) {
-  api.get('/api/ready', async () => {
-    try {
-      const migrations = ['001-projects.sql', '002-sql-jobs.sql', '003-sql-import.sql', '004-sharing-history.sql'];
-      const { rowCount } = await pool.query('SELECT 1 FROM schema_migrations WHERE name = ANY($1::text[])', [migrations]);
-      if (rowCount !== migrations.length) throw new Error('Service migration is missing.');
-      return { status: 'ready' };
-    } catch {
-      throw new ApiError(503, 'DATABASE_UNAVAILABLE', '서비스 데이터베이스를 확인해 주세요.');
-    }
-  });
-
   api.get('/api/projects', async request => {
     const { user } = await authenticate(request);
     return (await pool.query<Project>(`SELECT ${projectFields} FROM projects p JOIN project_members m ON m.project_id = p.id

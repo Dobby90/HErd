@@ -100,6 +100,10 @@ export interface EditorDialect {
   validateForeignKey(document: ErdDocument, key: ForeignKey): Diagnostic[];
   validate(document: ErdDocument, context: ValidationContext): Diagnostic[];
   cardinality(document: ErdDocument, key: ForeignKey): { parentOptional: boolean; childMax: 1 | 'many' } | undefined;
+  inspectForeignKeys?(document: ErdDocument): {
+    validate(key: ForeignKey): Diagnostic[];
+    cardinality(key: ForeignKey): { parentOptional: boolean; childMax: 1 | 'many' } | undefined;
+  };
 }
 
 export interface GenerateJobOptions {

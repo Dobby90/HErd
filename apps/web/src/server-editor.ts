@@ -18,6 +18,8 @@ interface State {
 }
 
 const debounce = 1000;
+const reconnectDelay = 750;
+const reconnectLimit = 3;
 
 export class ServerEditor {
   private state: State;
@@ -31,6 +33,7 @@ export class ServerEditor {
   private timer?: ReturnType<typeof setTimeout>;
   private inFlight?: Promise<void>;
   private recovery = Promise.resolve(true);
+  private reconnectAttempts = 0;
   private stopped = false;
 
   constructor(readonly owner: string, envelope: ServerDocument, private readonly csrf: () => string | null) {
@@ -120,12 +123,24 @@ export class ServerEditor {
   }
 
   retry() {
+    this.reconnectAttempts = 0;
     if (this.state.phase !== 'conflict' && this.hasChanges()) this.schedule(0);
     else if (this.state.recoveryIssue) void this.keepRecovery();
   }
 
   online() {
     if (this.state.phase === 'offline') this.retry();
+  }
+
+  private reconnect() {
+    if (this.stopped || this.reconnectAttempts >= reconnectLimit) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      if (this.stopped || this.state.phase !== 'offline') return;
+      // Loopback services can be reachable even when the browser reports offline.
+      this.reconnectAttempts += 1;
+      this.schedule(0);
+    }, reconnectDelay * 2 ** this.reconnectAttempts);
   }
 
   async savedForExport(action = 'DDL을 내보내기') {
@@ -156,6 +171,7 @@ export class ServerEditor {
         if (this.stopped) return;
         this.saved = attempt.version;
         this.pending = undefined;
+        this.reconnectAttempts = 0;
         this.update({ revision: saved.revision, updatedAt: saved.updatedAt, phase: this.hasChanges() ? 'saving' : 'saved' });
         void this.keepRecovery();
       } catch (error) {
@@ -166,6 +182,7 @@ export class ServerEditor {
         if (problem && [400, 403, 413, 422].includes(problem.status)) this.pending = undefined;
         this.update({ phase, issue: problem?.message ?? '저장 응답을 확인하지 못했습니다.' });
         void this.keepRecovery();
+        if (phase === 'offline') this.reconnect();
       }
     };
     this.inFlight = work();

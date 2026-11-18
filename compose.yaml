@@ -1,6 +1,28 @@
+x-app-environment: &app-environment
+  DATABASE_URL: ${DATABASE_URL:-postgresql://herd:herd-local-only@db:5432/herd}
+  APP_ORIGIN: ${APP_ORIGIN:-http://127.0.0.1:8080}
+  NODE_ENV: ${HERD_NODE_ENV:-development}
+  ERD_DEV_LOGIN: ${HERD_DEV_LOGIN:-1}
+  OIDC_ISSUER: ${OIDC_ISSUER:-}
+  OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+  OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+  ERD_MAX_DOCUMENT_BYTES: ${ERD_MAX_DOCUMENT_BYTES:-20971520}
+  ERD_MAX_TABLES: ${ERD_MAX_TABLES:-1000}
+  ERD_MAX_COLUMNS: ${ERD_MAX_COLUMNS:-20000}
+  ERD_MAX_RELATIONSHIPS: ${ERD_MAX_RELATIONSHIPS:-5000}
+  ERD_CHECKPOINT_INTERVAL_MS: ${ERD_CHECKPOINT_INTERVAL_MS:-600000}
+  ERD_CHECKPOINT_KEEP: ${ERD_CHECKPOINT_KEEP:-50}
+  SQL_JOB_MAX_INPUT_BYTES: ${SQL_JOB_MAX_INPUT_BYTES:-5242880}
+  SQL_JOB_TIMEOUT_MS: ${SQL_JOB_TIMEOUT_MS:-10000}
+  SQL_JOB_TTL_MS: ${SQL_JOB_TTL_MS:-600000}
+  SQL_JOB_USER_LIMIT: ${SQL_JOB_USER_LIMIT:-2}
+  SQL_JOB_MAX_ACTIVE: ${SQL_JOB_MAX_ACTIVE:-64}
+  SQL_JOB_WORKERS: ${SQL_JOB_WORKERS:-2}
+  SQL_WORKER_HEAP_MB: ${SQL_WORKER_HEAP_MB:-256}
+
 services:
   db:
-    image: postgres:17-bookworm
+    image: postgres:17.12-bookworm@sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b
     environment:
       POSTGRES_DB: herd
       POSTGRES_USER: herd
@@ -10,9 +32,50 @@ services:
     volumes:
       - herd-db:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "herd", "-d", "herd"]
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "herd", "-d", "herd"]
       interval: 2s
       timeout: 2s
       retries: 15
+  migrate:
+    build:
+      context: .
+      target: api
+    command: ["node", "dist/api/migrate.js"]
+    environment:
+      DATABASE_URL: ${HERD_MIGRATION_DATABASE_URL:-${DATABASE_URL:-postgresql://herd:herd-local-only@db:5432/herd}}
+    depends_on:
+      db:
+        condition: service_healthy
+  api:
+    build:
+      context: .
+      target: api
+    environment: *app-environment
+    mem_limit: ${HERD_API_MEMORY_LIMIT:-1536m}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/ready',{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+  web:
+    build:
+      context: .
+      target: web
+      args:
+        VITE_ERD_PNG_MAX_SIDE: ${VITE_ERD_PNG_MAX_SIDE:-4096}
+        VITE_ERD_PNG_MAX_PIXELS: ${VITE_ERD_PNG_MAX_PIXELS:-16000000}
+    ports:
+      - "127.0.0.1:${HERD_HTTP_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/ready"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
 volumes:
   herd-db:

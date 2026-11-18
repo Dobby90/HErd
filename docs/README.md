@@ -67,5 +67,5 @@
 - [x] 4단계 PostgreSQL DDL export 완료. PostgreSQL 17의 SQL 실행·catalog 의미, 선택 의존성, 작업 권한·격리와 Chromium 다운로드를 검증했다. [4단계 검증 결과](./04-postgresql-ddl-export.md#검증-결과)
 - [x] 5단계 PostgreSQL DDL import 완료. PostgreSQL 17 덤프 분석과 의미 보존, 손실 확인, 원자적 생성·교체와 재시도를 검증했다. [5단계 검증 결과](./05-postgresql-ddl-import.md#검증-결과)
 - [x] 6단계 공유·이력·이미지 출력 완료. 멤버 권한 경쟁, 스냅샷 복원·보관, PNG·SVG 다운로드와 실제 렌더링을 검증했다. [6단계 검증 결과](./06-sharing-history-and-images.md#검증-결과)
-- [ ] 7단계: 안정화와 배포 준비
+- [x] 7단계 안정화와 배포 준비 완료. Compose 기동·실제 DB 백업 복원·성능 측정·전체 회귀를 검증했다. [릴리스 검증 기록](./release-validation.md)
 - [ ] 8단계: SQL 구문·DBMS 확장 — 선택 단계

@@ -1,8 +1,8 @@
 # PostgreSQL 지원 상태
 
-첫 인증 엔진은 PostgreSQL 17입니다. 격리 환경은 `postgres:17-bookworm`, Node 24.12.0, pnpm 10.11.0을 사용합니다. 호스트 의존성 준비에서 `pgsql-parser@17.9.9`와 그 WebAssembly 파서 의존성 `libpg-query@17.7.3`의 설치와 lockfile 생성을 확인했습니다. 파서 선택 기준은 PostgreSQL 서버 파서 계열의 AST를 Node 워커에서 실행할 수 있고 별도 네이티브 빌드가 필요하지 않다는 점입니다. 설치된 두 패키지의 `package.json`에 표기된 라이선스는 MIT입니다.
+인증 엔진은 PostgreSQL 17이며 릴리스 검증과 Compose는 `postgres:17.12-bookworm`의 고정 이미지 digest와 실제 버전 `170012`를 사용합니다. PostgreSQL adapter `0.3.0`은 `pgsql-parser@17.9.9`와 `libpg-query@17.7.3`의 WASM AST를 사용합니다. 두 패키지의 라이선스는 MIT입니다. [고정 이미지](../../Dockerfile), [의존성 lockfile](../../pnpm-lock.yaml)
 
-호스트 검증 `step-72`에서 PostgreSQL 17 AST, 워커 종료, 격리된 PostgreSQL 17의 서버 버전과 fixture 실행, 실제 스키마 덤프 분석을 확인했습니다. 검증 환경의 기동 로그에는 PostgreSQL 17.12가 기록됐으며, 통합 테스트는 `server_version_num`으로 메이저 버전 17을 확인합니다. 이 결과를 근거로 메이저 버전 17을 인증 프로필로 고정했습니다.
+격리한 PostgreSQL DB에서 생성 SQL을 실행하고 catalog·입력 의미와 실제 schema-only dump를 비교했습니다. 사용자 SQL 분석·생성은 제한된 자식 프로세스에서 실행합니다. [SQL 검증 결과](../release-validation.md#검사-결과)
 
 | 기능 | 모델 | 편집 UI | DDL import | DDL export |
 | --- | --- | --- | --- | --- |
@@ -24,6 +24,14 @@
 - 전체·부분 fixture를 PostgreSQL 17.12에서 적용해 catalog와 삽입 동작을 검증했습니다. SQL 작업에는 adapter 버전, 대상 엔진, 원본 리비전이 함께 기록됩니다. [실행 검증](../../tests/ddl-export.integration.test.ts), [작업 검증](../../tests/sql-jobs.integration.test.ts)
 
 ## PostgreSQL 17 DDL import
+
+UTF-8 환경에서 아래와 같이 plain schema-only 덤프를 생성합니다. 소유자와 권한을 생략하면 공유할 DDL을 구조 중심으로 확인할 수 있습니다. 데이터와 custom·tar·directory 아카이브는 구조 가져오기의 입력 범위 밖입니다.
+
+```sh
+pg_dump --schema-only --format=plain --no-owner --no-privileges design_database > schema.sql
+```
+
+예를 들어 `CREATE VIEW active_orders AS SELECT id FROM orders`와 `CREATE INDEX active_idx ON orders (id) WHERE active`는 제외 항목을 표시합니다. 남은 모델의 참조가 유효하면 사용자가 해당 제외 목록을 확인하고 적용할 수 있습니다. 기본 한도는 UTF-8 5 MiB, 10,000문장, 실행 10초입니다. [운영 한도](../operations.md#패키지-실행)
 
 - adapter `0.3.0`의 입력은 PostgreSQL 17의 UTF-8 생성 DDL 또는 plain `pg_dump --schema-only`입니다. 덤프의 짝이 맞는 `\restrict`·`\unrestrict`와 고정 세션 설정·소유자 문은 별도 제어문으로 기록합니다. 외부 파일·명령을 호출하는 psql 입력, `COPY`, 실행 문장과 지원 범위 밖의 동적 `search_path`는 분석 오류로 처리합니다. [덤프 fixture](../../packages/test-fixtures/sql/postgresql-17-schema.sql), [전처리](../../packages/dialect-postgresql/src/import-source.ts)
 - 기본 스키마는 고정 `search_path`가 지정되기 전의 비한정 이름을 해석하는 데 사용합니다. 이후 문장은 해당 위치의 path를 따릅니다. 비한정 이름에 유효한 생성 스키마가 없거나 제외된 타입·함수·키에 의존하면 적용을 차단합니다. 인용된 대소문자와 스키마가 다른 동명 객체를 보존합니다. [이름 해석과 변환](../../packages/dialect-postgresql/src/import.ts)

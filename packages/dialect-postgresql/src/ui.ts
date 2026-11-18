@@ -38,22 +38,20 @@ export const postgresqlTypes = [
   'timestamp', 'timestamptz', 'uuid', 'jsonb', 'bytea',
 ] as const;
 
+function indexReference(item: Catalog['indexes'][number]): ReferenceKey {
+  const columnIds = item.keys.flatMap(key => key.kind === 'column' ? [key.columnId] : []);
+  const unavailable = !item.unique ? '고유 인덱스가 아닙니다.' : item.predicate ? '부분 인덱스입니다.' :
+    columnIds.length !== item.keys.length ? 'SQL 식을 포함한 인덱스입니다.' :
+    new Set(columnIds).size !== columnIds.length ? '같은 컬럼이 반복됩니다.' : undefined;
+  return { key: { kind: 'index', id: item.id }, name: item.physicalName, columnIds, unavailable };
+}
+
 function referenceKeys(document: ErdDocument, tableId: string): ReferenceKey[] {
-  const keys: ReferenceKey[] = [];
-  for (const item of document.catalog.constraints) {
-    if (item.tableId === tableId && (item.kind === 'pk' || item.kind === 'unique')) {
-      keys.push({ key: { kind: 'constraint', id: item.id }, name: item.physicalName, columnIds: item.columnIds });
-    }
-  }
-  for (const item of document.catalog.indexes) {
-    if (item.tableId !== tableId) continue;
-    const columnIds = item.keys.flatMap(key => key.kind === 'column' ? [key.columnId] : []);
-    const unavailable = !item.unique ? '고유 인덱스가 아닙니다.' : item.predicate ? '부분 인덱스입니다.' :
-      columnIds.length !== item.keys.length ? 'SQL 식을 포함한 인덱스입니다.' :
-      new Set(columnIds).size !== columnIds.length ? '같은 컬럼이 반복됩니다.' : undefined;
-    keys.push({ key: { kind: 'index', id: item.id }, name: item.physicalName, columnIds, unavailable });
-  }
-  return keys;
+  return [
+    ...document.catalog.constraints.flatMap(item => item.tableId === tableId && (item.kind === 'pk' || item.kind === 'unique')
+      ? [{ key: { kind: 'constraint' as const, id: item.id }, name: item.physicalName, columnIds: item.columnIds }] : []),
+    ...document.catalog.indexes.filter(item => item.tableId === tableId).map(indexReference),
+  ];
 }
 
 type ColumnType = Catalog['columns'][number]['type'];
@@ -90,29 +88,58 @@ function compatible(source: ColumnType, target: ColumnType): boolean {
     (datetime.has(sourceName) && datetime.has(targetName));
 }
 
-function validateForeignKey(document: ErdDocument, key: ForeignKey): Diagnostic[] {
-  const candidate = referenceKeys(document, key.targetTableId)
-    .find(item => item.key.kind === key.targetKey.kind && item.key.id === key.targetKey.id);
-  const error = (code: string, message: string): Diagnostic[] => [{ code, severity: 'error', objectId: key.id, message }];
-  if (!candidate || candidate.unavailable) {
-    const index = document.catalog.indexes.find(item => key.targetKey.kind === 'index' && item.id === key.targetKey.id);
-    if (index?.predicate) return error('postgresql-partial-reference-index', '부분 고유 인덱스는 FK에서 참조할 수 없습니다.');
-    return error('postgresql-invalid-reference-key', candidate?.unavailable ?? '참조할 후보키가 없습니다.');
+function inspectForeignKeys(document: ErdDocument) {
+  const columns = new Map(document.catalog.columns.map(column => [column.id, column]));
+  const primary = new Map<string, Set<string>>();
+  const keys = new Map<string, ReferenceKey[]>();
+  const partial = new Set<string>();
+  function add(tableId: string, reference: ReferenceKey) {
+    const candidates = keys.get(tableId) ?? [];
+    candidates.push(reference);
+    keys.set(tableId, candidates);
   }
-  const sources = new Set(key.pairs.map(pair => pair.sourceColumnId));
-  const targets = new Set(key.pairs.map(pair => pair.targetColumnId));
-  if (sources.size !== key.pairs.length || targets.size !== candidate.columnIds.length ||
-      targets.size !== key.pairs.length || candidate.columnIds.some(id => !targets.has(id))) {
-    return error('postgresql-invalid-column-mapping', '후보키의 각 컬럼에 서로 다른 원본 컬럼을 지정하세요.');
+  for (const item of document.catalog.constraints) {
+    if (item.kind !== 'pk' && item.kind !== 'unique') continue;
+    add(item.tableId, { key: { kind: 'constraint', id: item.id }, name: item.physicalName, columnIds: item.columnIds });
+    if (item.kind === 'pk' && !primary.has(item.tableId)) primary.set(item.tableId, new Set(item.columnIds));
   }
-  for (const pair of key.pairs) {
-    const source = document.catalog.columns.find(column => column.id === pair.sourceColumnId && column.tableId === key.tableId);
-    const target = document.catalog.columns.find(column => column.id === pair.targetColumnId && column.tableId === key.targetTableId);
-    if (!source || !target || !compatible(source.type, target.type)) {
-      return error('postgresql-incompatible-foreign-key-types', `FK 자료형이 호환되지 않습니다 (${source?.physicalName || pair.sourceColumnId} → ${target?.physicalName || pair.targetColumnId}).`);
+  for (const item of document.catalog.indexes) {
+    if (item.predicate) partial.add(item.id);
+    add(item.tableId, indexReference(item));
+  }
+  function validate(key: ForeignKey): Diagnostic[] {
+    const candidate = keys.get(key.targetTableId)?.find(item => item.key.kind === key.targetKey.kind && item.key.id === key.targetKey.id);
+    const error = (code: string, message: string): Diagnostic[] => [{ code, severity: 'error', objectId: key.id, message }];
+    if (!candidate || candidate.unavailable) {
+      if (key.targetKey.kind === 'index' && partial.has(key.targetKey.id)) return error('postgresql-partial-reference-index', '부분 고유 인덱스는 FK에서 참조할 수 없습니다.');
+      return error('postgresql-invalid-reference-key', candidate?.unavailable ?? '참조할 후보키가 없습니다.');
     }
+    const sources = new Set(key.pairs.map(pair => pair.sourceColumnId));
+    const targets = new Set(key.pairs.map(pair => pair.targetColumnId));
+    if (sources.size !== key.pairs.length || targets.size !== candidate.columnIds.length ||
+        targets.size !== key.pairs.length || candidate.columnIds.some(id => !targets.has(id))) {
+      return error('postgresql-invalid-column-mapping', '후보키의 각 컬럼에 서로 다른 원본 컬럼을 지정하세요.');
+    }
+    for (const pair of key.pairs) {
+      const source = columns.get(pair.sourceColumnId);
+      const target = columns.get(pair.targetColumnId);
+      if (source?.tableId !== key.tableId || target?.tableId !== key.targetTableId || !compatible(source.type, target.type)) {
+        return error('postgresql-incompatible-foreign-key-types', `FK 자료형이 호환되지 않습니다 (${source?.physicalName || pair.sourceColumnId} → ${target?.physicalName || pair.targetColumnId}).`);
+      }
+    }
+    return [];
   }
-  return [];
+  return {
+    validate,
+    cardinality(key: ForeignKey) {
+      if (validate(key).length) return;
+      const sources = new Set(key.pairs.map(pair => pair.sourceColumnId));
+      return {
+        parentOptional: [...sources].some(id => columns.get(id)?.nullable && !primary.get(key.tableId)?.has(id)),
+        childMax: keys.get(key.tableId)?.some(item => !item.unavailable && item.columnIds.every(id => sources.has(id))) ? 1 as const : 'many' as const,
+      };
+    },
+  };
 }
 
 export const postgresqlEditor: EditorDialect = {
@@ -145,21 +172,14 @@ export const postgresqlEditor: EditorDialect = {
   },
   actions: ['no-action', 'restrict', 'cascade', 'set-null', 'set-default'],
   referenceKeys,
-  validateForeignKey,
-  cardinality(document, key) {
-    if (validateForeignKey(document, key).length) return;
-    const sources = new Set(key.pairs.map(pair => pair.sourceColumnId));
-    const keys = referenceKeys(document, key.tableId).filter(item => !item.unavailable);
-    const primary = document.catalog.constraints.find(item => item.kind === 'pk' && item.tableId === key.tableId);
-    return {
-      parentOptional: document.catalog.columns.some(column => sources.has(column.id) && column.nullable &&
-        !(primary?.kind === 'pk' && primary.columnIds.includes(column.id))),
-      childMax: keys.some(item => item.columnIds.every(id => sources.has(id))) ? 1 : 'many',
-    };
-  },
+  inspectForeignKeys,
+  validateForeignKey: (document, key) => inspectForeignKeys(document).validate(key),
+  cardinality: (document, key) => inspectForeignKeys(document).cardinality(key),
   validate(document) {
     const diagnostics: Diagnostic[] = [];
     const { catalog } = document;
+    const foreignKeys = inspectForeignKeys(document);
+    const encoder = new TextEncoder();
     const report = (code: string, objectId: string, message: string) => {
       diagnostics.push({ code, objectId, message, severity: 'error' });
     };
@@ -192,11 +212,11 @@ export const postgresqlEditor: EditorDialect = {
         if (primaryTables.has(item.tableId)) report('postgresql-multiple-primary-keys', item.id, '테이블당 기본키는 하나만 지정할 수 있습니다.');
         primaryTables.add(item.tableId);
       }
-      if (item.kind === 'fk') diagnostics.push(...validateForeignKey(document, item));
+      if (item.kind === 'fk') diagnostics.push(...foreignKeys.validate(item));
     }
     for (const item of Object.values(catalog).flat()) {
       if (!item.physicalName.trim()) report('postgresql-empty-name', item.id, '물리명을 입력하세요.');
-      else if (new TextEncoder().encode(item.physicalName).length > 63 || item.physicalName.includes('\0')) {
+      else if (encoder.encode(item.physicalName).length > 63 || item.physicalName.includes('\0')) {
         report('postgresql-invalid-name', item.id, '물리명은 UTF-8 기준 63바이트 이내이며 NUL을 포함할 수 없습니다.');
       }
     }

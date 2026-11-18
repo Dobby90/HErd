@@ -141,11 +141,22 @@ export function physicalRelationships(document: ErdDocument): ForeignKey[] {
   return document.catalog.constraints.filter(constraint => constraint.kind === 'fk');
 }
 
-export function columnBadges(document: ErdDocument, columnId: string): Array<'pk' | 'unique' | 'fk'> {
-  const badges = new Set<'pk' | 'unique' | 'fk'>();
-  for (const key of document.catalog.constraints) {
-    if ((key.kind === 'pk' || key.kind === 'unique') && key.columnIds.includes(columnId)) badges.add(key.kind);
-    if (key.kind === 'fk' && key.pairs.some(pair => pair.sourceColumnId === columnId)) badges.add('fk');
+type ColumnBadge = 'pk' | 'unique' | 'fk';
+
+export function columnBadgesById(document: ErdDocument) {
+  const badges = new Map<string, ColumnBadge[]>();
+  function add(id: string, kind: ColumnBadge) {
+    const kinds = badges.get(id);
+    if (!kinds) badges.set(id, [kind]);
+    else if (!kinds.includes(kind)) kinds.push(kind);
   }
-  return [...badges];
+  for (const key of document.catalog.constraints) {
+    if (key.kind === 'pk' || key.kind === 'unique') for (const id of key.columnIds) add(id, key.kind);
+    if (key.kind === 'fk') for (const pair of key.pairs) add(pair.sourceColumnId, key.kind);
+  }
+  return badges;
+}
+
+export function columnBadges(document: ErdDocument, columnId: string): ColumnBadge[] {
+  return columnBadgesById(document).get(columnId) ?? [];
 }
