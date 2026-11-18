@@ -46,7 +46,12 @@ function assertStructure(document: ErdDocument): ErdDocument {
   return document;
 }
 
-export function deserializeDocument(serialized: string, registry = new MigrationRegistry()): ErdDocument {
+const documentMigrations = new MigrationRegistry();
+documentMigrations.register(0, value => ({
+  ...value, formatVersion: 1, extensions: value.extensions === undefined ? [] : value.extensions,
+}));
+
+export function deserializeDocument(serialized: string, registry = documentMigrations): ErdDocument {
   return assertStructure(erdDocumentSchema.parse(registry.migrate(JSON.parse(serialized))));
 }
 

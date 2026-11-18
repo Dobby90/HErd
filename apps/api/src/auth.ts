@@ -11,6 +11,7 @@ import { transaction } from './database.js';
 interface User {
   id: string;
   displayName: string;
+  shareCode: string;
 }
 
 interface Session {
@@ -58,7 +59,7 @@ export async function registerAuth(api: FastifyInstance, pool: Pool, settings: A
   async function session(request: FastifyRequest): Promise<Session | undefined> {
     const raw = request.cookies[sessionCookie];
     if (!raw) return;
-    const { rows } = await pool.query<User>(`SELECT u.id, u.display_name AS "displayName"
+    const { rows } = await pool.query<User>(`SELECT u.id, u.display_name AS "displayName", u.share_code AS "shareCode"
       FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now()`, [hash(raw)]);
     if (rows[0]) return { user: rows[0], token: raw, csrfToken: hash('herd:csrf:' + raw) };
   }

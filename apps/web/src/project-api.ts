@@ -3,6 +3,7 @@ import type { ErdDocument, SqlTarget } from '@erd/model';
 export interface User {
   id: string;
   displayName: string;
+  shareCode: string;
 }
 
 export interface Identity {
@@ -17,6 +18,26 @@ export interface Project {
   role: 'owner' | 'editor' | 'viewer';
   documentCount: number;
   updatedAt: string;
+}
+
+export type ProjectRole = Project['role'];
+export interface ProjectMember {
+  id: string;
+  displayName: string;
+  role: ProjectRole;
+}
+
+export interface SnapshotInfo {
+  id: string;
+  kind: 'manual' | 'checkpoint' | 'before-import' | 'before-restore';
+  sourceRevision: number;
+  author: string;
+  createdAt: string;
+  description: string;
+}
+
+export interface SnapshotDetail extends SnapshotInfo {
+  document: ErdDocument;
 }
 
 export interface SavedRevision {
@@ -47,7 +68,7 @@ export class ApiFailure extends Error {
 }
 
 export async function apiRequest<T>(path: string, options: {
-  method?: 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+  method?: 'POST' | 'PATCH' | 'PUT' | 'DELETE' | 'HEAD';
   body?: unknown;
   csrf?: string | null;
 } = {}): Promise<T> {
@@ -67,8 +88,11 @@ export async function apiRequest<T>(path: string, options: {
   }
   if (!response.ok) {
     const problem = await response.json().catch(() => ({})) as { code?: string; message?: string; requestId?: string };
+    if ([401, 403, 404].includes(response.status) && /^\/(erds\/|sql\/jobs\/|projects\/[^/]+\/)/.test(path)) {
+      window.dispatchEvent(new Event('herd:check-project-access'));
+    }
     throw new ApiFailure(response.status, problem.code ?? 'REQUEST_FAILED',
       problem.message ?? '서버 요청을 처리하지 못했습니다.', problem.requestId);
   }
-  return response.status === 204 ? undefined as T : await response.json() as T;
+  return response.status === 204 || options.method === 'HEAD' ? undefined as T : await response.json() as T;
 }

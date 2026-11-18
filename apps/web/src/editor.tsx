@@ -1,16 +1,19 @@
-import { useState } from 'react';
-import type { ReactNode } from 'react';
+import { useRef, useState } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import type { XYPosition } from '@xyflow/react';
-import { createDocument, validateDocumentStructure } from '@erd/model';
+import { createDocument, deletionImpact, validateDocumentStructure } from '@erd/model';
 import type { Catalog, DocumentCommand, ErdDocument, ModelDiagnostic, SqlTarget } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
 import { postgresqlEditor } from '@erd/dialect-postgresql/ui';
 import { EditorCanvas } from './editor-canvas.js';
+import type { CanvasFocus, LayoutSizes } from './editor-canvas.js';
 import { columnsOf, duplicateView, EditorReadOnly, emptyView, field, Form, id, label, Modal, named, NameFields, placement, putView } from './editor-fields.js';
 import type { View } from './editor-fields.js';
 import { useEditorSession } from './editor-session.js';
+import { ImageExport } from './image-export.js';
 import { ColumnForm, DeleteSchema, ForeignKeyForm, IndexForm, KeyForm } from './schema-inspector.js';
 import type { FkDialog } from './schema-inspector.js';
+import { arrangeView } from './view-grid.js';
 
 const dialects = new Map<string, EditorDialect>([[postgresqlEditor.metadata.id, postgresqlEditor]]);
 export const editorTargets = [...dialects.values()].flatMap(dialect => dialect.metadata.profiles.filter(profile => profile.status === 'certified')
@@ -222,13 +225,17 @@ export function Editor({ topActions }: { topActions?: ReactNode } = {}) {
   return <DocumentEditor session={local} local={local} topActions={topActions} />;
 }
 
-export function DocumentEditor({ session, local, readOnly = false, topActions, saveActions, exportAction }: {
+export function DocumentEditor({ session, local, readOnly = false, topActions, saveActions, exportAction, verifyImage }: {
   session: EditingSession; local?: LocalSession; readOnly?: boolean; topActions?: ReactNode; saveActions?: ReactNode; exportAction?(viewId: string | undefined): ReactNode;
+  verifyImage?(): Promise<void>;
 }) {
   const { document } = session;
   const [chosenView, chooseView] = useState('');
   const [selection, inspect] = useState<Inspector | null>(null);
   const [query, setQuery] = useState('');
+  const [searchFocus, setSearchFocus] = useState<CanvasFocus>();
+  const [selectedInstances, setSelectedInstances] = useState<string[]>([]);
+  const layoutSizes = useRef<LayoutSizes>(new Map());
   const [snap, setSnap] = useState(true);
   const [dialog, setDialog] = useState<'document' | 'view' | null>(null);
   const [fk, setFk] = useState<FkDialog | null>(null);
@@ -249,9 +256,52 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
   const structure = validateDocumentStructure(document);
   const semantic = dialect?.validate(document, { target: document.target }) ?? [];
   const issues = [...session.diagnostics.filter(issue => !semantic.some(item => item.code === issue.code && item.objectId === issue.objectId)), ...semantic];
-  const matches = (text: string) => text.toLocaleLowerCase().includes(query.toLocaleLowerCase().trim());
-  const selectView = (id: string) => { chooseView(id); inspect(null); };
+  const search = query.toLocaleLowerCase().trim();
+  const matches = (text: string) => text.toLocaleLowerCase().includes(search);
+  const matchName = (item: { physicalName: string; logicalName?: string }) =>
+    matches(label(item)) || Boolean(item.logicalName && matches(item.logicalName));
+  const searchColumns = new Map<string, ReturnType<typeof columnsOf>>();
+  if (search) for (const column of document.catalog.columns) {
+    if (!matchName(column)) continue;
+    const columns = searchColumns.get(column.tableId) ?? [];
+    columns.push(column);
+    searchColumns.set(column.tableId, columns);
+  }
+  const selectView = (id: string) => { chooseView(id); inspect(null); setSearchFocus(undefined); setSelectedInstances([]); };
   const selectObject = (id: string) => inspect({ type: 'object', id });
+
+  function locate(tableId: string, columnId?: string) {
+    const targetView = [view, ...document.views].find(item => item?.instances.some(instance => instance.tableId === tableId));
+    const instance = targetView?.instances.find(item => item.tableId === tableId);
+    if (targetView && instance) {
+      if (targetView.id !== view?.id) setSelectedInstances([]);
+      chooseView(targetView.id);
+      setSearchFocus({ instanceId: instance.id, columnId });
+    }
+    selectObject(columnId ?? instance?.id ?? tableId);
+  }
+
+  function namedResult(item: { physicalName: string; logicalName?: string }) {
+    const name = matches(label(item)) || !item.logicalName ? label(item) : item.logicalName;
+    return search && matches(name) ? <mark>{name}</mark> : name;
+  }
+
+  function keyboard(event: KeyboardEvent<HTMLElement>) {
+    if (readOnly || session.loading || event.defaultPrevented || event.nativeEvent.isComposing ||
+      !(event.target instanceof Element) ||
+      event.target.closest('input, textarea, select, button, dialog, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')) return;
+    const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && (key === 'z' || key === 'y')) {
+      event.preventDefault();
+      session.step(key === 'y' || event.shiftKey ? 'redo' : 'undo');
+    } else if (key === 'delete' && selection?.type === 'object') {
+      const target = view?.instances.find(instance => instance.id === selection.id)?.tableId ?? selection.id;
+      if (deletionImpact(document, target)) {
+        event.preventDefault();
+        setDeletion(target);
+      }
+    }
+  }
 
   async function openRecovery(key?: string) {
     if (local && await (key ? local.restore(key) : local.retry())) selectView('');
@@ -271,7 +321,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
     run(putView({ ...view, instances: view.instances.map(moved), groups: view.groups.map(moved), notes: view.notes.map(moved) }));
   }
 
-  return <EditorReadOnly.Provider value={readOnly}><main className="editor">
+  return <EditorReadOnly.Provider value={readOnly}><main className="editor" onKeyDown={keyboard}>
     <header className="topbar">
       <div className="document-title">
         <h1>{document.name}</h1>
@@ -284,6 +334,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
       <div className="actions">
         {topActions}
         {exportAction?.(view?.id)}
+        {view && <ImageExport document={document} view={view} selection={selectedInstances} verify={verifyImage} />}
         {local && <button type="button" disabled={local.loading || local.unsaved} onClick={() => setDialog('document')}>새 문서</button>}
         {!readOnly && <><button type="button" disabled={!session.canUndo} onClick={() => session.step('undo')}>실행 취소</button>
         <button type="button" disabled={!session.canRedo} onClick={() => session.step('redo')}>다시 실행</button></>}
@@ -298,15 +349,22 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
     <div className="editor-layout">
       <aside className="navigator" aria-label="문서 탐색">
         <div className="section-heading"><h2>스키마</h2><button type="button" disabled={session.loading || readOnly} onClick={() => inspect({ type: 'namespace' })}>네임스페이스 추가</button></div>
-        <label>스키마 및 뷰 검색<input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>
+        <label>스키마 및 뷰 검색<input type="search" value={query} onChange={event => {
+          setQuery(event.target.value);
+          setSearchFocus(undefined);
+        }} /></label>
         {document.catalog.namespaces.map(namespace => {
           const tables = document.catalog.tables.filter(table => table.namespaceId === namespace.id &&
-            (matches(label(namespace)) || matches(label(table) + ' ' + (table.logicalName ?? ''))));
-          if (!tables.length && !matches(label(namespace))) return null;
+            (matchName(namespace) || matchName(table) || searchColumns.has(table.id)));
+          if (!tables.length && !matchName(namespace)) return null;
           return <section key={namespace.id} className="schema-section">
             <button type="button" onClick={() => selectObject(namespace.id)}>{label(namespace)}</button>
             <ul className="object-list">{tables.map(table => <li key={table.id}>
-              <button type="button" onClick={() => selectObject(view?.instances.find(item => item.tableId === table.id)?.id ?? table.id)}>{label(table)}</button>
+              <button type="button" onClick={() => search ? locate(table.id) : selectObject(view?.instances.find(item => item.tableId === table.id)?.id ?? table.id)}>
+                {search ? namedResult(table) : label(table)}
+              </button>
+              {searchColumns.has(table.id) && <ul className="object-list column-matches">{searchColumns.get(table.id)?.map(column =>
+                <li key={column.id}><button type="button" onClick={() => locate(table.id, column.id)}>{namedResult(column)}</button></li>)}</ul>}
             </li>)}</ul>
             <button type="button" disabled={session.loading || readOnly} onClick={() => inspect({ type: 'table', namespaceId: namespace.id })}>테이블 추가</button>
           </section>;
@@ -343,6 +401,10 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
               <option value="physical">물리명</option><option value="logical">논리명</option>
             </select></label>
             <label className="checkbox"><input type="checkbox" checked={snap} disabled={readOnly} onChange={event => setSnap(event.target.checked)} />그리드 맞춤</label>
+            {!readOnly && <button type="button" disabled={!view.instances.length}
+              onClick={() => run(putView(arrangeView(document, view, layoutSizes.current)))}>
+              이름순 그리드 재배치
+            </button>}
             <button type="button" disabled={readOnly} onClick={() => {
               const group = { id: id(), name: '새 그룹', x: 0, y: 0 };
               if (run(putView({ ...view, groups: [...view.groups, group] }))) selectObject(group.id);
@@ -353,7 +415,8 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
             }}>메모 추가</button>
           </div>
           <div className="canvas">
-            <EditorCanvas key={document.id + view.id} document={document} view={view} dialect={dialect} select={selectObject} move={move} snap={snap} readOnly={readOnly}
+            <EditorCanvas key={document.id + view.id} document={document} view={view} dialect={dialect} select={selectObject}
+              selectInstances={setSelectedInstances} focus={searchFocus} move={move} layoutSizes={layoutSizes.current} snap={snap} readOnly={readOnly}
               connect={(sourceColumnId, targetColumnId) => {
                 const source = document.catalog.columns.find(item => item.id === sourceColumnId);
                 const target = document.catalog.columns.find(item => item.id === targetColumnId);

@@ -108,7 +108,7 @@ CREATE VIEW skip_me AS SELECT * FROM "최신 문서";`;
         expect(await button('실행 취소').isDisabled()).toBe(true);
         const updated = await document();
         expect(updated.document.catalog.tables[0].physicalName).toBe('imported');
-        expect((await pool.query('SELECT source_revision, payload FROM erd_revisions WHERE erd_id = $1', [erdId])).rows)
+        expect((await pool.query("SELECT source_revision, payload FROM erd_revisions WHERE erd_id = $1 AND kind = 'before-import'", [erdId])).rows)
           .toMatchObject([{ source_revision: 3, payload: { catalog: { tables: [{ physicalName: '확정 모델' }] } } }]);
         await page.reload();
         await page.getByText('서버 저장됨 · 리비전 4', { exact: true }).waitFor();

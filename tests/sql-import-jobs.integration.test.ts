@@ -111,7 +111,7 @@ it('requires confirmation and current access, preserves the prior revision, and 
       } })).statusCode).toBe(200);
       const replace = { mode: 'replace', erdId: saved.erdId, baseRevision: 1, mutationId: randomUUID() };
       expect((await apply(replacement.id, replace)).json()).toMatchObject({ code: 'REVISION_CONFLICT' });
-      expect((await db.query('SELECT id FROM erd_revisions WHERE erd_id = $1', [saved.erdId])).rowCount).toBe(0);
+      expect((await db.query("SELECT id FROM erd_revisions WHERE erd_id = $1 AND kind = 'before-import'", [saved.erdId])).rowCount).toBe(0);
       await db.query("UPDATE project_members SET role = 'viewer' WHERE project_id = $1 AND user_id = $2", [project.id, editor.id]);
       expect((await state(replacement.id, editor.headers)).statusCode).toBe(404);
       expect((await apply(replacement.id, { ...replace, baseRevision: 2 })).statusCode).toBe(403);
@@ -124,7 +124,7 @@ it('requires confirmation and current access, preserves the prior revision, and 
       expect(competed.map(response => response.statusCode).sort()).toEqual([200, 409]);
       const succeeded = competed.findIndex(response => response.statusCode === 200);
       expect((await apply(replacement.id, requests[succeeded])).json()).toEqual(competed[succeeded].json());
-      const snapshots = (await db.query('SELECT source_revision, kind, payload FROM erd_revisions WHERE erd_id = $1', [saved.erdId])).rows;
+      const snapshots = (await db.query("SELECT source_revision, kind, payload FROM erd_revisions WHERE erd_id = $1 AND kind = 'before-import'", [saved.erdId])).rows;
       expect(snapshots).toEqual([{ source_revision: 2, kind: 'before-import', payload: changed }]);
       const current = (await api.inject({ url: erd, headers: owner.headers })).json();
       expect(current).toMatchObject({ revision: 3, document: { id: saved.erdId, name: '업데이트한 이름',

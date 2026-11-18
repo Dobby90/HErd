@@ -5,13 +5,15 @@ import { duplicateDocument } from '@erd/model';
 import { createEditorDocument, DocumentEditor, editorTargets } from './editor.js';
 import { field, Form, Modal } from './editor-fields.js';
 import { ApiFailure, apiRequest } from './project-api.js';
-import type { DocumentSummary, Identity, Project, ServerDocument } from './project-api.js';
+import type { DocumentSummary, Identity, Project, SavedRevision, ServerDocument, SnapshotDetail } from './project-api.js';
+import { ProjectMembers, ShareCode } from './project-members.js';
 import { readDraft, readDrafts, restoreDraft } from './recovery.js';
 import { removeServerDraft, serverDrafts } from './server-drafts.js';
 import type { ServerDraft } from './server-drafts.js';
 import { SqlExport } from './sql-export.js';
 import { SqlImport } from './sql-import.js';
 import { ServerEditor } from './server-editor.js';
+import { VersionHistory } from './version-history.js';
 
 type Location = { projectId?: string; documentId?: string };
 type ProjectView = { project: Project; documents: DocumentSummary[] };
@@ -25,8 +27,10 @@ const message = (error: unknown) => error instanceof Error ? error.message : '�
 const date = (value: string) => new Date(value).toLocaleString();
 const textMatch = (text: string, query: string) => text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
 
-function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActions, onImported, preview, fork, discard, logIn }: {
-  entry: OpenDocument; projectId: string; csrf: string | null | undefined; readOnly: boolean; suspended: boolean; topActions: ReactNode; onImported(result: ImportApplied): void; preview(): void; fork(): void;
+function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActions, onImported, openVersion, onRestored, preview, fork, discard, logIn }: {
+  entry: OpenDocument; projectId: string; csrf: string | null | undefined; readOnly: boolean; suspended: boolean; topActions: ReactNode;
+  onImported(result: ImportApplied): void; openVersion(snapshot: SnapshotDetail): void; onRestored(result: SavedRevision, synchronize?: boolean): void;
+  preview(): void; fork(): void;
   discard(draft?: ServerDraft): void; logIn(): void;
 }) {
   const { editor, drafts } = entry;
@@ -51,9 +55,12 @@ function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActio
   }
 
   return <DocumentEditor readOnly={readOnly || suspended} topActions={<>{topActions}
+    <VersionHistory erdId={entry.id} csrf={csrf} readOnly={readOnly} disabled={suspended} openVersion={openVersion} restored={onRestored}
+      save={async action => (await editor.savedForExport(action)).revision} />
     {!readOnly && <SqlImport projectId={projectId} csrf={csrf} disabled={suspended} onApplied={onImported}
-      replacement={{ id: entry.id, target: state.history.present.target, savedRevision: async () => (await editor.savedForExport()).revision }} />}
+      replacement={{ id: entry.id, target: state.history.present.target, savedRevision: async () => (await editor.savedForExport('모델을 교체하기')).revision }} />}
   </>}
+    verifyImage={() => apiRequest<void>('/erds/' + entry.id, { method: 'HEAD' })}
     exportAction={viewId => <SqlExport document={state.history.present} revision={state.revision} dirty={editor.hasChanges()}
       projectId={projectId} csrf={csrf} viewId={viewId} disabled={suspended} viewer={readOnly}
       prepare={() => readOnly ? apiRequest<ServerDocument>('/erds/' + state.history.present.id) : editor.savedForExport()} />}
@@ -66,22 +73,22 @@ function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActio
     {state.issue && <p>{state.issue}</p>}
     {state.recoveryIssue && <p role="alert">{state.recoveryIssue}</p>}
     {problem && <p role="alert">{problem}</p>}
-    {state.phase === 'conflict' && <div className="actions">
+    {!readOnly && !suspended && state.phase === 'conflict' && <div className="actions">
       <button type="button" onClick={preview}>서버 최신본 확인</button>
       <button type="button" onClick={fork}>내 변경을 새 문서로 복제</button>
       <button type="button" onClick={() => discard()}>변경 폐기 후 다시 열기</button>
     </div>}
     {state.phase === 'login' && <button type="button" onClick={logIn}>재로그인</button>}
-    {(state.phase === 'offline' || state.phase === 'failed' || state.recoveryIssue) &&
+    {!readOnly && !suspended && (state.phase === 'offline' || state.phase === 'failed' || state.recoveryIssue) &&
       <button type="button" onClick={() => editor.retry()}>저장 다시 시도</button>}
     {!readOnly && drafts.some(draft => !ignored.includes(draft.key)) && <details>
       <summary>브라우저 복구본</summary>
       <ul className="object-list">{drafts.filter(draft => !ignored.includes(draft.key)).map(draft =>
         <li key={draft.key} className="actions">
-          <button type="button" disabled={editor.hasChanges()} onClick={() => void restore(draft)}>
+          <button type="button" disabled={suspended || editor.hasChanges()} onClick={() => void restore(draft)}>
             복구본 열기 · {date(draft.updatedAt)} · 기준 리비전 {draft.baseRevision}
           </button>
-          <button type="button" aria-label={`브라우저 복구본 삭제 ${date(draft.updatedAt)}`} onClick={() => {
+          <button type="button" disabled={suspended} aria-label={`브라우저 복구본 삭제 ${date(draft.updatedAt)}`} onClick={() => {
             if (window.confirm('이 브라우저 복구본을 삭제하시겠습니까?')) {
               void removeServerDraft(draft.key, draft).then(() => ignore(keys => [...keys, draft.key]), error => setProblem(message(error)));
             }
@@ -91,10 +98,14 @@ function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActio
   </>} />;
 }
 
-function ServerPreview({ envelope, close }: { envelope: ServerDocument; close(): void }) {
-  return <DocumentEditor readOnly topActions={<button type="button" onClick={close}>내 편집으로 돌아가기</button>} session={{
+type Preview = { envelope: ServerDocument; snapshotId?: string };
+
+function ServerPreview({ preview: { envelope, snapshotId }, close }: { preview: Preview; close(): void }) {
+  const url = '/erds/' + envelope.document.id + (snapshotId ? '/revisions/' + snapshotId : '');
+  return <DocumentEditor readOnly verifyImage={() => apiRequest<void>(url, { method: 'HEAD' })}
+    topActions={<button type="button" onClick={close}>{snapshotId ? '현재 문서로 돌아가기' : '내 편집으로 돌아가기'}</button>} session={{
     document: envelope.document, loading: false, diagnostics: [], canUndo: false, canRedo: false,
-    status: { text: `서버 최신본 · 리비전 ${envelope.revision}` }, run: () => false, step: () => undefined,
+    status: { text: `${snapshotId ? '과거 버전 · 읽기 전용' : '서버 최신본'} · 리비전 ${envelope.revision}` }, run: () => false, step: () => undefined,
   }} />;
 }
 
@@ -102,14 +113,16 @@ export function Workspace() {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const currentIdentity = useRef<Identity | null>(null);
   const [location, setLocation] = useState(readLocation);
+  const currentLocation = useRef(location);
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [projectView, setProjectView] = useState<ProjectView>();
   const [open, setOpen] = useState<OpenDocument>();
-  const [preview, setPreview] = useState<ServerDocument>();
+  const [preview, setPreview] = useState<Preview>();
   const [query, setQuery] = useState('');
   const [epoch, reload] = useState(0);
   const [problem, setProblem] = useState('');
-  const [importNotice, setImportNotice] = useState('');
+  const [denied, setDenied] = useState<string>();
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const running = useRef(false);
   const [loginPrompt, setLoginPrompt] = useState(false);
@@ -126,11 +139,13 @@ export function Workspace() {
     if (next.projectId) query.set('project', next.projectId);
     if (next.documentId) query.set('erd', next.documentId);
     window.history.pushState(null, '', '/?' + query);
+    currentLocation.current = next;
     setLocation(next);
     setPreview(undefined);
-    setImportNotice('');
+    setNotice('');
     setQuery('');
     setProblem('');
+    setDenied(undefined);
     reload(value => value + 1);
   }
 
@@ -142,6 +157,7 @@ export function Workspace() {
       setProjects(null);
       setProjectView(undefined);
       setOpen(undefined);
+      setDenied(undefined);
     }
     currentIdentity.current = identity;
     setIdentity(identity);
@@ -166,7 +182,14 @@ export function Workspace() {
 
   useEffect(() => {
     void act(async () => { await refreshIdentity(); });
-    const onPop = () => { setLocation(readLocation()); setPreview(undefined); setProblem(''); setQuery(''); };
+    const onPop = () => {
+      currentLocation.current = readLocation();
+      setLocation(currentLocation.current);
+      setPreview(undefined);
+      setProblem('');
+      setDenied(undefined);
+      setQuery('');
+    };
     const online = () => { for (const editor of editors.current.values()) editor.online(); };
     const leave = (event: BeforeUnloadEvent) => {
       if ([...editors.current.values()].some(editor => editor.hasUnprotectedChanges())) {
@@ -185,7 +208,7 @@ export function Workspace() {
   }, []);
 
   useEffect(() => {
-    if (!owner) return;
+    if (!owner || (projectId && denied === projectId)) return;
     let current = true;
     async function load(userId: string) {
       if (!projectId) {
@@ -219,10 +242,63 @@ export function Workspace() {
       if (error instanceof ApiFailure && error.status === 401) setLoginPrompt(true);
     });
     return () => { current = false; };
-  }, [owner, projectId, documentId, epoch]);
+  }, [owner, projectId, documentId, epoch, denied]);
 
   const csrf = identity?.csrfToken;
   const refresh = () => reload(value => value + 1);
+
+  useEffect(() => {
+    if (!projectId || !project || !owner) return;
+    let active = true;
+    let checking = false;
+    function clearEditors() {
+      for (const item of projectView?.documents ?? []) {
+        const editor = editors.current.get(item.id);
+        if (editor) {
+          editor.stop();
+          void editor.safeguard();
+          editors.current.delete(item.id);
+        }
+      }
+      setOpen(undefined);
+      setPreview(undefined);
+    }
+    async function check() {
+      if (!active || checking) return;
+      checking = true;
+      try {
+        const current = await apiRequest<Project>('/projects/' + projectId);
+        if (!active || currentLocation.current.projectId !== projectId || currentIdentity.current?.user?.id !== owner || current.role === project?.role) return;
+        clearEditors();
+        setProjectView(previous => previous && previous.project.id === projectId ? { ...previous, project: current } : previous);
+        setNotice(current.role === 'viewer' ? '편집 권한이 변경되어 읽기 전용으로 열었습니다.' : '프로젝트 역할이 변경되었습니다.');
+        refresh();
+      } catch (error) {
+        if (!active || currentLocation.current.projectId !== projectId || currentIdentity.current?.user?.id !== owner) return;
+        if (error instanceof ApiFailure && error.status === 404) {
+          clearEditors();
+          setProjectView(undefined);
+          setProjects(null);
+          setNotice('');
+          setProblem('이 프로젝트에 대한 접근 권한이 회수되었거나 프로젝트가 삭제되었습니다.');
+          setDenied(projectId);
+        } else if (error instanceof ApiFailure && error.status === 401) {
+          setLoginPrompt(true);
+        }
+      } finally {
+        checking = false;
+      }
+    }
+    const interval = setInterval(() => void check(), 5000);
+    window.addEventListener('focus', check);
+    window.addEventListener('herd:check-project-access', check);
+    return () => {
+      active = false;
+      clearInterval(interval);
+      window.removeEventListener('focus', check);
+      window.removeEventListener('herd:check-project-access', check);
+    };
+  }, [owner, projectId, project?.role]);
 
   async function protectWork() {
     const results = await Promise.all([...editors.current.values()].map(editor => editor.safeguard()));
@@ -264,6 +340,21 @@ export function Workspace() {
   </div>;
 
   if (owner && project && open && open.id === documentId) {
+    const editorIsCurrent = () => currentIdentity.current?.user?.id === owner &&
+      currentLocation.current.documentId === open.id && editors.current.get(open.id) === open.editor;
+    const reloadAfterReplacement = (status: string) => {
+      if (!editorIsCurrent()) return;
+      editors.current.delete(open.id);
+      setOpen(undefined);
+      setPreview(undefined);
+      setNotice(status);
+      const reopen = (cleaned: boolean) => {
+        if (currentIdentity.current?.user?.id !== owner || currentLocation.current.documentId !== open.id) return;
+        if (!cleaned) setNotice(status + ' 브라우저 복구본을 정리하지 못했습니다.');
+        refresh();
+      };
+      void open.editor.discard().then(() => reopen(true), () => reopen(false));
+    };
     const discard = () => {
       if (!window.confirm('현재 로컬 변경을 폐기하고 서버 버전을 다시 열겠습니까?')) return;
       void act(async () => {
@@ -277,20 +368,22 @@ export function Workspace() {
       });
     };
     return <>
-      {preview?.document.id === documentId ? <ServerPreview key={preview.revision} envelope={preview} close={() => setPreview(undefined)} /> :
+      {preview?.envelope.document.id === documentId ? <ServerPreview key={preview.snapshotId ?? preview.envelope.revision} preview={preview} close={() => setPreview(undefined)} /> :
         <WorkspaceEditor key={open.id + ':' + open.editor.instanceKey} entry={open} projectId={project.id} csrf={csrf} readOnly={project.role === 'viewer'} suspended={busy}
           topActions={<><button type="button" onClick={backToProject}>ERD 목록</button>
             <button type="button" disabled={busy} onClick={logOut}>로그아웃</button></>}
-          onImported={result => {
-            open.editor.stop();
-            void open.editor.discard().catch(() => undefined);
-            editors.current.delete(open.id);
-            setOpen(undefined);
-            setPreview(undefined);
-            setImportNotice(`리비전 ${result.revision}에 가져오기를 적용했습니다. 교체 전 버전은 서버 이력에 저장되었습니다.`);
-            refresh();
+          onImported={result => reloadAfterReplacement(`리비전 ${result.revision}에 가져오기를 적용했습니다. 교체 전 버전은 서버 이력에 저장되었습니다.`)}
+          onRestored={(result, synchronized) => reloadAfterReplacement(synchronized ? `서버 리비전 ${result.revision}을 열었습니다.`
+            : `복원 결과를 리비전 ${result.revision}으로 저장했습니다. 복원 전 버전은 서버 이력에 저장되었습니다.`)}
+          openVersion={snapshot => {
+            if (editorIsCurrent()) setPreview({ snapshotId: snapshot.id, envelope: {
+              document: snapshot.document, revision: snapshot.sourceRevision, updatedAt: snapshot.createdAt,
+            } });
           }}
-          preview={() => void act(async () => setPreview(await apiRequest<ServerDocument>('/erds/' + open.id)))}
+          preview={() => void act(async () => {
+            const envelope = await apiRequest<ServerDocument>('/erds/' + open.id);
+            if (editorIsCurrent()) setPreview({ envelope });
+          })}
           fork={() => void act(async () => {
             const source = open.editor.snapshot().history.present;
             const document = duplicateDocument(source, crypto.randomUUID(), source.name.slice(0, 194) + ' (내 편집)');
@@ -301,7 +394,7 @@ export function Workspace() {
           })}
           discard={discard} logIn={() => setLoginPrompt(true)} />}
       {problem && <p className="workspace-notice" role="alert">{problem}</p>}
-      {!problem && importNotice && <p className="workspace-notice" role="status">{importNotice}</p>}
+      {!problem && notice && <p className="workspace-notice" role="status">{notice}</p>}
       {loginPrompt && <Modal title="다시 로그인" close={() => setLoginPrompt(false)}>{loginButtons}</Modal>}
     </>;
   }
@@ -327,6 +420,7 @@ export function Workspace() {
       {owner && projectId && <button type="button" onClick={() => go({})}>프로젝트 목록</button>}
       <a href="/" className="workspace-link">로컬 편집기</a>
       {identity?.user && <div className="actions project-account"><span>{identity.user.displayName}</span>
+        <ShareCode key={identity.user.id} code={identity.user.shareCode} />
         <button type="button" disabled={busy} onClick={logOut}>로그아웃</button></div>}
     </header>
     <div className="project-content">
@@ -353,7 +447,9 @@ export function Workspace() {
       {owner && projectId && !project && !problem && <p role="status">프로젝트 불러오는 중</p>}
       {project && <section className="project-panel" aria-label="ERD 목록">
         <div className="section-heading"><h2>{project.name}</h2><p>{project.role} · ERD {project.documentCount}개</p></div>
-        {project.role === 'owner' && <div className="project-tools">
+        {project.role === 'owner' && owner && <div className="project-tools">
+          <ProjectMembers key={project.id} projectId={project.id} userId={owner} csrf={csrf}
+            selfChanged={() => window.dispatchEvent(new Event('herd:check-project-access'))} />
           <Form disabled={busy} key={project.id + project.name} button="프로젝트 이름 변경" submit={form => void act(async () => {
             await apiRequest('/projects/' + project.id, { method: 'PATCH', csrf, body: { name: field(form, 'name') } });
             refresh();

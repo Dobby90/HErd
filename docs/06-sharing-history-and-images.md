@@ -60,18 +60,37 @@
 6. 큰 뷰·높은 배율·폰트 지연·출력 중 편집에서 실패를 알리고 잘못된 파일을 만들지 않는다.
 7. 주기 snapshot의 보관 제한과 수동·교체 전 snapshot 보존이 구분된다.
 
+### 검증 결과
+
+2026-11-18 Docker의 PostgreSQL 17.12와 Chromium 156.0.8078.79에서 검증했다. 의존성 클린 설치, 운영 빌드, 타입 검사, lint, 기본 테스트 43개, 통합 테스트 13개가 통과했다.
+
+| 기준 | 판정 | 확인 내용 |
+| --- | --- | --- |
+| 1. viewer와 권한 회수 | 통과 | 폼·드래그·단축키·가져오기·복원 차단과 viewer의 내보내기 권한을 확인했다. editor였을 때 받은 가져오기 작업 ID는 viewer가 된 뒤 사용할 수 없었다. 멤버 회수는 열린 편집기와 기존 문서·이력·작업 URL에 반영됐다. [API 검증](../tests/sharing-history.integration.test.ts), [브라우저 검증](../tests/sharing-history-browser.integration.test.ts) |
+| 2. owner 경쟁과 소속 | 통과 | 두 owner가 동시에 자기 역할을 내리거나 탈퇴해도 한 명이 남았다. 다른 프로젝트의 멤버·문서·작업과 다른 문서의 스냅샷으로 경로를 바꾼 요청을 차단했다. [경쟁·소속 검증](../tests/sharing-history.integration.test.ts) |
+| 3. 원자적 복원 | 통과 | 복원 취소 시 쓰기 요청을 보내지 않았다. DB 쓰기 실패로 스냅샷과 리비전이 함께 롤백됐으며, 성공 뒤 응답이 유실되어도 같은 mutation을 재시도해 원래 결과를 받았다. 동시 저장과 복원 중 한 건만 저장됐다. [복원 트랜잭션](../tests/sharing-history.integration.test.ts), [브라우저 검증](../tests/sharing-history-browser.integration.test.ts) |
+| 4. 저장 형식 마이그레이션 | 통과 | 확장 배열을 생략한 형식 0 스냅샷을 현재 형식으로 열고 복원했다. 기존 문서 ID, SQL 대상, 컬럼·키·뷰 참조를 확인했으며 ID나 대상이 불일치한 버전은 차단했다. [마이그레이션 검증](../tests/sharing-history.integration.test.ts) |
+| 5. 실제 PNG·SVG | 통과 | 모든 노드를 viewport 밖에 둔 상태에서 이미지 두 형식을 내려받아 Chromium에서 다시 열었다. 긴 한글과 기호, 컬럼 접기·숨김, 자기 참조 FK, 메모·그룹, 배경 투명도를 확인했다. 선택한 테이블 출력의 생략 관계도 확인했다. [출력 검증](../tests/diagram-image-browser.integration.test.ts) |
+| 6. 출력 한도와 고정 시점 | 통과 | 높은 배율의 한 변 한도와 큰 뷰의 총 픽셀 한도를 각각 적용했다. 글꼴 응답 지연은 오류로 표시했다. 글꼴 대기 중 다른 탭에서 모델을 저장해도 원래 뷰 스냅샷만 출력됐다. [출력 실패 검증](../tests/diagram-image-browser.integration.test.ts) |
+| 7. 체크포인트 보관 | 통과 | 변경 없는 저장과 간격 내 연속 저장은 체크포인트를 추가하지 않았다. 보관 수를 넘기면 최신 50개만 남고 수동·교체 전·복원 전 버전은 보존됐다. [간격·보관 검증](../tests/sharing-history.integration.test.ts), [가져오기 이력 회귀 검증](../tests/sql-import-jobs.integration.test.ts) |
+
 ## 완료 기준
 
-- [ ] 프로젝트 멤버 권한을 실제 관리하고 조회 전용 화면을 사용할 수 있다.
-- [ ] 수동 snapshot과 과거 버전 조회·원자적 복원이 동작한다.
-- [ ] 취소·실패·재시도에서 이력과 문서가 일관된다.
-- [ ] PNG·SVG의 범위·글자·관계선을 실제 출력물로 확인했다.
-- [ ] 외부 ERD 파일 호환·공개 익명 링크·실시간 공동 편집을 추가하지 않았다.
+- [x] 프로젝트 멤버 권한을 실제 관리하고 조회 전용 화면을 사용할 수 있다.
+- [x] 수동 snapshot과 과거 버전 조회·원자적 복원이 동작한다.
+- [x] 취소·실패·재시도에서 이력과 문서가 일관된다.
+- [x] PNG·SVG의 범위·글자·관계선을 실제 출력물로 확인했다.
+- [x] 외부 ERD 파일 호환·공개 익명 링크·실시간 공동 편집을 추가하지 않았다.
+
+## 사용과 설정
+
+- 기존 서비스 DB에는 `pnpm db:migrate`로 [6단계 마이그레이션](../db/migrations/004-sharing-history.sql)을 적용한다. 가입한 사용자가 **내 공유 코드**를 전달하면 프로젝트 owner가 **멤버 관리**에서 해당 계정을 확인해 추가한다. owner는 역할을 부여하거나 회수하며, 열린 편집기는 포커스 변경과 주기 확인으로 프로젝트 권한을 다시 확인한다. [멤버 API](../apps/api/src/project-members.ts)
+- **버전 이력**은 자동 저장 리비전과 복원 가능한 스냅샷을 별도로 표시한다. 수동 저장은 설명과 기준 리비전을 받는다. 복원 성공 결과는 같은 mutation ID로 24시간 동안 재조회할 수 있다. 체크포인트는 내용이 바뀐 자동 저장에서만 문서당 기본 10분 간격으로 생성하며 최신 50개를 남긴다. `ERD_CHECKPOINT_INTERVAL_MS`와 `ERD_CHECKPOINT_KEEP`으로 조정할 수 있다. [버전 API](../apps/api/src/revisions.ts), [환경 예시](../.env.example)
+- **이미지 내보내기**에서 범위, 물리명·논리명, 컬럼 표시, 메모·그룹, 배경, PNG 배율을 선택한다. 선택한 테이블과 같은 그룹의 메모·그룹을 포함할 수 있으며 범위 밖으로 이어지는 관계선은 생략한다. PNG 기본 한도는 한 변 4,096px와 1,600만 픽셀이다. 웹 실행·빌드 전에 `VITE_ERD_PNG_MAX_SIDE`와 `VITE_ERD_PNG_MAX_PIXELS`를 설정할 수 있다. [이미지 설정](../.env.example), [공통 이미지 렌더러](../apps/web/src/diagram-image.ts)
+- 출력에는 Noto Sans KR의 400 weight에서 추린 한글·라틴 WOFF2를 사용한다. 브라우저는 앱에 포함된 글꼴을 불러오며, SVG에는 글꼴과 라이선스가 내장된다. [글꼴 라이선스](../apps/web/src/fonts/noto-sans-kr-OFL.txt), [원본 글꼴](https://github.com/google/fonts/tree/4efc2774c63917927efe769ca845def6bd6debae/ofl/notosanskr)
 
 ## 다음 단계와 개발 요청 예시
 
 다음은 [7단계 안정화](./07-hardening-and-release.md)다.
 
 > docs/README.md와 docs/00-scope-and-architecture.md를 읽고, docs/06-sharing-history-and-images.md의 6단계를 구현해줘. 프로젝트 권한·버전 복원의 경쟁 처리와 실제 PNG·SVG 출력까지 검증해줘.
-
-구현 기록: 미착수.

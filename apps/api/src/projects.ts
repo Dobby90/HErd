@@ -4,12 +4,13 @@ import type { ErdDocument } from '@erd/model';
 import type { SqlService } from '@erd/sql-service';
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
-import { ApiError, objectBody, uuid } from './api-error.js';
+import { ApiError, objectBody, revisionNumber, uuid } from './api-error.js';
 import type { Authenticate } from './auth.js';
-import type { DocumentLimits } from './config.js';
+import type { CheckpointSettings, DocumentLimits } from './config.js';
 import { transaction } from './database.js';
+import { checkpoint } from './revision-storage.js';
 
-type Role = 'owner' | 'editor' | 'viewer';
+export type Role = 'owner' | 'editor' | 'viewer';
 type Query = Pool | PoolClient;
 type ProjectParams = { projectId: string };
 type DocumentParams = { erdId: string };
@@ -82,7 +83,7 @@ export function inputDocument(value: unknown, limits: DocumentLimits): ErdDocume
   return document;
 }
 
-export function storedDocument(row: DocumentRow, limits: DocumentLimits): ErdDocument {
+export function storedDocument(row: Pick<DocumentRow, 'id' | 'payload'>, limits: DocumentLimits): ErdDocument {
   const serialized = JSON.stringify(row.payload);
   assertBytes(serialized, limits);
   let document: ErdDocument;
@@ -97,11 +98,16 @@ export function storedDocument(row: DocumentRow, limits: DocumentLimits): ErdDoc
 }
 
 export async function findProject(db: Query, userId: string, id: string, lock: '' | 'share' | 'update' = ''): Promise<Project> {
+  if (lock) {
+    // Serialize project mutations on the project row before looking at mutable membership.
+    const { rowCount } = await db.query(`SELECT p.id FROM projects p WHERE p.id = $2 AND EXISTS (
+      SELECT 1 FROM project_members WHERE project_id = p.id AND user_id = $1
+    ) FOR ${lock === 'update' ? 'UPDATE' : 'SHARE'} OF p`, [userId, id]);
+    if (!rowCount) throw projectNotFound();
+  }
   const select = `SELECT ${projectFields} FROM projects p
     JOIN project_members m ON m.project_id = p.id AND m.user_id = $1 WHERE p.id = $2`;
-  const params = [userId, id];
-  const { rows: [project] } = await (lock === 'update' ? db.query<Project>(select + ' FOR UPDATE OF p, m', params)
-    : lock === 'share' ? db.query<Project>(select + ' FOR SHARE OF p, m', params) : db.query<Project>(select, params));
+  const { rows: [project] } = await db.query<Project>(select, [userId, id]);
   if (!project) throw projectNotFound();
   return project;
 }
@@ -114,15 +120,19 @@ export async function findDocument(db: Query, userId: string, id: string, lock: 
     return document;
   }
 
-  // Lock membership and project before the ERD so a cascading project delete cannot reverse the lock order.
-  const { rows: [membership] } = await db.query<{ id: string; role: Role }>(`SELECT p.id, m.role
-    FROM projects p JOIN project_members m ON m.project_id = p.id AND m.user_id = $1
-    WHERE p.id = (SELECT project_id FROM erds WHERE id = $2) FOR SHARE OF p, m`, [userId, id]);
+  // Lock the project before the ERD and check membership again after acquiring the project lock.
+  const { rows: [scope] } = await db.query<{ id: string }>(`SELECT p.id FROM projects p
+    WHERE p.id = (SELECT project_id FROM erds WHERE id = $2)
+    AND EXISTS (SELECT 1 FROM project_members WHERE project_id = p.id AND user_id = $1)
+    FOR SHARE OF p`, [userId, id]);
+  if (!scope) throw documentNotFound();
+  const { rows: [membership] } = await db.query<{ role: Role }>(
+    'SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2', [scope.id, userId]);
   if (!membership) throw documentNotFound();
   const select = `SELECT e.id, e.project_id AS "projectId", e.payload, ${documentFields}
     FROM erds e WHERE e.id = $1 AND e.project_id = $2`;
   const { rows: [document] } = await db.query<Omit<DocumentRow, 'role'>>(
-    select + (lock === 'update' ? ' FOR UPDATE OF e' : ' FOR SHARE OF e'), [id, membership.id]);
+    select + (lock === 'update' ? ' FOR UPDATE OF e' : ' FOR SHARE OF e'), [id, scope.id]);
   if (!document) throw documentNotFound();
   return { ...document, role: membership.role };
 }
@@ -137,54 +147,74 @@ export async function insertDocument(db: Query, userId: string, projectId: strin
   return { document, ...saved };
 }
 
-interface RecordedMutation {
-  matches: boolean;
-  result: { revision: number; updatedAt: string };
+export function assertRevision(row: Saved, baseRevision: number) {
+  if (row.revision !== baseRevision) {
+    throw new ApiError(409, 'REVISION_CONFLICT', '서버에서 다른 변경사항을 먼저 저장했습니다.',
+      { revision: row.revision, updatedAt: row.updatedAt });
+  }
 }
 
-async function saveDocument(pool: Pool, userId: string, id: string, body: Record<string, unknown>, limits: DocumentLimits) {
-  const { baseRevision, document: rawDocument } = body;
-  if (typeof baseRevision !== 'number' || !Number.isSafeInteger(baseRevision) || baseRevision < 1 || baseRevision > 2147483647) {
-    throw new ApiError(400, 'INVALID_REVISION', '기준 리비전이 올바르지 않습니다.');
+export function assertTarget(current: ErdDocument, next: ErdDocument) {
+  if (current.target.dialectId !== next.target.dialectId || current.target.engineVersion !== next.target.engineVersion) {
+    throw new ApiError(400, 'DOCUMENT_TARGET_MISMATCH', '기존 ERD의 SQL 대상은 변경할 수 없습니다.');
   }
+}
+
+export async function documentMutation<T>(
+  client: PoolClient, userId: string, id: string, mutationId: string, body: unknown) {
+  const { rows: [{ digest }] } = await client.query<{ digest: string }>(
+    "SELECT encode(sha256(convert_to($1::jsonb::text, 'UTF8')), 'hex') AS digest", [JSON.stringify(body)]);
+  const key = [userId, id, mutationId, digest];
+  const { rows: [recorded] } = await client.query<{ matches: boolean; result: T }>(
+    `SELECT request_hash = $4 AS matches, result FROM erd_mutations
+    WHERE user_id = $1 AND erd_id = $2 AND mutation_id = $3 AND expires_at > now()`, key);
+  if (recorded && !recorded.matches) {
+    throw new ApiError(409, 'MUTATION_MISMATCH', '같은 저장 요청 ID에 다른 문서가 전달됐습니다.');
+  }
+  return {
+    replay: recorded?.result,
+    async record(result: T) {
+      await client.query('DELETE FROM erd_mutations WHERE erd_id = $1 AND expires_at <= now()', [id]);
+      await client.query(`INSERT INTO erd_mutations (user_id, erd_id, mutation_id, request_hash, result)
+        VALUES ($1, $2, $3, $4, $5)`, [...key, JSON.stringify(result)]);
+    },
+  };
+}
+
+export async function updateDocument(client: PoolClient, userId: string, document: ErdDocument) {
+  const { rows: [saved] } = await client.query<Saved>(`UPDATE erds SET title = $2, payload = $3,
+    revision = revision + 1, updated_by = $4, updated_at = clock_timestamp()
+    WHERE id = $1 RETURNING revision, updated_at AS "updatedAt"`, [document.id, document.name, JSON.stringify(document), userId]);
+  return saved;
+}
+
+async function saveDocument(pool: Pool, userId: string, id: string, body: Record<string, unknown>,
+  limits: DocumentLimits, checkpoints: CheckpointSettings) {
+  const baseRevision = revisionNumber(body.baseRevision);
   const mutationId = uuid(body.mutationId);
   return transaction(pool, async client => {
     const row = await findDocument(client, userId, id, 'update');
     requireRole(row.role, 'editor');
-    const document = inputDocument(rawDocument, limits);
+    const document = inputDocument(body.document, limits);
     if (document.id !== id) throw new ApiError(400, 'DOCUMENT_ID_MISMATCH', '문서 ID가 요청 경로와 일치해야 합니다.');
-    const { rows: [{ digest }] } = await client.query<{ digest: string }>(
-      "SELECT encode(sha256(convert_to($1::jsonb::text, 'UTF8')), 'hex') AS digest", [JSON.stringify(body)]);
-    const mutationKey = [userId, id, mutationId];
-    const { rows: [recorded] } = await client.query<RecordedMutation>(`SELECT request_hash = $4 AS matches, result
-      FROM erd_mutations WHERE user_id = $1 AND erd_id = $2 AND mutation_id = $3 AND expires_at > now()`, [...mutationKey, digest]);
-    if (recorded) {
-      if (recorded.matches) return recorded.result;
-      throw new ApiError(409, 'MUTATION_MISMATCH', '같은 저장 요청 ID에 다른 문서가 전달됐습니다.');
-    }
-    if (row.revision !== baseRevision) {
-      throw new ApiError(409, 'REVISION_CONFLICT', '서버에서 다른 변경사항을 먼저 저장했습니다.',
-        { revision: row.revision, updatedAt: row.updatedAt });
-    }
-    const original = storedDocument(row, limits);
-    if (original.target.dialectId !== document.target.dialectId || original.target.engineVersion !== document.target.engineVersion) {
-      throw new ApiError(400, 'DOCUMENT_TARGET_MISMATCH', '기존 ERD의 SQL 대상은 변경할 수 없습니다.');
-    }
-    const { rows: [saved] } = await client.query<Saved>(`UPDATE erds SET title = $2, payload = $3,
-      revision = revision + 1, updated_by = $4, updated_at = clock_timestamp()
-      WHERE id = $1 RETURNING revision, updated_at AS "updatedAt"`, [id, document.name, JSON.stringify(document), userId]);
-    await client.query('DELETE FROM erd_mutations WHERE erd_id = $1 AND expires_at <= now()', [id]);
-    await client.query(`INSERT INTO erd_mutations (user_id, erd_id, mutation_id, request_hash, result)
-      VALUES ($1, $2, $3, $4, $5)`, [...mutationKey, digest, JSON.stringify(saved)]);
+    const mutation = await documentMutation<Saved>(client, userId, id, mutationId, body);
+    if (mutation.replay) return mutation.replay;
+    assertRevision(row, baseRevision);
+    assertTarget(storedDocument(row, limits), document);
+    const saved = await updateDocument(client, userId, document);
+    await checkpoint(client, userId, row, saved.revision, document, checkpoints);
+    await mutation.record(saved);
     return saved;
   });
 }
 
-export function registerProjects(api: FastifyInstance, pool: Pool, authenticate: Authenticate, sql: SqlService, limits: DocumentLimits) {
+export function registerProjects(api: FastifyInstance, pool: Pool, authenticate: Authenticate, sql: SqlService,
+  limits: DocumentLimits, checkpoints: CheckpointSettings) {
   api.get('/api/ready', async () => {
     try {
-      const { rowCount } = await pool.query('SELECT 1 FROM schema_migrations WHERE name = ANY($1::text[])', [['001-projects.sql', '002-sql-jobs.sql', '003-sql-import.sql']]);
-      if (rowCount !== 3) throw new Error('Service migration is missing.');
+      const migrations = ['001-projects.sql', '002-sql-jobs.sql', '003-sql-import.sql', '004-sharing-history.sql'];
+      const { rowCount } = await pool.query('SELECT 1 FROM schema_migrations WHERE name = ANY($1::text[])', [migrations]);
+      if (rowCount !== migrations.length) throw new Error('Service migration is missing.');
       return { status: 'ready' };
     } catch {
       throw new ApiError(503, 'DATABASE_UNAVAILABLE', '서비스 데이터베이스를 확인해 주세요.');
@@ -272,7 +302,7 @@ export function registerProjects(api: FastifyInstance, pool: Pool, authenticate:
 
   api.put<{ Params: DocumentParams }>('/api/erds/:erdId', async request => {
     const { user } = await authenticate(request, true);
-    return saveDocument(pool, user.id, uuid(request.params.erdId), objectBody(request.body), limits);
+    return saveDocument(pool, user.id, uuid(request.params.erdId), objectBody(request.body), limits, checkpoints);
   });
 
   api.post<{ Params: DocumentParams }>('/api/erds/:erdId/duplicate', async (request, reply) => {

@@ -7,7 +7,8 @@ it('round-trips stable identifiers, ordered keys, views, and unknown extension d
   document.extensions.push({ namespace: 'postgresql', version: 99, data: { flags: [1, null] } });
   expect(deserializeDocument(serializeDocument(document))).toEqual(document);
   expect(() => deserializeDocument(JSON.stringify({ ...document, formatVersion: 2 }))).toThrow(/future/i);
-  expect(() => deserializeDocument(JSON.stringify({ ...document, formatVersion: 0 }))).toThrow(/migration/i);
+  expect(() => deserializeDocument(JSON.stringify({ ...document, formatVersion: 0 }), new MigrationRegistry())).toThrow(/migration/i);
+  expect(deserializeDocument(JSON.stringify({ ...sampleDocument, formatVersion: 0, extensions: undefined }))).toEqual(sampleDocument);
   const registry = new MigrationRegistry();
   registry.register(0, value => ({ ...value, formatVersion: 1 }));
   expect(deserializeDocument(JSON.stringify({ ...document, formatVersion: 0 }), registry)).toEqual(document);

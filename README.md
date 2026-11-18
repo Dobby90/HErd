@@ -48,7 +48,13 @@ SQL 작업 결과는 기본 10분 동안 보관됩니다. 생성 스크립트의
 
 프로젝트에서 **DDL로 새 ERD 만들기**를 열거나 서버 편집기에서 **DDL로 모델 교체**를 엽니다. PostgreSQL 17 DDL을 붙여 넣거나 UTF-8 `.sql` 또는 텍스트 형식의 `pg_dump --schema-only` 파일을 선택합니다. 기본 입력 한도는 5 MiB입니다. 분석에서 이름 해석 결과와 문장별 판정을 확인하고, 제외 항목이 있을 때는 해당 분석의 손실 목록을 확인한 뒤 적용합니다.
 
-모델 교체는 현재 서버 리비전을 기준으로 적용하며 기존 모델과 뷰는 교체 직전 스냅샷에 저장합니다. 서버 이력 복원 화면은 6단계입니다. 기존 서비스 DB의 가져오기 기능은 `pnpm db:migrate`로 추가합니다. [가져오기 API와 설정](docs/05-postgresql-ddl-import.md#실행과-적용-설정), [PostgreSQL 지원 범위](docs/sql-support/postgresql.md#postgresql-17-ddl-import)
+모델 교체는 현재 서버 리비전을 기준으로 적용하며 기존 모델과 뷰는 교체 직전 스냅샷에 저장합니다. 편집기의 **버전 이력**에서 교체 전 상태를 열거나 복원할 수 있습니다. [가져오기 API와 설정](docs/05-postgresql-ddl-import.md#실행과-적용-설정), [PostgreSQL 지원 범위](docs/sql-support/postgresql.md#postgresql-17-ddl-import)
+
+## 프로젝트 공유·버전 이력·이미지 출력
+
+프로젝트 owner는 **멤버 관리**에서 가입한 사용자의 공유 코드를 확인해 역할을 부여하거나 회수합니다. 공유 코드는 로그인한 계정의 **내 공유 코드**에서 확인할 수 있습니다. Viewer는 읽기 전용 편집기에서 현재 모델의 SQL과 뷰 이미지를 내보낼 수 있습니다.
+
+편집기의 **버전 이력**에서 수동 스냅샷을 저장하고 과거 버전을 읽기 전용으로 엽니다. 복원하면 기존 상태가 보존되고 복원 결과가 새 리비전에 저장됩니다. **이미지 내보내기**에서는 현재 뷰 전체 또는 선택한 테이블을 SVG·PNG로 출력합니다. 기존 서비스 DB에는 `pnpm db:migrate`로 6단계 마이그레이션을 적용합니다. [권한·이력·출력 설정](docs/06-sharing-history-and-images.md#사용과-설정)
 
 ## 진행 상태
 
@@ -57,9 +63,10 @@ SQL 작업 결과는 기본 10분 동안 보관됩니다. 생성 스크립트의
 - [x] **3단계 프로젝트·인증·서버 저장 완료.** OIDC와 역할별 권한, 실제 DB의 프로젝트·ERD CRUD, 자동 저장·충돌·복구를 검증했습니다. [3단계 검증 결과](docs/03-projects-and-persistence.md#검증-결과)
 - [x] **4단계 PostgreSQL DDL 내보내기 완료.** 생성 SQL의 PostgreSQL 17 실행과 catalog 의미, 부분 선택 의존성, 작업 권한·격리, UTF-8 다운로드를 검증했습니다. [4단계 검증 결과](docs/04-postgresql-ddl-export.md#검증-결과)
 - [x] **5단계 PostgreSQL DDL 가져오기 완료.** PostgreSQL 17 덤프의 모델 변환, 문장별 진단, 새 ERD 생성과 리비전 기반 교체를 검증했습니다. [5단계 검증 결과](docs/05-postgresql-ddl-import.md#검증-결과)
-- [ ] **6단계 공유·이력·이미지 출력 예정.** [6단계 계획](docs/06-sharing-history-and-images.md)
+- [x] **6단계 공유·이력·이미지 출력 완료.** 멤버 역할 관리, 원자적 버전 복원, PNG·SVG의 범위와 출력 품질을 검증했습니다. [6단계 검증 결과](docs/06-sharing-history-and-images.md#검증-결과)
+- [ ] **7단계 안정화와 배포 준비 예정.** [7단계 계획](docs/07-hardening-and-release.md)
 
-2026-11-18 Docker 검증에서 클린 설치, 빌드·타입 검사·lint, 기본 테스트 43개, 통합 테스트 9개가 통과했습니다. OIDC는 모의 공급자로 검증했으며 운영 계정 연동은 배포 환경에서 확인합니다.
+2026-11-18 Docker 검증에서 클린 설치, 빌드·타입 검사·lint, 기본 테스트 43개, 통합 테스트 13개가 통과했습니다. OIDC는 모의 공급자로 검증했으며 운영 계정 연동은 배포 환경에서 확인합니다.
 
 - [단계별 계획](docs/README.md)
 - [PostgreSQL 지원 상태](docs/sql-support/postgresql.md)

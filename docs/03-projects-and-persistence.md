@@ -121,4 +121,4 @@
 
 > docs/README.md와 docs/00-scope-and-architecture.md를 읽고, docs/03-projects-and-persistence.md의 3단계를 구현해줘. 문서 저장과 인증·권한·멱등성·revision 경쟁을 실제 API와 DB로 검증해줘.
 
-프로젝트 멤버 관리 화면과 스냅샷 이력 복원은 6단계에서 구현한다. 프로젝트 멤버와 리비전 이력의 저장 테이블은 초기 마이그레이션에 포함됐다.
+프로젝트 멤버와 리비전 이력의 저장 테이블은 초기 마이그레이션에 포함됐다. 멤버 관리와 스냅샷 복원은 [6단계 공유·이력·이미지 출력](./06-sharing-history-and-images.md#사용과-설정)에서 제공한다.

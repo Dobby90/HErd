@@ -9,6 +9,10 @@ export type Named = { physicalName: string; logicalName?: string; description?: 
 export const id = () => crypto.randomUUID();
 export const label = (value: Named) => value.physicalName || '(이름 없음)';
 export const field = (form: FormData, key: string) => String(form.get(key) ?? '');
+export const viewLabel = (value: Named, mode: View['nameDisplay']) =>
+  (mode === 'logical' && value.logicalName) || label(value);
+export const viewColumnIds = (table: Table, instance: View['instances'][number]) =>
+  instance.collapsed ? [] : instance.visibleColumnIds ?? table.columnIds;
 
 export function named(form: FormData): Named {
   return { physicalName: field(form, 'physicalName'), logicalName: field(form, 'logicalName') || undefined,

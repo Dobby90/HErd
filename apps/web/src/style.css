@@ -60,6 +60,8 @@ h3, h4 { font-size: .92rem; }
 dialog { color: inherit; border: 1px solid #8393aa; border-radius: 8px; width: min(480px, calc(100% - 2rem)); max-height: 85vh; padding: 1rem; }
 dialog::backdrop { background: #14294380; }
 dialog header { display: flex; justify-content: space-between; align-items: center; margin-bottom: .75rem; }
+.topbar dialog { color: #1e2c40; }
+.topbar dialog [role="alert"] { color: #9a241b; }
 dialog dt { font-weight: 650; }
 dialog dd { margin: 0 0 .65rem; overflow-wrap: anywhere; }
 @media (max-width: 850px) {
@@ -100,3 +102,19 @@ dialog:has(.sql-export) { width: min(48rem, calc(100% - 2rem)); }
 .sql-import textarea { font: .85rem ui-monospace, monospace; white-space: pre; }
 .sql-import ul, .sql-import ol { margin: .3rem 0; padding-left: 1.35rem; max-height: 14rem; overflow: auto; }
 dialog:has(.sql-import) { width: min(48rem, calc(100% - 2rem)); }
+
+.version-form, .image-options { display: grid; gap: .65rem; margin: .75rem 0; }
+.version-list { display: grid; gap: .45rem; list-style: none; margin: .75rem 0; padding: 0; }
+.version-list li { display: grid; gap: .3rem; border-top: 1px solid #dde4ed; padding: .6rem 0; overflow-wrap: anywhere; }
+.version-list li > button { justify-self: start; text-align: left; }
+.version-list li > span { font-size: .86rem; color: #435674; }
+.project-account summary { cursor: pointer; }
+.project-account details[open] { min-width: min(16rem, 100%); }
+.project-account details > div { margin-top: .4rem; }
+.image-options { grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
+.image-selection { max-height: 10rem; overflow: auto; margin: .6rem 0; }
+.image-preview { display: block; max-width: 100%; max-height: 48vh; object-fit: contain; border: 1px solid #a7b8cb; margin-top: .5rem; }
+dialog:has(.image-options), dialog:has(.version-list) { width: min(48rem, calc(100% - 2rem)); }
+.canvas-table.search-match { outline: 2px solid #97740d; }
+.canvas-column.search-match, .navigator mark { background: #ffe794; color: #503609; }
+.column-matches { border-left: 1px solid #d8e2f0; }

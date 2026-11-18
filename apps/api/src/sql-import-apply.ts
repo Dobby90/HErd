@@ -9,6 +9,7 @@ import type { Authenticate } from './auth.js';
 import type { DocumentLimits } from './config.js';
 import { transaction } from './database.js';
 import { findDocument, findProject, inputDocument, insertDocument, requireRole, storedDocument, title } from './projects.js';
+import { insertSnapshot } from './revision-storage.js';
 
 function draft(catalog: Catalog, target: SqlTarget, id: string, name: string): ErdDocument {
   const columns = new Map(catalog.columns.map(column => [column.id, column]));
@@ -94,8 +95,7 @@ export function registerSqlImportApply(api: FastifyInstance, pool: Pool, authent
           throw new ApiError(409, 'DOCUMENT_TARGET_MISMATCH', '분석과 대상 문서의 SQL 대상이 다릅니다.');
         }
         const document = inputDocument(draft(catalog, original.target, row.id, original.name), limits);
-        await client.query(`INSERT INTO erd_revisions (id, erd_id, source_revision, payload, kind, created_by)
-          VALUES ($1,$2,$3,$4,'before-import',$5)`, [randomUUID(), row.id, row.revision, JSON.stringify(row.payload), user.id]);
+        await insertSnapshot(client, user.id, row, 'before-import', 'DDL 모델 교체 전');
         const { rows: [saved] } = await client.query<{ revision: number; updatedAt: Date }>(`UPDATE erds
           SET title = $2, payload = $3, revision = revision + 1, updated_by = $4, updated_at = clock_timestamp()
           WHERE id = $1 RETURNING revision, updated_at AS "updatedAt"`, [row.id, document.name, JSON.stringify(document), user.id]);

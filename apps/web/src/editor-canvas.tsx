@@ -1,25 +1,39 @@
-import { useEffect, useMemo, useState } from 'react';
-import { applyNodeChanges, Background, Controls, Handle, MiniMap, Position, ReactFlow, useUpdateNodeInternals } from '@xyflow/react';
-import type { Edge, Node, NodeProps, XYPosition } from '@xyflow/react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { applyNodeChanges, Background, Controls, Handle, MiniMap, Position, ReactFlow, useNodesInitialized, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
+import type { Edge, Node, NodeProps, OnSelectionChangeParams, XYPosition } from '@xyflow/react';
 import { columnBadges, physicalRelationships } from '@erd/model';
 import type { ErdDocument } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
+import { viewColumnIds, viewLabel } from './editor-fields.js';
 
 type View = ErdDocument['views'][number];
 type CanvasNode = Node<Record<string, unknown> & {
   label: string;
-  columns?: Array<{ id: string; name: string; badges: string[] }>;
+  highlighted?: boolean;
+  columns?: Array<{ id: string; name: string; badges: string[]; highlighted?: boolean }>;
 }, 'table' | 'groupBox' | 'note'>;
+
+export type CanvasFocus = { instanceId: string; columnId?: string };
+export type LayoutSizes = Map<string, { width: number; height: number }>;
+
+function FocusNode({ focus }: { focus?: CanvasFocus }) {
+  const ready = useNodesInitialized();
+  const { fitView } = useReactFlow();
+  useEffect(() => {
+    if (focus && ready) void fitView({ nodes: [{ id: focus.instanceId }], maxZoom: 1.15, padding: 0.35, duration: 160 });
+  }, [fitView, ready, focus]);
+  return null;
+}
 
 function TableNode({ id, data }: NodeProps<CanvasNode>) {
   const refresh = useUpdateNodeInternals();
   const handles = data.columns?.map(column => column.id).join(':');
   useEffect(() => refresh(id), [handles, id, refresh]);
-  return <article className="canvas-table">
+  return <article className={'canvas-table' + (data.highlighted ? ' search-match' : '')}>
     <strong>{data.label}</strong>
     <Handle id="table-in" type="target" position={Position.Left} isConnectable={false} />
     <Handle id="table-out" type="source" position={Position.Right} isConnectable={false} />
-    {data.columns?.map(column => <div className="canvas-column" key={column.id}>
+    {data.columns?.map(column => <div className={'canvas-column' + (column.highlighted ? ' search-match' : '')} key={column.id}>
       <Handle id={'in:' + column.id} type="target" position={Position.Left} aria-label={column.name + ' 참조점'} />
       <span>{column.name}</span><small>{column.badges.join(' · ').toUpperCase()}</small>
       <Handle id={'out:' + column.id} type="source" position={Position.Right} aria-label={column.name + ' 연결점'} />
@@ -37,9 +51,7 @@ function NoteNode({ data }: NodeProps<CanvasNode>) {
 
 const nodeTypes = { table: TableNode, groupBox: GroupNode, note: NoteNode };
 
-function project(document: ErdDocument, view: View, dialect: EditorDialect | undefined) {
-  const display = (object: { id: string; physicalName: string; logicalName?: string }) =>
-    (view.nameDisplay === 'logical' ? object.logicalName : object.physicalName) || object.physicalName || '(이름 없음)';
+function project(document: ErdDocument, view: View, dialect: EditorDialect | undefined, focus?: CanvasFocus) {
   const tables = new Map(document.catalog.tables.map(table => [table.id, table]));
   const columns = new Map(document.catalog.columns.map(column => [column.id, column]));
   const instances = new Map<string, CanvasNode[]>();
@@ -56,15 +68,16 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   for (const instance of view.instances) {
     const table = tables.get(instance.tableId);
     if (!table) continue;
-    const visible = instance.collapsed ? [] : instance.visibleColumnIds ?? table.columnIds;
+    const visible = viewColumnIds(table, instance);
     const node: CanvasNode = {
       id: instance.id, type: 'table', position: { x: instance.x, y: instance.y },
       style: { width: instance.size?.width ?? 195 },
       data: {
-        label: display(table),
+        label: viewLabel(table, view.nameDisplay), highlighted: instance.id === focus?.instanceId,
         columns: visible.flatMap(id => {
           const column = columns.get(id);
-          return column ? [{ id, name: display(column), badges: columnBadges(document, id) }] : [];
+          return column ? [{ id, name: viewLabel(column, view.nameDisplay), badges: columnBadges(document, id),
+            highlighted: instance.id === focus?.instanceId && id === focus.columnId }] : [];
         }),
       },
     };
@@ -105,16 +118,22 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   return { nodes, edges };
 }
 
-export function EditorCanvas({ document, view, dialect, select, connect, move, snap, readOnly }: {
+export function EditorCanvas({ document, view, dialect, select, selectInstances, focus, connect, move, layoutSizes, snap, readOnly }: {
   document: ErdDocument; view: View; dialect?: EditorDialect;
   select(id: string): void;
+  selectInstances(ids: string[]): void;
+  focus?: CanvasFocus;
+  layoutSizes: LayoutSizes;
   connect(sourceColumnId: string, targetColumnId: string): void;
   move(positions: Map<string, XYPosition>): void;
   snap: boolean;
   readOnly: boolean;
 }) {
-  const projected = useMemo(() => project(document, view, dialect), [document, view, dialect]);
+  const projected = useMemo(() => project(document, view, dialect, focus), [document, view, dialect, focus]);
   const [nodes, setNodes] = useState(projected.nodes);
+  const onSelection = useCallback(({ nodes }: OnSelectionChangeParams) => {
+    selectInstances(nodes.filter(node => node.type === 'table').map(node => node.id));
+  }, [selectInstances]);
   useEffect(() => setNodes(previous => {
     const selected = new Set(previous.filter(node => node.selected).map(node => node.id));
     return projected.nodes.map(node => ({ ...node, selected: selected.has(node.id) }));
@@ -124,10 +143,11 @@ export function EditorCanvas({ document, view, dialect, select, connect, move, s
     nodesDraggable={!readOnly} nodesConnectable={!readOnly}
     nodes={nodes} edges={projected.edges} nodeTypes={nodeTypes}
     onNodesChange={changes => {
-      setNodes(previous => applyNodeChanges(changes, previous));
+      setNodes(previous => applyNodeChanges(readOnly ? changes.filter(change => change.type !== 'position') : changes, previous));
       const positions = new Map<string, XYPosition>();
       // React Flow batches keyboard moves and pointer drag completion with dragging set to false.
       for (const change of changes) {
+        if (change.type === 'dimensions' && change.dimensions) layoutSizes.set(change.id, change.dimensions);
         if (change.type === 'position' && change.dragging === false && change.position) {
           positions.set(change.id, change.position);
         }
@@ -135,16 +155,18 @@ export function EditorCanvas({ document, view, dialect, select, connect, move, s
       if (!readOnly && positions.size) move(positions);
     }}
     onNodeClick={(_, node) => select(node.id)}
+    onSelectionChange={onSelection}
     onEdgeClick={(_, edge) => select(String(edge.data?.objectId ?? ''))}
     isValidConnection={connection => Boolean(connection.sourceHandle?.startsWith('out:') && connection.targetHandle?.startsWith('in:'))}
     onConnect={({ sourceHandle, targetHandle }) => {
-      if (sourceHandle?.startsWith('out:') && targetHandle?.startsWith('in:')) connect(sourceHandle.slice(4), targetHandle.slice(3));
+      if (!readOnly && sourceHandle?.startsWith('out:') && targetHandle?.startsWith('in:')) connect(sourceHandle.slice(4), targetHandle.slice(3));
     }}
     connectionRadius={18} snapToGrid={snap} snapGrid={[20, 20]} deleteKeyCode={null} selectionOnDrag
     panOnDrag={[1, 2]} multiSelectionKeyCode={['Shift', 'Meta', 'Control']} fitView
     minZoom={0.15} maxZoom={2.5}
     proOptions={{ hideAttribution: true }}
   >
+    <FocusNode focus={focus} />
     <Background gap={20} color="#54647b" />
     <Controls showInteractive={false} />
     <MiniMap pannable zoomable />

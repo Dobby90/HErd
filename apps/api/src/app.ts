@@ -3,10 +3,12 @@ import { SqlService } from '@erd/sql-service';
 import type { Pool } from 'pg';
 import { configureErrors } from './api-error.js';
 import { registerAuth } from './auth.js';
-import { defaultDocumentLimits, defaultSqlInputBytes, defaultSqlJobSettings, readConfig } from './config.js';
-import type { AuthSettings, DocumentLimits, SqlJobSettings } from './config.js';
+import { defaultCheckpointSettings, defaultDocumentLimits, defaultSqlInputBytes, defaultSqlJobSettings, readConfig } from './config.js';
+import type { AuthSettings, CheckpointSettings, DocumentLimits, SqlJobSettings } from './config.js';
 import { createDatabase } from './database.js';
 import { registerProjects } from './projects.js';
+import { registerProjectMembers } from './project-members.js';
+import { registerRevisions } from './revisions.js';
 import { registerSqlImportApply } from './sql-import-apply.js';
 import { registerSqlJobs } from './sql-jobs.js';
 import { SqlQueue } from './sql-queue.js';
@@ -14,10 +16,12 @@ import { createSqlRegistry } from './sql-registry.js';
 
 function configuredPersistence() {
   const config = readConfig(process.env);
-  return config && { pool: createDatabase(config.databaseUrl), auth: config.auth, limits: config.limits, jobs: config.jobs };
+  return config && { pool: createDatabase(config.databaseUrl), ...config };
 }
 
-export function createApi(persistence: { pool: Pool; auth: AuthSettings; limits?: DocumentLimits; jobs?: SqlJobSettings } | undefined = configuredPersistence()) {
+export function createApi(persistence: {
+  pool: Pool; auth: AuthSettings; limits?: DocumentLimits; jobs?: SqlJobSettings; checkpoints?: CheckpointSettings;
+} | undefined = configuredPersistence()) {
   const registry = createSqlRegistry();
   const sql = new SqlService(registry);
   const limits = persistence?.limits ?? defaultDocumentLimits;
@@ -39,7 +43,9 @@ export function createApi(persistence: { pool: Pool; auth: AuthSettings; limits?
     api.addHook('onClose', async () => { await queue.close(); await pool.end(); });
     void api.register(async routes => {
       const authenticate = await registerAuth(routes, pool, auth);
-      registerProjects(routes, pool, authenticate, sql, limits);
+      registerProjects(routes, pool, authenticate, sql, limits, persistence.checkpoints ?? defaultCheckpointSettings);
+      registerProjectMembers(routes, pool, authenticate);
+      registerRevisions(routes, pool, authenticate, limits);
       registerSqlJobs(routes, pool, authenticate, registry, queue, limits);
       registerSqlImportApply(routes, pool, authenticate, limits);
     });

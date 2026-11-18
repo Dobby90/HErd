@@ -35,3 +35,10 @@ export function uuid(value: unknown): string {
   }
   return value;
 }
+
+export function revisionNumber(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > 2147483647) {
+    throw new ApiError(400, 'INVALID_REVISION', '기준 리비전이 올바르지 않습니다.');
+  }
+  return value;
+}
