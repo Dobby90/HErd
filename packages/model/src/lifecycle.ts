@@ -112,8 +112,18 @@ export function applyCommand(previous: ErdDocument, command: DocumentCommand): C
       if (!object) return missing(command.objectId);
       if (object.physicalName === command.physicalName) break;
       object.physicalName = command.physicalName;
+      const { tables, enums, sequences, columns, constraints, indexes } = document.catalog;
+      // A reference to a nested object may use its owning table or namespace as a qualifier.
+      const affectedIds = new Set([object.id]);
+      for (const child of [...tables, ...enums, ...sequences]) {
+        if (child.namespaceId === object.id) affectedIds.add(child.id);
+      }
+      for (const child of [...columns, ...constraints, ...indexes]) {
+        if (affectedIds.has(child.tableId)) affectedIds.add(child.id);
+      }
       for (const { ownerId, expression } of documentExpressions(document)) {
-        const unaffected = expression.referencesComplete && expression.references && !expression.references.includes(object.id);
+        const unaffected = expression.referencesComplete &&
+          expression.references?.every(id => !affectedIds.has(id));
         if (unaffected || expression.invalidated) continue;
         expression.invalidated = true;
         diagnostics.push({

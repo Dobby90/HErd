@@ -77,3 +77,16 @@ it('invalidates an affected index expression and retains a proven independent de
   });
   expect(renamed.undo?.previous?.catalog.columns.find(column => column.id === 'product-name')?.physicalName).toBe('name');
 });
+
+it('invalidates expressions that reference a column through a renamed table', () => {
+  const document = structuredClone(sampleDocument);
+  const check = document.catalog.constraints.find(constraint => constraint.id === 'item-quantity-check');
+  if (check?.kind !== 'check') throw new Error('Expected the order quantity CHECK');
+  check.expression.sql = 'order_items.quantity > 0';
+  const renamed = applyCommand(document, { kind: 'rename', objectId: 'items', physicalName: 'line_items' });
+  expect(renamed).toMatchObject({ applied: true, diagnostics: [{ code: 'invalidated-expression', objectId: check.id }] });
+  expect(renamed.document.catalog.constraints.find(constraint => constraint.id === check.id)).toMatchObject({
+    expression: { ...check.expression, invalidated: true },
+  });
+  expect(renamed.undo?.previous).toEqual(document);
+});

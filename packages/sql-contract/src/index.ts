@@ -55,7 +55,7 @@ export interface Dependency { kind: keyof Catalog; objectId: string }
 export type GenerateResult = {
   dependencies: Dependency[];
   diagnostics: Diagnostic[];
-} & ({ status: 'generated'; sql: string } | { status: 'blocked' | 'not-implemented' });
+} & ({ status: 'generated'; sql: string } | { status: 'blocked' | 'not-implemented'; sql?: never });
 
 export interface SqlDialect {
   metadata: DialectMetadata;

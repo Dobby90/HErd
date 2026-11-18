@@ -1,11 +1,11 @@
 import type { DialectCapabilities, DialectMetadata } from '@erd/sql-contract';
 
-export const postgresqlMetadata = {
+export const postgresqlMetadata: DialectMetadata = {
   id: 'postgresql',
   name: 'PostgreSQL',
   adapterVersion: '0.1.0',
   profiles: [{ version: '17', status: 'certified' }],
-} satisfies DialectMetadata;
+};
 
 const modeled = {
   model: 'supported', edit: 'not-implemented', import: 'not-implemented', export: 'not-implemented',

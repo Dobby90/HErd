@@ -4,6 +4,7 @@ import type { GenerateResult, ParseResult, SqlDialect } from '@erd/sql-contract'
 import { DialectRegistry, SqlService } from '@erd/sql-service';
 import { applyCommand, documentExpressions, validateDocumentStructure } from '@erd/model';
 import { sampleDocument } from '@erd/test-fixtures';
+import type { ErdDocument } from '@erd/model';
 
 const target = sampleDocument.target;
 const parseRequest = { target, sql: 'SELECT 1', defaultNamespace: 'public' };
@@ -54,10 +55,15 @@ it('distinguishes unregistered, uncertified and stage-one unavailable operations
   }
 });
 
-it('delegates all operations to a second adapter through the registry', async () => {
-  const other = { dialectId: 'other', engineVersion: '1' };
+const other = { dialectId: 'other', engineVersion: '1' };
+const candidate = { ...other, engineVersion: '2' };
+
+function createOtherService() {
   const adapter: SqlDialect = {
-    metadata: { id: 'other', name: 'Other', adapterVersion: '1', profiles: [{ version: '1', status: 'certified' }] },
+    metadata: {
+      id: other.dialectId, name: 'Other', adapterVersion: '1',
+      profiles: [{ version: other.engineVersion, status: 'certified' }, { version: candidate.engineVersion, status: 'candidate' }],
+    },
     capabilities: vi.fn(() => ({})),
     validate: vi.fn(() => []),
     parse: vi.fn(async (): Promise<ParseResult> => ({ status: 'parsed', catalog: sampleDocument.catalog, statements: [], diagnostics: [], losses: [], profile: { version: '1', status: 'certified' } })),
@@ -65,12 +71,21 @@ it('delegates all operations to a second adapter through the registry', async ()
   };
   const registry = new DialectRegistry();
   registry.register(adapter);
-  const service = new SqlService(registry);
+  return { adapter, service: new SqlService(registry) };
+}
+
+function otherDocument(engine = other): ErdDocument {
   const document = structuredClone(sampleDocument);
-  document.target = other;
+  document.target = engine;
   for (const { expression } of documentExpressions(document)) {
-    Object.assign(expression, other);
+    Object.assign(expression, engine);
   }
+  return document;
+}
+
+it('delegates all operations to a second adapter through the registry', async () => {
+  const { adapter, service } = createOtherService();
+  const document = otherDocument();
   const input = { ...parseRequest, target: other };
   const output = { document, target: other };
   expect(service.capabilities(other)).toEqual({});
@@ -91,6 +106,96 @@ it('delegates all operations to a second adapter through the registry', async ()
     status: 'blocked', diagnostics: [expect.objectContaining({ code: 'cannot-preserve-feature' })],
   });
   expect(rejected).not.toHaveProperty('sql');
+
+  const advisory = { code: 'advisory', severity: 'warning', message: 'Review the selection.' } as const;
+  const diagnostic = { code: 'unavailable', severity: 'error', message: 'Generation is unavailable.' } as const;
+  const dependencies = [{ kind: 'tables', objectId: 'products' }] as const;
+  vi.mocked(adapter.validate).mockReturnValue([advisory]);
+  for (const status of ['blocked', 'not-implemented'] as const) {
+    const mixedResult: unknown = { status, dependencies, diagnostics: [diagnostic], sql: 'leaked SQL' };
+    vi.mocked(adapter.generate).mockResolvedValueOnce(mixedResult as GenerateResult);
+    expect(await service.generate(output)).toStrictEqual({ status, dependencies, diagnostics: [advisory, diagnostic] });
+  }
+});
+
+it('rejects a registered candidate profile before calling any adapter operation', async () => {
+  const { adapter, service } = createOtherService();
+  vi.mocked(adapter.capabilities).mockReturnValue({
+    table: { model: 'supported', edit: 'unsupported', import: 'not-implemented', export: 'not-implemented' },
+  });
+  const diagnostic = expect.objectContaining({ code: 'uncertified-engine-version', severity: 'error' });
+  const document = otherDocument(candidate);
+  expect(service.capabilities(candidate)).toEqual({ diagnostics: [diagnostic] });
+  expect(service.validate(document)).toEqual([diagnostic]);
+  expect(await service.parse({ ...parseRequest, target: candidate })).toMatchObject({ status: 'blocked', diagnostics: [diagnostic] });
+  expect(await service.generate({ document, target: candidate })).toMatchObject({ status: 'blocked', diagnostics: [diagnostic] });
+  for (const method of [adapter.capabilities, adapter.validate, adapter.parse, adapter.generate]) {
+    expect(method).not.toHaveBeenCalled();
+  }
+});
+
+it('validates selected tables and dependent objects while checking the whole document structure', async () => {
+  const { adapter, service } = createOtherService();
+  const renamed = applyCommand(otherDocument(), { kind: 'rename', objectId: 'item-quantity', physicalName: 'amount' });
+  expect(renamed.applied).toBe(true);
+  const { document } = renamed;
+  document.catalog.columns[0].type.attributes = [{ namespace: 'other', version: 99, data: {} }];
+  const productName = document.catalog.columns.find(column => column.id === 'product-name');
+  if (!productName) throw new Error('Expected a product name column');
+  const auxiliaryNamespace = { id: 'aux', physicalName: 'auxiliary' };
+  document.catalog.namespaces.push(auxiliaryNamespace);
+  const productType = { id: 'product-name-type', namespaceId: 'aux', physicalName: 'product_name', values: ['name'] };
+  document.catalog.enums.push(productType);
+  productName.type.reference = { kind: 'enum', enumId: productType.id };
+  const productSequence = { id: 'product-sequence', namespaceId: 'aux', physicalName: 'product_number' };
+  const ownedSequence = { id: 'owned-sequence', namespaceId: 'aux', physicalName: 'owned_number', ownedByColumnId: 'product-id' };
+  document.catalog.sequences.push(productSequence, ownedSequence, { id: 'unrelated-sequence', namespaceId: 'aux', physicalName: 'unrelated' });
+  const productId = document.catalog.columns.find(column => column.id === 'product-id');
+  if (!productId) throw new Error('Expected a product ID column');
+  productId.default = { ...other, sql: "nextval('auxiliary.product_number')", references: [productSequence.id], referencesComplete: true };
+
+  const selected = { document, target: other, tableIds: ['products'] };
+  expect(await service.generate(selected)).toMatchObject({ status: 'generated' });
+  expect(adapter.generate).toHaveBeenCalledExactlyOnceWith(selected);
+  const validatedDocument = vi.mocked(adapter.validate).mock.calls[0][0];
+  expect(validateDocumentStructure(validatedDocument)).toEqual([]);
+  expect(validatedDocument.catalog.tables.map(table => table.id)).toEqual(['products']);
+  expect(validatedDocument.catalog.namespaces).toContainEqual(auxiliaryNamespace);
+  expect(validatedDocument.catalog.enums).toEqual([productType]);
+  expect(validatedDocument.catalog.sequences).toEqual([productSequence, ownedSequence]);
+  expect(await service.generate({ ...selected, tableIds: ['items'] })).toMatchObject({
+    status: 'blocked', diagnostics: expect.arrayContaining([
+      expect.objectContaining({ code: 'unknown-extension', objectId: 'user-id' }),
+      expect.objectContaining({ code: 'invalidated-expression', objectId: 'item-quantity-check' }),
+    ]),
+  });
+  expect(adapter.generate).toHaveBeenCalledTimes(1);
+
+  document.catalog.tables[0].columnIds.push('missing-column');
+  expect(await service.generate(selected)).toMatchObject({
+    status: 'blocked', diagnostics: [expect.objectContaining({ code: 'invalid-column-reference', objectId: 'users' })],
+  });
+  expect(adapter.generate).toHaveBeenCalledTimes(1);
+});
+
+it('blocks generation after renaming the namespace of a referenced sequence', async () => {
+  const document = otherDocument();
+  const namespace = { id: 'stage1', physicalName: 'stage1' };
+  document.catalog.namespaces.push(namespace);
+  document.catalog.sequences.push({ id: 'external-numbers', namespaceId: namespace.id, physicalName: 'ExternalNumbers' });
+  const defaultExpression = {
+    ...other, sql: `nextval('stage1."ExternalNumbers"')`, references: ['external-numbers'], referencesComplete: true,
+  };
+  document.catalog.columns[0].default = defaultExpression;
+  expect(validateDocumentStructure(document)).toEqual([]);
+  const renamed = applyCommand(document, { kind: 'rename', objectId: namespace.id, physicalName: 'release' });
+  expect(renamed).toMatchObject({ applied: true, diagnostics: [{ code: 'invalidated-expression', objectId: 'user-id' }] });
+  expect(renamed.document.catalog.columns[0].default).toEqual({ ...defaultExpression, invalidated: true });
+  const { adapter, service } = createOtherService();
+  expect(await service.generate({ document: renamed.document, target: other, tableIds: ['users'] })).toMatchObject({
+    status: 'blocked', diagnostics: [{ code: 'invalidated-expression', objectId: 'user-id' }],
+  });
+  expect(adapter.generate).not.toHaveBeenCalled();
 });
 
 it('keeps PostgreSQL semantic validation separate from structural candidate-key checks', async () => {
@@ -107,7 +212,12 @@ it('keeps PostgreSQL semantic validation separate from structural candidate-key 
   expect(validateDocumentStructure(document)).toEqual([]);
   const { api, sql } = createApi();
   try {
-    expect(sql.validate(document)).toEqual([expect.objectContaining({ code: 'postgresql-partial-reference-index', objectId: key.id })]);
+    const invalidReference = expect.objectContaining({ code: 'postgresql-partial-reference-index', objectId: key.id });
+    expect(sql.validate(document)).toEqual([invalidReference]);
+    expect(await sql.generate({ document, target, tableIds: ['products'] })).toMatchObject({ status: 'not-implemented' });
+    expect(await sql.generate({ document, target, tableIds: ['items'] })).toMatchObject({
+      status: 'blocked', diagnostics: [invalidReference],
+    });
   } finally {
     await api.close();
   }
