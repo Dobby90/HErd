@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateDocumentStructure, columnBadges, physicalRelationships } from '@erd/model';
+import { validateDocumentStructure, columnBadges, erdDocumentSchema, physicalRelationships } from '@erd/model';
 import { sampleDocument } from '@erd/test-fixtures';
 
 describe('ERD structure', () => {
@@ -24,4 +24,19 @@ describe('ERD structure', () => {
     foreignKey.pairs.pop();
     expect(validateDocumentStructure(broken).map(issue => issue.code)).toContain('invalid-foreign-key');
   });
+});
+
+it('distinguishes runtime shape errors from wrong-table composite key references', () => {
+  const document = structuredClone(sampleDocument);
+  document.catalog.columns[0].type.arrayDimensions = -1;
+  expect(erdDocumentSchema.safeParse(document).success).toBe(false);
+
+  document.catalog.columns[0].type.arrayDimensions = 0;
+  const foreignKey = document.catalog.constraints.find(key => key.id === 'item-order');
+  if (foreignKey?.kind !== 'fk') throw new Error('Expected the composite foreign key');
+  foreignKey.pairs[0].sourceColumnId = 'user-id';
+  expect(erdDocumentSchema.safeParse(document).success).toBe(true);
+  expect(validateDocumentStructure(document)).toContainEqual(expect.objectContaining({
+    code: 'invalid-column-reference', objectId: foreignKey.id,
+  }));
 });

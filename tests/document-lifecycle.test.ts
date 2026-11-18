@@ -34,3 +34,46 @@ it('preserves renamed expressions and rejects a command with broken references',
   } });
   expect(rejected).toMatchObject({ applied: false, document: sampleDocument, undo: null });
 });
+
+it('round-trips enum and sequence references with typed column attributes', () => {
+  const document = structuredClone(sampleDocument);
+  document.catalog.enums.push({
+    id: 'order-status', namespaceId: 'public-schema', physicalName: 'OrderStatus',
+    values: ['pending', 'shipped'],
+  });
+  document.catalog.sequences.push({
+    id: 'order-sequence', namespaceId: 'public-schema', physicalName: 'OrderNumber',
+    start: '9007199254740993', increment: '2', ownedByColumnId: 'order-number',
+  });
+  document.catalog.columns[1].type = {
+    reference: { kind: 'enum', enumId: 'order-status' },
+    arguments: [],
+    arrayDimensions: 2,
+    originalSql: '"OrderStatus"[][]',
+    attributes: [{ namespace: 'postgresql', version: 99, data: { labels: ['pending'] } }],
+  };
+  expect(deserializeDocument(serializeDocument(document))).toEqual(document);
+});
+
+it('rejects a migration that skips the next document format version', () => {
+  const registry = new MigrationRegistry();
+  registry.register(0, value => ({ ...value, formatVersion: 2 }));
+  expect(() => deserializeDocument(JSON.stringify({ ...sampleDocument, formatVersion: 0 }), registry))
+    .toThrow(/advance exactly one version/i);
+});
+
+it('invalidates an affected index expression and retains a proven independent default', () => {
+  const renamed = applyCommand(sampleDocument, { kind: 'rename', objectId: 'product-name', physicalName: 'label' });
+  expect(renamed.applied).toBe(true);
+  expect(renamed.document.catalog.columns.find(column => column.id === 'product-name')?.physicalName).toBe('label');
+  expect(renamed.document.catalog.indexes[0].keys[0]).toMatchObject({
+    kind: 'expression', expression: { sql: 'lower(name)', references: ['product-name'], invalidated: true },
+  });
+  expect(renamed.diagnostics).toEqual([
+    expect.objectContaining({ code: 'invalidated-expression', severity: 'error', objectId: 'product-name-index' }),
+  ]);
+  expect(renamed.document.catalog.columns.find(column => column.id === 'item-quantity')?.default).toEqual({
+    ...sampleDocument.target, sql: '1', references: [], referencesComplete: true,
+  });
+  expect(renamed.undo?.previous?.catalog.columns.find(column => column.id === 'product-name')?.physicalName).toBe('name');
+});

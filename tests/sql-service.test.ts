@@ -20,6 +20,26 @@ it('distinguishes unregistered, uncertified and stage-one unavailable operations
     expect(sql.capabilities(target)).toMatchObject({ table: { model: 'supported', import: 'not-implemented', export: 'not-implemented' } });
     expect(await sql.parse(parseRequest)).toMatchObject({ status: 'not-implemented' });
     expect(await sql.generate({ document: sampleDocument, target })).toMatchObject({ status: 'not-implemented' });
+    const unsupported = { ...target, engineVersion: '99' };
+    const unavailable = await sql.generate({ document: { ...sampleDocument, target: unsupported }, target: unsupported });
+    expect(unavailable).toMatchObject({
+      status: 'blocked', diagnostics: [{ code: 'uncertified-engine-version' }],
+    });
+    expect(unavailable).not.toHaveProperty('sql');
+
+    const capabilities = sql.capabilities(target);
+    expect(capabilities).not.toHaveProperty('diagnostics');
+    for (const feature of Object.values(capabilities)) {
+      expect(feature).toMatchObject({ model: 'supported', import: 'not-implemented', export: 'not-implemented' });
+    }
+    const draft = structuredClone(sampleDocument);
+    const column = draft.catalog.columns[0];
+    column.type.attributes = [{ namespace: 'postgresql', version: 99, data: {} }];
+    const blockedAttributes = await sql.generate({ document: draft, target });
+    expect(blockedAttributes).toMatchObject({
+      status: 'blocked', diagnostics: [expect.objectContaining({ code: 'unknown-extension', objectId: column.id })],
+    });
+    expect(blockedAttributes).not.toHaveProperty('sql');
     const unknown = structuredClone(sampleDocument);
     unknown.extensions.push({ namespace: 'postgresql', version: 99, data: {} });
     const blocked = await sql.generate({ document: unknown, target });
@@ -57,6 +77,16 @@ it('delegates all operations to a second adapter through the registry', async ()
   expect(adapter.validate).toHaveBeenCalledWith(document, { target: other });
   expect(adapter.parse).toHaveBeenCalledWith(input);
   expect(adapter.generate).toHaveBeenCalledWith(output);
+
+  vi.mocked(adapter.generate).mockResolvedValueOnce({
+    status: 'generated', sql: 'CREATE TABLE example (id int);', dependencies: [],
+    diagnostics: [{ code: 'cannot-preserve-feature', severity: 'error', message: 'Cannot preserve feature.' }],
+  });
+  const rejected = await service.generate(output);
+  expect(rejected).toMatchObject({
+    status: 'blocked', diagnostics: [expect.objectContaining({ code: 'cannot-preserve-feature' })],
+  });
+  expect(rejected).not.toHaveProperty('sql');
 });
 
 it('keeps PostgreSQL semantic validation separate from structural candidate-key checks', async () => {
