@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import type { BrowserContext, Page } from 'playwright-core';
 import { createServer } from 'vite';
@@ -20,8 +20,11 @@ async function withEditor(run: (context: BrowserContext, origin: string) => Prom
   const directory = await mkdtemp(resolve(output, 'run-'));
   const temp = resolve(directory, 'tmp');
   await mkdir(temp);
-  const previousTemp = process.env.TMPDIR;
-  process.env.TMPDIR = temp;
+  // Chromium's Linux singleton socket has a Unix path length limit. The proc path
+  // resolves to the same writable directory even under a long worktree mount.
+  const chromiumTemp = process.platform === 'linux'
+    ? '/proc/' + process.pid + '/cwd/' + relative(process.cwd(), temp)
+    : temp;
   let context: BrowserContext | undefined;
   let server: Awaited<ReturnType<typeof createServer>> | undefined;
   let failed = true;
@@ -35,6 +38,7 @@ async function withEditor(run: (context: BrowserContext, origin: string) => Prom
     if (!address || typeof address === 'string') throw new Error('Vite did not open a loopback port.');
     context = await chromium.launchPersistentContext(resolve(directory, 'profile'), {
       executablePath: process.env.CHROMIUM_PATH ?? '/usr/bin/chromium',
+      env: { ...process.env, TMPDIR: chromiumTemp },
       args: ['--disable-dev-shm-usage'],
       viewport: { width: 1280, height: 850 },
     });
@@ -54,8 +58,6 @@ async function withEditor(run: (context: BrowserContext, origin: string) => Prom
       try {
         await server?.close();
       } finally {
-        if (previousTemp === undefined) delete process.env.TMPDIR;
-        else process.env.TMPDIR = previousTemp;
         if (!failed) await rm(directory, { recursive: true, force: true });
       }
     }
