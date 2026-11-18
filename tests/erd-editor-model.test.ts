@@ -129,3 +129,27 @@ it('leaves a pristine sample out of the undo and recovery workflow when its titl
   const history = documentHistory(sampleDocument);
   expect(commitDocument(history, { kind: 'title', name: sampleDocument.name }).history).toBe(history);
 });
+
+it('removes a column from its table and filtered view and restores the dependent keys through undo', () => {
+  const history = documentHistory(sampleDocument);
+  const impact = deletionImpact(history.present, 'order-number');
+  expect(impact?.removed).toEqual(new Set(['order-number', 'order-pk', 'item-order']));
+  expect(impact?.views).toEqual(new Set(['overview', 'products-view']));
+  expect(impact?.blockedBy).toEqual([]);
+
+  const deletion = commitDocument(history, { kind: 'remove-schema-object', objectId: 'order-number' });
+  const { catalog, views } = deletion.history.present;
+  expect(deletion.diagnostics).toEqual([]);
+  expect(catalog.columns.some(item => item.id === 'order-number')).toBe(false);
+  expect(catalog.tables.find(item => item.id === 'orders')?.columnIds).toEqual(['order-user-id']);
+  expect(catalog.constraints.map(item => item.id)).not.toContain('order-pk');
+  expect(catalog.constraints.map(item => item.id)).not.toContain('item-order');
+  expect(catalog.constraints.map(item => item.id)).toContain('order-user');
+  expect(views[1].instances.find(item => item.tableId === 'orders')?.visibleColumnIds).toEqual([]);
+  expect(validateDocumentStructure(deletion.history.present)).toEqual([]);
+
+  const undone = stepHistory(deletion.history, 'undo');
+  expect(undone.present).toEqual(history.present);
+  expect(validateDocumentStructure(undone.present)).toEqual([]);
+  expect(stepHistory(undone, 'redo').present).toEqual(deletion.history.present);
+});
