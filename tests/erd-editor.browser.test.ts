@@ -108,12 +108,17 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
     await page.locator('.react-flow__controls-fitview').click();
     const source = tableOnCanvas(page, 'children').getByLabel('parent_region 연결점', { exact: true });
     const destination = tableOnCanvas(page, 'parents').getByLabel('region 참조점', { exact: true });
-    await source.waitFor();
-    await destination.waitFor();
-    const sourceBox = await source.boundingBox();
+    const reachable = (handle: typeof source) => handle.evaluate(element => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return document.elementFromPoint(x + width / 2, y + height / 2) === element;
+    });
+    // React Flow applies fitView after layout. A visible DOM handle can still
+    // be clipped by the canvas and its current coordinates can hit the sidebar.
+    await expect.poll(() => reachable(source)).toBe(true);
+    await expect.poll(() => reachable(destination)).toBe(true);
+    await source.hover();
     const destinationBox = await destination.boundingBox();
-    if (!sourceBox || !destinationBox) throw new Error('Cannot locate visible FK handles.');
-    await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+    if (!destinationBox) throw new Error('Cannot locate the FK destination handle.');
     await page.mouse.down();
     await page.mouse.move(destinationBox.x + destinationBox.width / 2, destinationBox.y + destinationBox.height / 2, { steps: 15 });
     await page.mouse.up();
@@ -291,14 +296,14 @@ it('commits schema form values and restores drafts with object-specific name dia
     await publicSection.getByRole('button', { name: '테이블 추가', exact: true }).click();
     await field('물리명').fill('parts');
     await action(page, '테이블 만들기').click();
-    await field('네임스페이스').selectOption({ label: 'inventory' });
+    await inspector(page).getByLabel('네임스페이스').selectOption({ label: 'inventory' });
     await field('논리명').fill('부품');
     await field('설명').fill('Part definitions');
     await action(page, '테이블 적용').click();
     await addColumn(page, 'sku');
     await addColumn(page, 'amount');
     await property('amount').click();
-    await field('자료형').selectOption('numeric');
+    await inspector(page).getByLabel('자료형').selectOption('numeric');
     await field('타입 인수 (JSON 배열)').fill('[8,2]');
     await field('컬럼 위치').fill('1');
     await field('NULL 허용').uncheck();
@@ -315,7 +320,7 @@ it('commits schema form values and restores drafts with object-specific name dia
     await action(page, 'UNIQUE 추가').click();
     await field('물리명').fill('parts_sku_key');
     for (const name of ['sku', 'amount']) {
-      await field('추가할 키 컬럼').selectOption({ label: name });
+      await inspector(page).getByLabel('추가할 키 컬럼').selectOption({ label: name });
       await action(page, '키 컬럼 추가').click();
     }
     await action(page, '키 컬럼 2 위로').click();
@@ -329,7 +334,7 @@ it('commits schema form values and restores drafts with object-specific name dia
       await field('물리명').fill(unique ? 'parts_unique_idx' : 'parts_amount_idx');
       await field('고유 인덱스').setChecked(unique);
       for (const name of unique ? ['amount', 'sku'] : ['amount']) {
-        await field('인덱스 컬럼').selectOption({ label: name });
+        await inspector(page).getByLabel('인덱스 컬럼').selectOption({ label: name });
         await action(page, '인덱스 컬럼 추가').click();
       }
       if (unique) await action(page, '인덱스 키 2 위로').click();
@@ -472,7 +477,7 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
     await action(page, '메모 추가').click();
     const memo = '<img src="memo.png" alt="memo">';
     await inspector(page).getByLabel('메모 텍스트').fill(memo);
-    await inspector(page).getByLabel('그룹', { exact: true }).selectOption({ label: '배송 그룹' });
+    await inspector(page).getByRole('combobox', { name: /^그룹/ }).selectOption({ label: '배송 그룹' });
     await action(page, '메모 적용').click();
     await workspace.getByText(memo, { exact: true }).waitFor();
     expect(await workspace.locator('.note-text img').count()).toBe(0);
@@ -481,7 +486,7 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
     await tableOnCanvas(page, '주문').waitFor();
     await nav(page).getByRole('button', { name: 'orders', exact: true }).click();
     await inspector(page).getByLabel('컬럼 접기').check();
-    await inspector(page).getByLabel('그룹', { exact: true }).selectOption({ label: '배송 그룹' });
+    await inspector(page).getByRole('combobox', { name: /^그룹/ }).selectOption({ label: '배송 그룹' });
     await action(page, '배치 적용').click();
     await expect.poll(() => tableOnCanvas(page, '주문').locator('.canvas-column').count()).toBe(0);
     await page.locator('.fk-edge').waitFor();
