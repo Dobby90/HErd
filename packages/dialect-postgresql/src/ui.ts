@@ -4,7 +4,7 @@ export const postgresqlMetadata = {
   id: 'postgresql',
   name: 'PostgreSQL',
   adapterVersion: '0.1.0',
-  profiles: [{ version: '17', status: 'candidate' }],
+  profiles: [{ version: '17', status: 'certified' }],
 } satisfies DialectMetadata;
 
 const modeled = {

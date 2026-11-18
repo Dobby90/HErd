@@ -3,6 +3,7 @@
   "type": "module",
   "exports": {
     ".": "./src/server.ts",
+    "./parser": "./src/parser.ts",
     "./ui": "./src/ui.ts"
   },
   "name": "@erd/dialect-postgresql",

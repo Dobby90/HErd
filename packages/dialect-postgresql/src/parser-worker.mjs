@@ -5,6 +5,31 @@ function stringNodes(list = []) {
   return list.map(node => node.String?.sval).filter(value => typeof value === 'string');
 }
 
+function summarizeExpression(node) {
+  if (node.FuncCall) {
+    const { funcname, args = [] } = node.FuncCall;
+    return { kind: 'function', name: stringNodes(funcname), arguments: args.map(summarizeExpression) };
+  }
+  if (node.TypeCast?.typeName && node.TypeCast.arg) {
+    const { typeName, arg } = node.TypeCast;
+    return {
+      kind: 'cast', type: stringNodes(typeName.names), arrayDimensions: typeName.arrayBounds?.length ?? 0,
+      operand: summarizeExpression(arg),
+    };
+  }
+  if (node.A_ArrayExpr) {
+    return { kind: 'array', elements: (node.A_ArrayExpr.elements ?? []).map(summarizeExpression) };
+  }
+  if (node.A_Expr?.kind === 'AEXPR_OP' && node.A_Expr.lexpr && node.A_Expr.rexpr) {
+    const { name, lexpr, rexpr } = node.A_Expr;
+    return { kind: 'operator', name: stringNodes(name), left: summarizeExpression(lexpr), right: summarizeExpression(rexpr) };
+  }
+  if (node.ColumnRef) return { kind: 'column', name: stringNodes(node.ColumnRef.fields) };
+  if (node.A_Const?.sval) return { kind: 'literal', value: node.A_Const.sval.sval ?? '' };
+  if (node.A_Const?.ival) return { kind: 'literal', value: node.A_Const.ival.ival ?? 0 };
+  return { kind: 'other' };
+}
+
 function summarize(tree, maxStatements) {
   const statements = tree.stmts ?? [];
   if (!Number.isInteger(tree.version)) throw new Error('PostgreSQL AST did not contain an engine version.');
@@ -16,6 +41,7 @@ function summarize(tree, maxStatements) {
     typeNames: [],
     columns: [],
     constraintKinds: [],
+    constraintExpressions: [],
     compositeKeys: [],
   };
 
@@ -41,6 +67,12 @@ function summarize(tree, maxStatements) {
     if (node.Constraint) {
       const constraint = node.Constraint;
       summary.constraintKinds.push(constraint.contype);
+      if (constraint.raw_expr && (constraint.contype === 'CONSTR_DEFAULT' || constraint.contype === 'CONSTR_CHECK')) {
+        summary.constraintExpressions.push({
+          kind: constraint.contype === 'CONSTR_DEFAULT' ? 'default' : 'check',
+          expression: summarizeExpression(constraint.raw_expr),
+        });
+      }
       const columns = stringNodes(constraint.keys ?? constraint.fk_attrs);
       if (columns.length > 1) {
         summary.compositeKeys.push({ columns, referencedColumns: stringNodes(constraint.pk_attrs) });

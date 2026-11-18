@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { expect, it } from 'vitest';
-import { inspectPostgresql } from '../packages/dialect-postgresql/src/parser.js';
+import { inspectPostgresql } from '@erd/dialect-postgresql/parser';
 import { schemaDdl } from '../packages/test-fixtures/src/postgresql.js';
 
 it('executes fixture DDL on PostgreSQL 17 and inspects its actual schema-only dump', async () => {

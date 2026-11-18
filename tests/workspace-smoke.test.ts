@@ -55,7 +55,7 @@ it('builds the browser with UI metadata and no server parser in its module graph
     generateBundle() { modules.push(...this.getModuleIds()); },
   }] });
   expect(modules.some(id => id.includes('dialect-postgresql/src/ui.ts'))).toBe(true);
-  expect(modules.filter(id => /pgsql-parser|libpg-query|parser-worker|dialect-postgresql\/src\/server/.test(id))).toEqual([]);
+  expect(modules.filter(id => /pgsql-parser|libpg-query|dialect-postgresql\/src\/(?:server|parser)/.test(id))).toEqual([]);
   for (const name of ['model', 'sql-contract', 'sql-service']) {
     const manifest = JSON.parse(await readFile('packages/' + name + '/package.json', 'utf8'));
     expect(Object.keys(manifest.dependencies).filter(dep => /postgresql|pg-query|pgsql-parser/.test(dep))).toEqual([]);

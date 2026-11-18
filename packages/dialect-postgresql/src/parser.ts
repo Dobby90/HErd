@@ -1,6 +1,15 @@
 import { Worker } from 'node:worker_threads';
 import type { ParseLimits } from '@erd/sql-contract';
 
+type ExpressionSummary =
+  | { kind: 'function'; name: string[]; arguments: ExpressionSummary[] }
+  | { kind: 'cast'; type: string[]; arrayDimensions: number; operand: ExpressionSummary }
+  | { kind: 'array'; elements: ExpressionSummary[] }
+  | { kind: 'operator'; name: string[]; left: ExpressionSummary; right: ExpressionSummary }
+  | { kind: 'column'; name: string[] }
+  | { kind: 'literal'; value: string | number }
+  | { kind: 'other' };
+
 export interface PostgresqlInspection {
   version: number;
   statementKinds: string[];
@@ -8,6 +17,7 @@ export interface PostgresqlInspection {
   typeNames: string[];
   columns: { name: string; array: boolean }[];
   constraintKinds: string[];
+  constraintExpressions: { kind: 'default' | 'check'; expression: ExpressionSummary }[];
   compositeKeys: { columns: string[]; referencedColumns: string[] }[];
   workerExitCode: number;
 }

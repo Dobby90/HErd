@@ -79,8 +79,8 @@ TypeScript 기반 웹·API 개발 환경, ERD 원본 모델, SQL dialect 계약�
 - [ ] 저장소를 새로 받은 개발자가 README로 웹·API를 실행할 수 있다.
 - [ ] 문서·SQL 계약과 패키지 의존 경계가 구현되어 있다.
 - [ ] 모델 참조 무결성과 직렬화 검증이 통과한다.
-- [ ] PostgreSQL 최초 인증 목표와 파서 버전이 근거와 함께 고정되어 있다.
-- [ ] 후속 단계에서 구현할 기능과 현재 지원 상태가 명확히 구분된다.
+- [x] PostgreSQL 최초 인증 목표와 파서 버전이 근거와 함께 고정되어 있다.
+- [x] 후속 단계에서 구현할 기능과 현재 지원 상태가 명확히 구분된다.
 
 ## 다음 단계와 개발 요청 예시
 
@@ -88,4 +88,4 @@ TypeScript 기반 웹·API 개발 환경, ERD 원본 모델, SQL dialect 계약�
 
 > docs/README.md와 docs/00-scope-and-architecture.md를 읽고, docs/01-foundation-and-domain.md에 따라 1단계를 구현해줘. 명시된 검증을 실행하고 실제 완료한 항목과 남은 제약을 기록해줘.
 
-구현 기록: pnpm 워크스페이스, ERD v1 모델, SQL registry, 샘플 웹·API와 PostgreSQL 17 파서 PoC를 추가했다. 호스트 의존성 준비에서 lockfile을 생성했다. 개발 서버와 빌드, 모델 검사, 워커와 실제 DB·덤프 결과는 검증 단계에서 확인한다. 현재 인증 후보와 검증 범위는 [PostgreSQL 지원 상태](./sql-support/postgresql.md)에 기록했다.
+pnpm 워크스페이스, ERD v1 모델, SQL registry, 샘플 웹·API와 PostgreSQL 17 파서 PoC를 구현했다. 호스트 의존성 준비에서 lockfile을 생성했다. 호스트 검증 `step-72`에서 개발 서버, 빌드, 타입 검사, lint, 모델·SQL 단위 테스트와 PostgreSQL 통합 테스트가 통과했다. 워커와 실제 DB·덤프 결과를 근거로 PostgreSQL 17을 최초 인증 대상으로 고정했다. DDL import/export는 `not-implemented`이며 검토 후 수정 후보는 후속 호스트 검증을 받는다. 인증 근거와 기능 상태는 [PostgreSQL 지원 상태](./sql-support/postgresql.md)에 기록했다.
