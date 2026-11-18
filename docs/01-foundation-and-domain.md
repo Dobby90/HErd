@@ -74,11 +74,25 @@ TypeScript 기반 웹·API 개발 환경, ERD 원본 모델, SQL dialect 계약�
 6. 미등록 dialect와 미인증 버전이 성공으로 처리되지 않는다.
 7. PoC 결과가 문서의 지원 상태와 일치한다. 파싱만 검증한 기능을 import/export 완료로 표시하지 않는다.
 
+### 검증 결과
+
+2026-11-18에 `62ea2ab` 기준 작업 트리를 Docker에서 재검증했다. Node.js 24.12.0, pnpm 10.11.0, PostgreSQL 17.12를 사용했다.
+
+| 기준 | 판정 | 확인 내용 |
+| --- | --- | --- |
+| 1. 클린 설치·개발 서버·빌드 | 통과 | `pnpm install --frozen-lockfile`, `pnpm build`, `pnpm typecheck`, `pnpm lint`가 성공했다. 스모크 테스트로 웹과 API 기동, `/api/health` 프록시와 정상 종료를 확인했다. [스모크 테스트](../tests/workspace-smoke.test.ts) |
+| 2. 직렬화 왕복 | 통과 | ID, 컬럼·키 순서, 제약, 뷰, 알 수 없는 확장 데이터가 유지됐다. 미래 형식 버전은 명시적으로 거부했다. [문서 수명주기 테스트](../tests/document-lifecycle.test.ts) |
+| 3. 구조 오류 감지 | 통과 | 중복 ID, 잘못된 컬럼 참조, 복합 FK의 잘못된 컬럼 대응을 탐지했다. [모델 테스트](../tests/erd-model.test.ts) |
+| 4. 두 뷰에서 정의 공유 | 통과 | 같은 테이블 ID를 두 뷰에서 참조하며 정의는 catalog에 한 번만 존재했다. [모델 테스트](../tests/erd-model.test.ts) |
+| 5. PostgreSQL 파서 경계 | 통과 | 웹 번들에는 UI 메타데이터가 포함됐다. 파서와 서버 모듈은 웹 의존 그래프에서 제외됐고, 공통 패키지는 파서에 의존하지 않았다. 원본 AST는 파서 워커 내부에 한정했다. [스모크 테스트](../tests/workspace-smoke.test.ts), [파서 entry point](../packages/dialect-postgresql/src/parser.ts) |
+| 6. 등록·인증 검사 | 통과 | 미등록 dialect와 미인증 엔진 버전에서 SQL 작업을 진단과 함께 차단했다. [SQL 서비스 테스트](../tests/sql-service.test.ts) |
+| 7. PoC와 지원 명세 | 통과 | PostgreSQL 17 워커 파싱, 격리 DB의 fixture 실행과 실제 스키마 덤프 분석을 확인했다. 정식 DDL import/export는 `not-implemented`로 유지된다. [PostgreSQL 지원 상태](./sql-support/postgresql.md) |
+
 ## 완료 기준
 
-- [ ] 저장소를 새로 받은 개발자가 README로 웹·API를 실행할 수 있다.
-- [ ] 문서·SQL 계약과 패키지 의존 경계가 구현되어 있다.
-- [ ] 모델 참조 무결성과 직렬화 검증이 통과한다.
+- [x] 저장소를 새로 받은 개발자가 README로 웹·API를 실행할 수 있다.
+- [x] 문서·SQL 계약과 패키지 의존 경계가 구현되어 있다.
+- [x] 모델 참조 무결성과 직렬화 검증이 통과한다.
 - [x] PostgreSQL 최초 인증 목표와 파서 버전이 근거와 함께 고정되어 있다.
 - [x] 후속 단계에서 구현할 기능과 현재 지원 상태가 명확히 구분된다.
 
@@ -88,4 +102,4 @@ TypeScript 기반 웹·API 개발 환경, ERD 원본 모델, SQL dialect 계약�
 
 > docs/README.md와 docs/00-scope-and-architecture.md를 읽고, docs/01-foundation-and-domain.md에 따라 1단계를 구현해줘. 명시된 검증을 실행하고 실제 완료한 항목과 남은 제약을 기록해줘.
 
-pnpm 워크스페이스, ERD v1 모델, SQL registry, 샘플 웹·API와 PostgreSQL 17 파서 PoC를 구현했다. 호스트 의존성 준비에서 lockfile을 생성했다. 호스트 검증 `step-72`에서 개발 서버, 빌드, 타입 검사, lint, 모델·SQL 단위 테스트와 PostgreSQL 통합 테스트가 통과했다. 워커와 실제 DB·덤프 결과를 근거로 PostgreSQL 17을 최초 인증 대상으로 고정했다. DDL import/export는 `not-implemented`이며 검토 후 수정 후보는 후속 호스트 검증을 받는다. 인증 근거와 기능 상태는 [PostgreSQL 지원 상태](./sql-support/postgresql.md)에 기록했다.
+pnpm 워크스페이스, ERD v1 모델, SQL registry, 샘플 웹·API와 PostgreSQL 17 파서 PoC를 구현했다. 호스트 의존성 준비에서 lockfile을 생성했다. 호스트 검증 `step-72`에서 개발 서버, 빌드, 타입 검사, lint, 모델·SQL 단위 테스트와 PostgreSQL 통합 테스트가 통과했다. 워커와 실제 DB·덤프 결과를 근거로 PostgreSQL 17을 최초 인증 대상으로 고정했다. 인증 근거와 기능 상태는 [PostgreSQL 지원 상태](./sql-support/postgresql.md)에 기록했다.

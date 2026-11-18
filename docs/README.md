@@ -61,9 +61,9 @@
 
 ## 현재 진행 상태
 
-- [x] 1단계 개발 기반과 도메인 모델 완료. 당시 후보의 PostgreSQL 17 인증과 검증 근거는 `step-72`에 기록했다. [구현 기록](./01-foundation-and-domain.md)
-- [ ] 2단계 로컬 ERD 편집기 구현. `step-79`에서 이전 후보의 고정 호스트 검증이 통과했다. 리뷰 수정 후보는 재검증과 최종 승인을 기다린다. [구현 및 검증 기록](./02-erd-editor.md)
-- [ ] 3단계: 프로젝트·인증·서버 저장
+- [x] 1단계 개발 기반과 도메인 모델 완료. 클린 설치와 웹·API 기동, 문서 모델·패키지 경계, PostgreSQL 17 PoC를 재검증했다. [1단계 검증 결과](./01-foundation-and-domain.md#검증-결과)
+- [x] 2단계 로컬 ERD 편집기 완료. Chromium에서 편집·참조 무결성·실행 취소·다시 실행·IndexedDB 복구를 재검증했다. [2단계 검증 결과](./02-erd-editor.md#검증-결과)
+- [x] 3단계 프로젝트·인증·서버 저장 완료. 모의 OIDC, PostgreSQL 17의 권한·동시 쓰기·멱등성, Chromium의 자동 저장·충돌·복구를 검증했다. [3단계 검증 결과](./03-projects-and-persistence.md#검증-결과)
 - [ ] 4단계: PostgreSQL DDL export
 - [ ] 5단계: PostgreSQL DDL import
 - [ ] 6단계: 공유·이력·이미지 출력

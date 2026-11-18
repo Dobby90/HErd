@@ -1,68 +1,15 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { relative, resolve } from 'node:path';
-import { chromium } from 'playwright-core';
-import type { BrowserContext, Page } from 'playwright-core';
-import { createServer } from 'vite';
+import type { Page } from 'playwright-core';
 import { expect, it } from 'vitest';
 import { deserializeDocument, serializeDocument } from '@erd/model';
 import { sampleDocument } from '@erd/test-fixtures';
 import type { Draft } from '../apps/web/src/recovery.js';
+import { withBrowser } from './support/browser.js';
 
 const visible = (page: Page, text: string) => page.getByText(text, { exact: true }).first().waitFor();
 const action = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
 const nav = (page: Page) => page.getByRole('complementary', { name: '문서 탐색' });
 const inspector = (page: Page) => page.getByRole('complementary', { name: '속성' });
 const tableOnCanvas = (page: Page, name: string) => page.locator('.canvas-table').filter({ has: page.getByText(name, { exact: true }) });
-
-async function withEditor(run: (context: BrowserContext, origin: string) => Promise<void>) {
-  const output = resolve('build/erd-browser');
-  await mkdir(output, { recursive: true });
-  const directory = await mkdtemp(resolve(output, 'run-'));
-  const temp = resolve(directory, 'tmp');
-  await mkdir(temp);
-  // Chromium's Linux singleton socket has a Unix path length limit. The proc path
-  // resolves to the same writable directory even under a long worktree mount.
-  const chromiumTemp = process.platform === 'linux'
-    ? '/proc/' + process.pid + '/cwd/' + relative(process.cwd(), temp)
-    : temp;
-  let context: BrowserContext | undefined;
-  let server: Awaited<ReturnType<typeof createServer>> | undefined;
-  let failed = true;
-  try {
-    server = await createServer({
-      configFile: resolve('vite.config.ts'), cacheDir: resolve(directory, 'vite'), logLevel: 'silent',
-      server: { host: '127.0.0.1', port: 0, hmr: false, watch: null },
-    });
-    await server.listen();
-    const address = server.httpServer?.address();
-    if (!address || typeof address === 'string') throw new Error('Vite did not open a loopback port.');
-    context = await chromium.launchPersistentContext(resolve(directory, 'profile'), {
-      executablePath: process.env.CHROMIUM_PATH ?? '/usr/bin/chromium',
-      env: { ...process.env, TMPDIR: chromiumTemp },
-      args: ['--disable-dev-shm-usage'],
-      viewport: { width: 1280, height: 850 },
-    });
-    await run(context, 'http://127.0.0.1:' + address.port);
-    failed = false;
-  } finally {
-    try {
-      if (context) {
-        try {
-          if (failed) await Promise.allSettled(context.pages().map((page, index) =>
-            page.screenshot({ path: resolve(directory, `failure-${index}.png`), timeout: 3_000 })));
-        } finally {
-          await context.close();
-        }
-      }
-    } finally {
-      try {
-        await server?.close();
-      } finally {
-        if (!failed) await rm(directory, { recursive: true, force: true });
-      }
-    }
-  }
-}
 
 async function addTable(page: Page, name: string) {
   await nav(page).getByRole('button', { name: '테이블 추가', exact: true }).click();
@@ -80,7 +27,7 @@ async function renameDocument(page: Page, name: string) {
 }
 
 it('uses the normal editor to create a composite key and FK by dragging, then restores the committed views', async () => {
-  await withEditor(async (context, origin) => {
+  await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
     await page.goto(origin);
@@ -172,7 +119,7 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
 }, 90_000);
 
 it('previews column deletion in the editor and restores the column and its FK together on undo', async () => {
-  await withEditor(async (context, origin) => {
+  await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
     await page.goto(origin);
@@ -222,7 +169,7 @@ it('previews column deletion in the editor and restores the column and its FK to
 }, 90_000);
 
 it('isolates stale tabs, preserves both versions, and retries failed reads and writes', async () => {
-  await withEditor(async (context, origin) => {
+  await withBrowser(async (context, origin) => {
     await context.addInitScript(() => {
       const open = IDBFactory.prototype.open;
       IDBFactory.prototype.open = function (name, version) {
@@ -390,7 +337,7 @@ async function activeDraft(page: Page) {
 }
 
 it('commits schema form values and restores drafts with object-specific name diagnostics', async () => {
-  await withEditor(async (context, origin) => {
+  await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
     await page.goto(origin);
@@ -511,7 +458,7 @@ it('commits schema form values and restores drafts with object-specific name dia
 }, 90_000);
 
 it('adds reciprocal and self foreign keys and edits an independent logical relationship', async () => {
-  await withEditor(async (context, origin) => {
+  await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
     await page.goto(origin);
@@ -564,7 +511,7 @@ it('adds reciprocal and self foreign keys and edits an independent logical relat
 }, 90_000);
 
 it('creates and edits a view with shared tables, a group, and a plain-text note', async () => {
-  await withEditor(async (context, origin) => {
+  await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
     await page.goto(origin);
@@ -632,7 +579,7 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
 }, 90_000);
 
 it('restores a v1 recovery draft and preserves advanced data and indexed SQL when editing other attributes', async () => {
-  await withEditor(async (context, origin) => {
+  await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
     await page.goto(origin);
@@ -691,7 +638,7 @@ it('restores a v1 recovery draft and preserves advanced data and indexed SQL whe
 }, 90_000);
 
 it('pans and zooms the canvas and commits a snapped multi-selection drag as one document-local step', async () => {
-  await withEditor(async (context, origin) => {
+  await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
     await page.goto(origin);

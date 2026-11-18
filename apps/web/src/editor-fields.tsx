@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import type { Catalog, ErdDocument, SqlExpression } from '@erd/model';
 
@@ -23,15 +23,18 @@ export function NameFields({ value }: { value: Named }) {
   </>;
 }
 
+export const EditorReadOnly = createContext(false);
+
 export function Form({ children, submit, button = '적용', disabled = false, cancel }: {
   children: ReactNode; submit(form: FormData): void; button?: string; disabled?: boolean; cancel?(): void;
 }) {
+  const readOnly = useContext(EditorReadOnly);
   const handle = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    submit(new FormData(event.currentTarget));
+    if (!readOnly && !disabled) submit(new FormData(event.currentTarget));
   };
   return <form onSubmit={handle}>
-    <fieldset disabled={disabled}>{children}
+    <fieldset disabled={disabled || readOnly}>{children}
       <div className="actions"><button type="submit">{button}</button><button type={cancel ? "button" : "reset"} onClick={cancel}>입력 취소</button></div>
     </fieldset>
   </form>;

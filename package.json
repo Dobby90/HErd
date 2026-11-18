@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "node --env-file-if-exists=.env scripts/dev.mjs",
+    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
     "build": "tsc -p tsconfig.build.json && vite build && vite build --config vite.api.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

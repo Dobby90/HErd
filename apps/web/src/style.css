@@ -72,3 +72,20 @@ dialog dd { margin: 0 0 .65rem; overflow-wrap: anywhere; }
   .editor-layout { grid-template-columns: minmax(0, 1fr); }
   .navigator { max-height: 35vh; border-right: 0; border-bottom: 1px solid #ced8e3; }
 }
+
+.workspace-link { color: inherit; text-underline-offset: .2em; }
+.project-page { min-height: 100dvh; }
+.project-account { margin-left: auto; }
+.project-content { width: min(100% - 2rem, 68rem); margin: 2rem auto; display: grid; gap: 1rem; }
+.project-panel { padding: clamp(1rem, 3vw, 1.8rem); background: #fff; border: 1px solid #ced8e3; border-radius: 8px; display: grid; gap: 1rem; }
+.project-panel h2 { font-size: 1.15rem; }
+.project-panel form, .project-panel > label { width: min(100%, 28rem); }
+.project-tools { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .75rem; }
+.project-list { margin: 0; padding: 0; list-style: none; }
+.project-list li { display: flex; align-items: center; flex-wrap: wrap; padding: .7rem 0; gap: .65rem; border-top: 1px solid #dde4ed; }
+.project-list li > button { text-align: left; min-width: 10rem; max-width: 100%; overflow-wrap: anywhere; }
+.project-list li > span, .project-list time { font-size: .85rem; color: #435674; }
+.project-list li .actions { margin-left: auto; }
+.workspace-notice { position: fixed; z-index: 10; right: 1rem; bottom: 1rem; max-width: min(32rem, 90vw); background: #fff; padding: .8rem; border: 1px solid currentColor; border-radius: 5px; }
+.save-state details { margin-top: .3rem; }
+.save-state summary { cursor: pointer; }

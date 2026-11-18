@@ -1,19 +1,11 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { build } from 'vite';
 import { expect, it } from 'vitest';
 import config from '../vite.config.js';
 
-async function freePort(): Promise<number> {
-  const server = createServer().listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Expected a TCP address');
-  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  return address.port;
-}
+import { freePort } from './support/tcp.js';
 
 it('keeps the development and Docker validation toolchain pins aligned', async () => {
   const [packageJson, environmentJson, nodeVersionFile] = await Promise.all([

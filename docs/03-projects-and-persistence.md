@@ -86,13 +86,34 @@
 6. DB 재시작 후 프로젝트·문서·리비전이 유지되고 마이그레이션이 재현 가능하다.
 7. 인증·권한은 API 통합 테스트로, 생성→편집→자동 저장→새로고침은 E2E로 검증한다.
 
+### 검증 결과
+
+2026-11-18 Docker에서 Node.js 24.12.0, pnpm 10.11.0, PostgreSQL 17.12, Chromium 156.0.8078.79를 사용했다. lockfile 기반 클린 설치, 빌드, 타입 검사, lint가 통과했다. 기본 테스트 38개와 통합 테스트 3개가 통과했다. [API 통합 테스트](../tests/projects.integration.test.ts), [브라우저 통합 테스트](../tests/projects-browser.integration.test.ts)
+
+| 기준 | 판정 | 확인 내용 |
+| --- | --- | --- |
+| 1. 사용자·역할별 접근 제어 | 통과 | 모의 OIDC 공급자에서 `state`·`nonce`·PKCE와 세션을 검증했다. 쓰기 요청은 동일 origin과 CSRF 토큰을 요구했다. 비회원의 목록·프로젝트·문서·저장 결과 조회를 차단하고, 회원이 된 다른 편집자에게도 기존 사용자의 mutation 결과를 재사용하지 않았다. viewer 읽기와 owner 삭제 경계도 확인했다. |
+| 2. 같은 리비전의 동시 저장 | 통과 | 두 요청 중 하나만 리비전 2를 받았고, 다른 요청은 `409 REVISION_CONFLICT`와 현재 리비전을 받았다. |
+| 3. 커밋 후 재시도 | 통과 | 서버가 커밋한 직후 HTTP 응답을 끊었다. 동일 요청 재전송 결과와 저장 상태의 리비전·시각이 일치했다. 같은 ID의 다른 요청과 만료된 저장 결과도 확인했다. |
+| 4. 저장 중 편집·문서 전환·오프라인 | 통과 | 첫 저장의 응답을 지연시키고 테이블·컬럼을 추가한 뒤 다른 문서를 열었다. 추가 편집은 원본 문서에 한 번 더 저장됐다. 두 충돌 해소 경로와 오프라인 재연결, 로그아웃 후 복구, 사용자 및 기준 리비전 격리를 Chromium에서 확인했다. |
+| 5. 복제 참조 재매핑 | 통과 | 복합 FK의 순서·대응과 대상 키, 뷰 배치·표시 컬럼·그룹, 식 인덱스와 조건식의 참조, enum·sequence 연결이 새 ID를 가리켰다. 복제본의 구조 검증이 통과했다. |
+| 6. DB 재시작과 마이그레이션 | 통과 | 새 테스트 DB에서 초기 마이그레이션을 실행했다. PostgreSQL 재시작 뒤 프로젝트·문서·리비전과 로그인 세션이 유지됐고, 마이그레이션 재실행은 적용 이력을 확인했다. |
+| 7. API와 E2E | 통과 | 실제 DB를 사용하는 API에서 권한과 무결성을 확인했다. Chromium에서 로그인 → 프로젝트·ERD 생성 → 테이블·컬럼 편집 → 자동 저장 → 새로고침 복구를 확인했다. |
+
 ## 완료 기준
 
-- [ ] 로그인과 서버 권한 확인이 동작한다.
-- [ ] 프로젝트·ERD CRUD와 복제가 실제 DB에서 동작한다.
-- [ ] 자동 저장의 중복 적용·동시 저장·지연 응답 문제가 검증되어 있다.
-- [ ] 충돌·오프라인에서 사용자의 변경을 보존하고 복구할 수 있다.
-- [ ] 개발 환경·DB 마이그레이션·인증 설정 방법이 문서화되어 있다.
+- [x] 로그인과 서버 권한 확인이 동작한다.
+- [x] 프로젝트·ERD CRUD와 복제가 실제 DB에서 동작한다.
+- [x] 자동 저장의 중복 적용·동시 저장·지연 응답 문제가 검증되어 있다.
+- [x] 충돌·오프라인에서 사용자의 변경을 보존하고 복구할 수 있다.
+- [x] 개발 환경·DB 마이그레이션·인증 설정 방법이 문서화되어 있다.
+
+## 실행과 인증 설정
+
+- 로컬 DB는 `docker compose up -d --wait db`로 시작한다. 기본 포트는 `127.0.0.1:55432`이며 `HERD_DB_PORT`로 변경한다. `DATABASE_URL`과 `APP_ORIGIN`에 실제 DB와 브라우저 주소를 지정한다. 마이그레이션은 저장소 루트에서 `pnpm db:migrate`로 적용한다. API 프로세스 상태는 `/api/health`, DB와 초기 마이그레이션 준비 상태는 `/api/ready`로 확인한다. [환경 예시](../.env.example), [로컬 Compose](../compose.yaml), [SQL 마이그레이션](../db/migrations/001-projects.sql)
+- `ERD_DEV_LOGIN=1`은 `NODE_ENV=development` 또는 `test`와 루프백 origin에서 동작한다. `NODE_ENV=production`에서는 DB 주소, HTTPS `APP_ORIGIN`과 OIDC 설정을 요구하며 개발 로그인이 설정되면 API 기동을 거부한다. OIDC는 `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`과 `<APP_ORIGIN>/api/auth/callback`으로 구성한다. 검증에는 모의 OIDC 공급자의 실제 프로토콜 응답과 서명된 ID 토큰을 사용했다. 운영 IdP와 운영 계정 설정은 배포 환경에서 확인한다. [서버 설정](../apps/api/src/config.ts), [모의 OIDC 공급자](../tests/support/oidc.ts)
+- 문서 저장 상한의 기본값은 20 MiB, 테이블 1,000개, 컬럼 20,000개, FK와 논리 관계 합계 5,000개다. `ERD_MAX_DOCUMENT_BYTES`, `ERD_MAX_TABLES`, `ERD_MAX_COLUMNS`, `ERD_MAX_RELATIONSHIPS`로 구성한다. `PUT` 성공 응답의 `revision`과 `updatedAt`은 같은 mutation의 재시도에서 24시간 동안 재사용된다. [저장 API](../apps/api/src/projects.ts)
+- 로컬 편집과 서버 편집에는 각자의 IndexedDB 복구 저장소를 사용한다. 서버 편집에서는 계정과 문서별로 복구본을 조회하고, 기준 리비전이 다를 때 사용자가 서버본 확인·복제·폐기를 선택한다. 저장 요청이 진행 중에도 최신 편집을 복구본에 적는다. [서버 편집 세션](../apps/web/src/server-editor.ts), [서버 복구 저장소](../apps/web/src/server-drafts.ts)
 
 ## 다음 단계와 개발 요청 예시
 
@@ -100,4 +121,4 @@
 
 > docs/README.md와 docs/00-scope-and-architecture.md를 읽고, docs/03-projects-and-persistence.md의 3단계를 구현해줘. 문서 저장과 인증·권한·멱등성·revision 경쟁을 실제 API와 DB로 검증해줘.
 
-구현 기록: 미착수.
+프로젝트 멤버 관리 화면과 스냅샷 이력 복원은 6단계에서 구현한다. 프로젝트 멤버와 리비전 이력의 저장 테이블은 초기 마이그레이션에 포함됐다.

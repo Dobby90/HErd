@@ -105,12 +105,13 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   return { nodes, edges };
 }
 
-export function EditorCanvas({ document, view, dialect, select, connect, move, snap }: {
+export function EditorCanvas({ document, view, dialect, select, connect, move, snap, readOnly }: {
   document: ErdDocument; view: View; dialect?: EditorDialect;
   select(id: string): void;
   connect(sourceColumnId: string, targetColumnId: string): void;
   move(positions: Map<string, XYPosition>): void;
   snap: boolean;
+  readOnly: boolean;
 }) {
   const projected = useMemo(() => project(document, view, dialect), [document, view, dialect]);
   const [nodes, setNodes] = useState(projected.nodes);
@@ -120,6 +121,7 @@ export function EditorCanvas({ document, view, dialect, select, connect, move, s
   }), [projected]);
   return <ReactFlow<CanvasNode, Edge>
     aria-label="ERD 캔버스"
+    nodesDraggable={!readOnly} nodesConnectable={!readOnly}
     nodes={nodes} edges={projected.edges} nodeTypes={nodeTypes}
     onNodesChange={changes => {
       setNodes(previous => applyNodeChanges(changes, previous));
@@ -130,7 +132,7 @@ export function EditorCanvas({ document, view, dialect, select, connect, move, s
           positions.set(change.id, change.position);
         }
       }
-      if (positions.size) move(positions);
+      if (!readOnly && positions.size) move(positions);
     }}
     onNodeClick={(_, node) => select(node.id)}
     onEdgeClick={(_, edge) => select(String(edge.data?.objectId ?? ''))}
