@@ -86,7 +86,7 @@ TypeScript 기반 웹·API 개발 환경, ERD 원본 모델, SQL dialect 계약�
 | 4. 두 뷰에서 정의 공유 | 통과 | 같은 테이블 ID를 두 뷰에서 참조하며 정의는 catalog에 한 번만 존재했다. [모델 테스트](../tests/erd-model.test.ts) |
 | 5. PostgreSQL 파서 경계 | 통과 | 웹 번들에는 UI 메타데이터가 포함됐다. 파서와 서버 모듈은 웹 의존 그래프에서 제외됐고, 공통 패키지는 파서에 의존하지 않았다. 원본 AST는 파서 워커 내부에 한정했다. [스모크 테스트](../tests/workspace-smoke.test.ts), [파서 entry point](../packages/dialect-postgresql/src/parser.ts) |
 | 6. 등록·인증 검사 | 통과 | 미등록 dialect와 미인증 엔진 버전에서 SQL 작업을 진단과 함께 차단했다. [SQL 서비스 테스트](../tests/sql-service.test.ts) |
-| 7. PoC와 지원 명세 | 통과 | PostgreSQL 17 워커 파싱, 격리 DB의 fixture 실행과 실제 스키마 덤프 분석을 확인했다. 정식 DDL import/export는 `not-implemented`로 유지된다. [PostgreSQL 지원 상태](./sql-support/postgresql.md) |
+| 7. PoC와 지원 명세 | 통과 | PostgreSQL 17 워커 파싱, 격리 DB의 fixture 실행과 실제 스키마 덤프 분석을 확인했다. 이 단계에서 정식 DDL import/export는 `not-implemented`였다. [PostgreSQL 지원 상태](./sql-support/postgresql.md) |
 
 ## 완료 기준
 

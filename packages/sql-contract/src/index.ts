@@ -57,12 +57,25 @@ export type GenerateResult = {
   diagnostics: Diagnostic[];
 } & ({ status: 'generated'; sql: string } | { status: 'blocked' | 'not-implemented'; sql?: never });
 
+export interface PreparedGeneration {
+  document: ErdDocument;
+  dependencies: Dependency[];
+  diagnostics: Diagnostic[];
+  generate(): GenerateResult;
+}
+
+export interface DialectProfile {
+  metadata: DialectMetadata;
+  versions: { version: string; capabilities: DialectCapabilities }[];
+}
+
 export interface SqlDialect {
   metadata: DialectMetadata;
   capabilities(target: SqlTarget): DialectCapabilities;
   validate(document: ErdDocument, context: ValidationContext): Diagnostic[];
   understandsExtension?(namespace: string, version: number): boolean;
   parse(request: ParseRequest): Promise<ParseResult>;
+  prepareGenerate?(request: GenerateRequest): Promise<PreparedGeneration>;
   generate(request: GenerateRequest): Promise<GenerateResult>;
 }
 
@@ -84,4 +97,34 @@ export interface EditorDialect {
   validateForeignKey(document: ErdDocument, key: ForeignKey): Diagnostic[];
   validate(document: ErdDocument, context: ValidationContext): Diagnostic[];
   cardinality(document: ErdDocument, key: ForeignKey): { parentOptional: boolean; childMax: 1 | 'many' } | undefined;
+}
+
+export interface GenerateJobOptions {
+  tableIds?: readonly string[];
+  includeComments?: boolean;
+  previewOnly?: boolean;
+}
+
+export interface NamedDependency extends Dependency {
+  name: string;
+  namespace?: string;
+}
+
+export interface SqlJobOutput {
+  diagnostics: Diagnostic[];
+  dependencies: NamedDependency[];
+  sql?: string;
+}
+
+export interface SqlJob {
+  id: string;
+  erdId: string;
+  revision: number;
+  kind: 'generate';
+  state: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  target: SqlTarget;
+  adapterVersion: string;
+  options: GenerateJobOptions;
+  expiresAt: string | null;
+  output: SqlJobOutput | null;
 }

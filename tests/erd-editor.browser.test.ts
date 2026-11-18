@@ -611,7 +611,8 @@ it('restores a v1 recovery draft and preserves advanced data and indexed SQL whe
     await page.reload();
     await visible(page, '브라우저 복구 완료');
     for (const feature of ['ENUM', 'SEQUENCE', 'IDENTITY']) await visible(page, feature + ' · 보존 전용');
-    for (const feature of ['DDL 가져오기', 'DDL 내보내기']) await visible(page, feature + ' · 미구현');
+    await visible(page, 'DDL 가져오기 · 미구현');
+    await visible(page, 'DDL 내보내기 · 서버 문서에서 지원');
     await nav(page).getByRole('button', { name: 'products', exact: true }).click();
     await inspector(page).getByRole('button', { name: 'name', exact: true }).click();
     await inspector(page).getByLabel('설명', { exact: true }).fill('편집한 설명');

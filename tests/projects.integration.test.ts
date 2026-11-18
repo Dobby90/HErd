@@ -69,7 +69,7 @@ it('validates OIDC and protects project routes, concurrent saves, mutations, and
     try {
       const applied = execFileSync(process.execPath, ['scripts/migrate.mjs'],
         { env: { ...process.env, DATABASE_URL: cluster.connectionString }, encoding: 'utf8' });
-      expect(applied.trim()).toBe('001-projects.sql');
+      expect(applied.trim().split('\n')).toEqual(['001-projects.sql', '002-sql-jobs.sql']);
       expect(await migrate(db)).toEqual([]);
       api.addHook('onSend', (request, reply, _payload, done) => {
         if (request.headers['x-drop-test-response'] === '1' && request.method === 'PUT' && reply.statusCode === 200) {

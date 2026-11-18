@@ -61,7 +61,7 @@ it('preserves legacy data and reports blank and duplicate names separately from 
   const { api, sql } = createApi();
   try {
     const draft = applyCommand(sampleDocument, { kind: 'rename', objectId: 'users', physicalName: '' });
-    expect(await sql.generate({ document: draft.document, target: draft.document.target })).toMatchObject({
+    expect(await sql.generate({ document: draft.document, target: draft.document.target, tableIds: ['users'] })).toMatchObject({
       status: 'blocked', diagnostics: [expect.objectContaining({ code: 'postgresql-empty-name', objectId: 'users' })],
     });
   } finally {

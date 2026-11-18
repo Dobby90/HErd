@@ -1,11 +1,13 @@
 import { z } from 'zod';
 
 const id = z.string().min(1);
-const named = z.object({
+const extension = z.object({ namespace: id, version: z.number().int().positive(), data: z.json() });
+const named = z.strictObject({
   id,
   physicalName: z.string(),
   logicalName: z.string().optional(),
   description: z.string().optional(),
+  extensions: z.array(extension).optional(),
 });
 const catalogObject = named.extend({ namespaceId: id });
 export const sqlTargetSchema = z.object({ dialectId: id, engineVersion: id });
@@ -15,15 +17,15 @@ export const sqlExpressionSchema = sqlTargetSchema.extend({
   referencesComplete: z.boolean().optional(),
   invalidated: z.literal(true).optional(),
 });
-const typeDescriptor = z.object({
+const typeDescriptor = z.strictObject({
   reference: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('native'), name: id, namespace: id.optional() }),
-    z.object({ kind: z.literal('enum'), enumId: id }),
+    z.strictObject({ kind: z.literal('native'), name: id, namespace: id.optional() }),
+    z.strictObject({ kind: z.literal('enum'), enumId: id }),
   ]),
   arguments: z.array(z.union([z.string(), z.number()])),
   arrayDimensions: z.number().int().nonnegative(),
   originalSql: z.string().optional(),
-  attributes: z.array(z.object({ namespace: id, version: z.number().int().positive(), data: z.json() })).optional(),
+  attributes: z.array(extension).optional(),
 });
 const table = catalogObject.extend({ columnIds: z.array(id) });
 const column = named.extend({
@@ -52,8 +54,8 @@ const constraint = z.discriminatedUnion('kind', [
 const index = tableMember.extend({
   unique: z.boolean(),
   keys: z.array(z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('column'), columnId: id }),
-    z.object({ kind: z.literal('expression'), expression: sqlExpressionSchema }),
+    z.strictObject({ kind: z.literal('column'), columnId: id }),
+    z.strictObject({ kind: z.literal('expression'), expression: sqlExpressionSchema }),
   ])).min(1),
   predicate: sqlExpressionSchema.optional(),
 });
@@ -69,7 +71,6 @@ const view = z.object({
   groups: z.array(position.extend({ id, name: id, size: size.optional() })),
   notes: z.array(position.extend({ id, text: z.string(), size: size.optional(), groupId: id.optional() })),
 });
-const extension = z.object({ namespace: id, version: z.number().int().positive(), data: z.json() });
 
 export const erdDocumentSchema = z.object({
   formatVersion: z.literal(1),
@@ -84,6 +85,7 @@ export const erdDocumentSchema = z.object({
     indexes: z.array(index),
     enums: z.array(catalogObject.extend({ values: z.array(z.string()) })),
     sequences: z.array(catalogObject.extend({
+      dataType: z.enum(['smallint', 'integer', 'bigint']).optional(),
       increment: z.string().optional(),
       start: z.string().optional(),
       min: z.string().optional(),

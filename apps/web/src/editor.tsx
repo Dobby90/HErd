@@ -222,8 +222,8 @@ export function Editor({ topActions }: { topActions?: ReactNode } = {}) {
   return <DocumentEditor session={local} local={local} topActions={topActions} />;
 }
 
-export function DocumentEditor({ session, local, readOnly = false, topActions, saveActions }: {
-  session: EditingSession; local?: LocalSession; readOnly?: boolean; topActions?: ReactNode; saveActions?: ReactNode;
+export function DocumentEditor({ session, local, readOnly = false, topActions, saveActions, exportAction }: {
+  session: EditingSession; local?: LocalSession; readOnly?: boolean; topActions?: ReactNode; saveActions?: ReactNode; exportAction?(viewId: string | undefined): ReactNode;
 }) {
   const { document } = session;
   const [chosenView, chooseView] = useState('');
@@ -283,6 +283,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
       </Form>}
       <div className="actions">
         {topActions}
+        {exportAction?.(view?.id)}
         {local && <button type="button" disabled={local.loading || local.unsaved} onClick={() => setDialog('document')}>새 문서</button>}
         {!readOnly && <><button type="button" disabled={!session.canUndo} onClick={() => session.step('undo')}>실행 취소</button>
         <button type="button" disabled={!session.canRedo} onClick={() => session.step('redo')}>다시 실행</button></>}
@@ -322,7 +323,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
         <h2>SQL 지원</h2>
         <ul className="support-list">
           <li>DDL 가져오기 · {capability?.table.import === 'supported' ? '지원' : '미구현'}</li>
-          <li>DDL 내보내기 · {capability?.table.export === 'supported' ? '지원' : '미구현'}</li>
+          <li>DDL 내보내기 · {capability?.table.export === 'supported' ? (local ? '서버 문서에서 지원' : '지원') : '미구현'}</li>
           {(['enum', 'sequence', 'identity'] as const).map(feature =>
             <li key={feature}>{feature.toUpperCase()} · {capability?.[feature].edit === 'supported' ? '편집 가능' : '보존 전용'}</li>)}
         </ul>

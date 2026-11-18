@@ -128,6 +128,17 @@ export class ServerEditor {
     if (this.state.phase === 'offline') this.retry();
   }
 
+  async savedForExport() {
+    while (!this.stopped && this.hasChanges() && this.state.phase === 'saving') {
+      clearTimeout(this.timer);
+      await (this.inFlight ?? this.flush());
+    }
+    if (this.stopped || this.hasChanges() || this.state.phase !== 'saved') {
+      throw new Error('DDL을 내보내기 전에 서버 저장 실패 또는 충돌을 해결해 주세요.');
+    }
+    return { document: this.state.history.present, revision: this.state.revision, updatedAt: this.state.updatedAt };
+  }
+
   private async flush() {
     if (this.stopped || this.inFlight || !this.hasChanges() || this.state.phase !== 'saving') return;
     const attempt = this.pending ?? {

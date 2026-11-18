@@ -8,6 +8,7 @@ import type { DocumentSummary, Identity, Project, ServerDocument } from './proje
 import { readDraft, readDrafts, restoreDraft } from './recovery.js';
 import { removeServerDraft, serverDrafts } from './server-drafts.js';
 import type { ServerDraft } from './server-drafts.js';
+import { SqlExport } from './sql-export.js';
 import { ServerEditor } from './server-editor.js';
 
 type Location = { projectId?: string; documentId?: string };
@@ -22,8 +23,8 @@ const message = (error: unknown) => error instanceof Error ? error.message : '�
 const date = (value: string) => new Date(value).toLocaleString();
 const textMatch = (text: string, query: string) => text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
 
-function WorkspaceEditor({ entry, readOnly, suspended, topActions, preview, fork, discard, logIn }: {
-  entry: OpenDocument; readOnly: boolean; suspended: boolean; topActions: ReactNode; preview(): void; fork(): void;
+function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActions, preview, fork, discard, logIn }: {
+  entry: OpenDocument; projectId: string; csrf: string | null | undefined; readOnly: boolean; suspended: boolean; topActions: ReactNode; preview(): void; fork(): void;
   discard(draft?: ServerDraft): void; logIn(): void;
 }) {
   const { editor, drafts } = entry;
@@ -47,7 +48,11 @@ function WorkspaceEditor({ entry, readOnly, suspended, topActions, preview, fork
     }
   }
 
-  return <DocumentEditor readOnly={readOnly || suspended} topActions={topActions} session={{
+  return <DocumentEditor readOnly={readOnly || suspended} topActions={topActions}
+    exportAction={viewId => <SqlExport document={state.history.present} revision={state.revision} dirty={editor.hasChanges()}
+      projectId={projectId} csrf={csrf} viewId={viewId} disabled={suspended} viewer={readOnly}
+      prepare={() => readOnly ? apiRequest<ServerDocument>('/erds/' + state.history.present.id) : editor.savedForExport()} />}
+    session={{
     document: state.history.present, loading: false, diagnostics: state.diagnostics,
     canUndo: state.history.past.length > 0, canRedo: state.history.future.length > 0,
     status: { text: readOnly ? `읽기 전용 · 리비전 ${state.revision}` : status, error: !['saved', 'saving'].includes(state.phase) },
@@ -266,7 +271,7 @@ export function Workspace() {
     };
     return <>
       {preview?.document.id === documentId ? <ServerPreview key={preview.revision} envelope={preview} close={() => setPreview(undefined)} /> :
-        <WorkspaceEditor key={open.id + ':' + open.editor.instanceKey} entry={open} readOnly={project.role === 'viewer'} suspended={busy}
+        <WorkspaceEditor key={open.id + ':' + open.editor.instanceKey} entry={open} projectId={project.id} csrf={csrf} readOnly={project.role === 'viewer'} suspended={busy}
           topActions={<><button type="button" onClick={backToProject}>ERD 목록</button>
             <button type="button" disabled={busy} onClick={logOut}>로그아웃</button></>}
           preview={() => void act(async () => setPreview(await apiRequest<ServerDocument>('/erds/' + open.id)))}

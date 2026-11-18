@@ -5,8 +5,8 @@ import type { SqlService } from '@erd/sql-service';
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { ApiError, objectBody, uuid } from './api-error.js';
-import { registerAuth } from './auth.js';
-import type { AuthSettings, DocumentLimits } from './config.js';
+import type { Authenticate } from './auth.js';
+import type { DocumentLimits } from './config.js';
 import { transaction } from './database.js';
 
 type Role = 'owner' | 'editor' | 'viewer';
@@ -82,7 +82,7 @@ function inputDocument(value: unknown, limits: DocumentLimits): ErdDocument {
   return document;
 }
 
-function storedDocument(row: DocumentRow, limits: DocumentLimits): ErdDocument {
+export function storedDocument(row: DocumentRow, limits: DocumentLimits): ErdDocument {
   const serialized = JSON.stringify(row.payload);
   assertBytes(serialized, limits);
   let document: ErdDocument;
@@ -106,7 +106,7 @@ async function findProject(db: Query, userId: string, id: string, lock: '' | 'sh
   return project;
 }
 
-async function findDocument(db: Query, userId: string, id: string, lock: '' | 'share' | 'update' = ''): Promise<DocumentRow> {
+export async function findDocument(db: Query, userId: string, id: string, lock: '' | 'share' | 'update' = ''): Promise<DocumentRow> {
   if (!lock) {
     const { rows: [document] } = await db.query<DocumentRow>(`SELECT e.id, e.project_id AS "projectId", e.payload, ${documentFields}, m.role
       FROM erds e JOIN project_members m ON m.project_id = e.project_id AND m.user_id = $1 WHERE e.id = $2`, [userId, id]);
@@ -180,12 +180,11 @@ async function saveDocument(pool: Pool, userId: string, id: string, body: Record
   });
 }
 
-export async function registerProjects(api: FastifyInstance, pool: Pool, settings: AuthSettings, sql: SqlService, limits: DocumentLimits) {
-  const authenticate = await registerAuth(api, pool, settings);
+export function registerProjects(api: FastifyInstance, pool: Pool, authenticate: Authenticate, sql: SqlService, limits: DocumentLimits) {
   api.get('/api/ready', async () => {
     try {
-      const { rowCount } = await pool.query('SELECT 1 FROM schema_migrations WHERE name = $1', ['001-projects.sql']);
-      if (!rowCount) throw new Error('Service migration is missing.');
+      const { rowCount } = await pool.query('SELECT 1 FROM schema_migrations WHERE name = ANY($1::text[])', [['001-projects.sql', '002-sql-jobs.sql']]);
+      if (rowCount !== 2) throw new Error('Service migration is missing.');
       return { status: 'ready' };
     } catch {
       throw new ApiError(503, 'DATABASE_UNAVAILABLE', '서비스 데이터베이스를 확인해 주세요.');

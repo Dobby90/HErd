@@ -1,9 +1,8 @@
-import { documentExpressions, validateDocumentStructure } from '@erd/model';
+import { documentExpressions, documentForSelection, validateDocumentStructure } from '@erd/model';
 import type { ErdDocument, SqlTarget } from '@erd/model';
 import type {
-  Diagnostic, DialectCapabilities, GenerateRequest, GenerateResult, ParseRequest, ParseResult, SqlDialect,
+  Dependency, Diagnostic, DialectCapabilities, DialectProfile, GenerateRequest, GenerateResult, ParseRequest, ParseResult, SqlDialect,
 } from '@erd/sql-contract';
-import { documentForSelection } from './selection.js';
 
 export class DialectRegistry {
   readonly #adapters = new Map<string, SqlDialect>();
@@ -12,6 +11,16 @@ export class DialectRegistry {
     const { id } = adapter.metadata;
     if (this.#adapters.has(id)) throw new Error('Duplicate SQL dialect: ' + id);
     this.#adapters.set(id, adapter);
+  }
+
+  profiles(): DialectProfile[] {
+    return [...this.#adapters.values()].map(adapter => ({
+      metadata: adapter.metadata,
+      versions: adapter.metadata.profiles.map(profile => ({
+        version: profile.version,
+        capabilities: adapter.capabilities({ dialectId: adapter.metadata.id, engineVersion: profile.version }),
+      })),
+    }));
   }
 
   get(id: string): SqlDialect | undefined {
@@ -54,7 +63,7 @@ export class SqlService {
   }
 
   async generate(request: GenerateRequest): Promise<GenerateResult> {
-    const blocked = (diagnostics: Diagnostic[]): GenerateResult => ({ status: 'blocked', diagnostics, dependencies: [] });
+    const blocked = (diagnostics: Diagnostic[], dependencies: Dependency[] = []): GenerateResult => ({ status: 'blocked', diagnostics, dependencies });
     const { target, document } = request;
     const resolved = this.#resolve(target);
     if ('diagnostic' in resolved) return blocked([resolved.diagnostic]);
@@ -67,6 +76,7 @@ export class SqlService {
     const diagnostics: Diagnostic[] = [];
     let validationDocument = document;
     if (request.tableIds !== undefined) {
+      if (request.tableIds.length === 0) return blocked([{ code: 'empty-generation-selection', severity: 'error', message: '내보낼 테이블을 선택하세요.' }]);
       const tableIds = new Set(document.catalog.tables.map(table => table.id));
       for (const tableId of request.tableIds) {
         if (!tableIds.has(tableId)) {
@@ -74,10 +84,13 @@ export class SqlService {
         }
       }
       if (diagnostics.length) return blocked(diagnostics);
-      validationDocument = documentForSelection(document, request.tableIds);
+      if (!resolved.adapter.prepareGenerate) validationDocument = documentForSelection(document, request.tableIds);
     }
 
     const { adapter } = resolved;
+    const prepared = await adapter.prepareGenerate?.(request);
+    if (prepared) validationDocument = prepared.document;
+    const dependencies = prepared?.dependencies;
     const checkExtension = (extension: { namespace: string; version: number }, objectId: string) => {
       if (!adapter.understandsExtension?.(extension.namespace, extension.version)) {
         diagnostics.push({
@@ -87,6 +100,9 @@ export class SqlService {
       }
     };
     for (const extension of validationDocument.extensions) checkExtension(extension, validationDocument.id);
+    for (const object of Object.values(validationDocument.catalog).flat()) {
+      for (const extension of object.extensions ?? []) checkExtension(extension, object.id);
+    }
     for (const column of validationDocument.catalog.columns) {
       for (const attributes of column.type.attributes ?? []) checkExtension(attributes, column.id);
     }
@@ -102,11 +118,12 @@ export class SqlService {
         });
       }
     }
-    if (diagnostics.length) return blocked(diagnostics);
+    if (diagnostics.length) return blocked(diagnostics, dependencies);
 
     const semantic = adapter.validate(validationDocument, { target });
-    if (semantic.some(diagnostic => diagnostic.severity === 'error')) return blocked(semantic);
-    const result = await adapter.generate(request);
+    const issues = [...semantic, ...(prepared?.diagnostics ?? [])];
+    if (issues.some(diagnostic => diagnostic.severity === 'error')) return blocked(issues, dependencies);
+    const result = prepared ? prepared.generate() : await adapter.generate(request);
     const combined = [...semantic, ...result.diagnostics];
     if (result.status !== 'generated') {
       return { status: result.status, dependencies: result.dependencies, diagnostics: combined };

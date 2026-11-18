@@ -18,9 +18,12 @@ it('distinguishes certified editing from unregistered, uncertified and unavailab
     expect(await sql.parse({ ...parseRequest, target: { ...target, engineVersion: '99' } })).toMatchObject({
       status: 'blocked', diagnostics: [{ code: 'uncertified-engine-version' }],
     });
-    expect(sql.capabilities(target)).toMatchObject({ table: { model: 'supported', edit: 'supported', import: 'not-implemented', export: 'not-implemented' } });
+    expect(sql.capabilities(target)).toMatchObject({ table: { model: 'supported', edit: 'supported', import: 'not-implemented', export: 'supported' } });
     expect(await sql.parse(parseRequest)).toMatchObject({ status: 'not-implemented' });
-    expect(await sql.generate({ document: sampleDocument, target })).toMatchObject({ status: 'not-implemented' });
+    expect(await sql.generate({ document: sampleDocument, target, tableIds: ['users'] })).toMatchObject({ status: 'generated' });
+    expect(await sql.generate({ document: sampleDocument, target })).toMatchObject({
+      status: 'blocked', diagnostics: [expect.objectContaining({ code: 'postgresql-unsupported-index' })],
+    });
     const unsupported = { ...target, engineVersion: '99' };
     const unavailable = await sql.generate({ document: { ...sampleDocument, target: unsupported }, target: unsupported });
     expect(unavailable).toMatchObject({
@@ -32,7 +35,7 @@ it('distinguishes certified editing from unregistered, uncertified and unavailab
     expect(capabilities).not.toHaveProperty('diagnostics');
     expect(capabilities).toMatchObject({ enum: { edit: 'not-implemented' }, sequence: { edit: 'not-implemented' }, identity: { edit: 'not-implemented' } });
     for (const feature of Object.values(capabilities)) {
-      expect(feature).toMatchObject({ model: 'supported', import: 'not-implemented', export: 'not-implemented' });
+      expect(feature).toMatchObject({ model: 'supported', import: 'not-implemented' });
     }
     const draft = structuredClone(sampleDocument);
     const column = draft.catalog.columns[0];
@@ -215,9 +218,9 @@ it('keeps PostgreSQL semantic validation separate from structural candidate-key 
   try {
     const invalidReference = expect.objectContaining({ code: 'postgresql-partial-reference-index', objectId: key.id });
     expect(sql.validate(document)).toEqual([invalidReference]);
-    expect(await sql.generate({ document, target, tableIds: ['products'] })).toMatchObject({ status: 'not-implemented' });
+    expect(await sql.generate({ document, target, tableIds: ['users'] })).toMatchObject({ status: 'generated' });
     expect(await sql.generate({ document, target, tableIds: ['items'] })).toMatchObject({
-      status: 'blocked', diagnostics: [invalidReference],
+      status: 'blocked', diagnostics: expect.arrayContaining([invalidReference]),
     });
   } finally {
     await api.close();

@@ -4,3 +4,4 @@ export * from './lifecycle.js';
 export * from './deletion.js';
 export * from './history.js';
 export * from './duplicate.js';
+export * from './selection.js';

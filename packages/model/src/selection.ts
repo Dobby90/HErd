@@ -1,5 +1,5 @@
-import { documentExpressions } from '@erd/model';
-import type { ErdDocument } from '@erd/model';
+import { documentExpressions } from './structure.js';
+import type { ErdDocument } from './schema.js';
 
 export function documentForSelection(document: ErdDocument, tableIds: readonly string[]): ErdDocument {
   const { catalog } = document;

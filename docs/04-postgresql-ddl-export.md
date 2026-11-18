@@ -85,14 +85,34 @@ DEFERRABLE·NOT VALID·MATCH·NULLS NOT DISTINCT 같은 세부 의미 옵션도 
 6. 미지원 속성·검토 필요 표현식·버전 불일치는 다운로드를 차단한다.
 7. 시간 초과·취소·재시작·권한 없는 작업 조회를 통합 검증한다.
 
+### 검증 결과
+
+2026-11-18 Docker에서 Node.js 24.12.0, pnpm 10.11.0, PostgreSQL 17.12, Chromium 156.0.8078.79를 사용했다. 클린 설치, 빌드, 타입 검사, lint, 기본 테스트 40개, 통합 테스트 6개가 통과했다. 운영 빌드의 SQL worker도 별도로 실행했다.
+
+| 기준 | 판정 | 확인 내용 |
+| --- | --- | --- |
+| 1. 생성 SQL 실행 | 통과 | 통제된 ERD의 전체·부분 SQL을 각각 비어 있는 PostgreSQL 17 DB에서 실행했다. 동일 입력의 SQL이 일치했다. [실행 검증](../tests/ddl-export.integration.test.ts) |
+| 2. catalog 의미 | 통과 | `pg_attribute`, `pg_constraint`, `pg_index`, `pg_enum`, `pg_sequence`, 설명과 DEFAULT를 확인했다. 실제 삽입으로 배열·JSONB·UUID·ENUM·문자열 기본값을 확인했다. [실행 검증](../tests/ddl-export.integration.test.ts) |
+| 3. 키·식별자 | 통과 | 복합 PK의 순서, 역순 FK 대응, 자기·순환 FK와 참조 동작, 동명 테이블의 서로 다른 스키마, 예약어·대소문자·한글·따옴표를 확인했다. [실행 검증](../tests/ddl-export.integration.test.ts) |
+| 4. IDENTITY·sequence | 통과 | `ALWAYS`·`BY DEFAULT`의 내부 sequence와 명시적으로 소유된 sequence를 `pg_depend`와 catalog로 구분했다. 기존 인덱스 이름과 자동 sequence 후보 이름이 겹치는 fixture도 실행했다. [실행 검증](../tests/ddl-export.integration.test.ts) |
+| 5. 부분 선택 | 통과 | 뷰 밖의 FK 대상, DEFAULT에서 발견한 sequence, ENUM, 스키마가 미리보기와 실제 SQL에 포함됐다. 무관한 테이블·시퀀스는 선택 범위에서 제외됐다. [실행 검증](../tests/ddl-export.integration.test.ts), [브라우저 검증](../tests/ddl-export-browser.integration.test.ts) |
+| 6. 생성·다운로드 차단 | 통과 | 부분·식 인덱스, 미지원 옵션·타입, 식 이름 변경 검토, 버전 불일치, 식 문맥의 잘못된 입력에서 SQL을 반환하지 않았다. Chromium에서 실패의 진단과 다운로드 차단을 확인했다. [생성기 테스트](../tests/ddl-export.test.ts), [브라우저 검증](../tests/ddl-export-browser.integration.test.ts) |
+| 7. SQL 작업 API | 통과 | 리비전 고정과 재요청, 작업 소유자·회원 제한, 활성 작업 한도, 실행 중 취소, 시간 초과, 재시작 복구, 결과 만료와 삭제를 확인했다. [작업 API 테스트](../tests/sql-jobs.integration.test.ts) |
+
 ## 완료 기준
 
-- [ ] 공통 UI가 PostgreSQL 생성 구현을 직접 호출하지 않고 SQL 서비스·registry를 사용한다.
-- [ ] 지원한 fixture의 생성 SQL이 인증 DB에서 실행되고 의미 검증을 통과한다.
-- [ ] 선택 export가 의존성을 보존한다.
-- [ ] 오류·미지원 기능이 SQL에서 조용히 사라지지 않는다.
-- [ ] 작업 상태·취소·TTL·revision 표시와 `.sql` 다운로드가 동작한다.
-- [ ] `docs/sql-support/postgresql.md`의 export 상태·제한을 갱신했다.
+- [x] 공통 UI가 PostgreSQL 생성 구현을 직접 호출하지 않고 SQL 서비스·registry를 사용한다.
+- [x] 지원한 fixture의 생성 SQL이 인증 DB에서 실행되고 의미 검증을 통과한다.
+- [x] 선택 export가 의존성을 보존한다.
+- [x] 오류·미지원 기능이 SQL에서 조용히 사라지지 않는다.
+- [x] 작업 상태·취소·TTL·revision 표시와 `.sql` 다운로드가 동작한다.
+- [x] `docs/sql-support/postgresql.md`의 export 상태·제한을 갱신했다.
+
+## 실행과 작업 설정
+
+- 기존 서비스 DB에 `pnpm db:migrate`로 SQL 작업 마이그레이션을 적용한다. `GET /api/sql/dialects`는 등록 프로필과 capability를 반환한다. `POST /api/projects/:projectId/sql/jobs`의 `options`에서 `tableIds`, `includeComments`, `previewOnly`를 지정할 수 있다. `previewOnly` 성공 응답에는 의존성과 진단이 포함된다. [마이그레이션](../db/migrations/002-sql-jobs.sql), [작업 API](../apps/api/src/sql-jobs.ts)
+- API 프로세스 하나가 PostgreSQL의 작업 상태를 관리하고 worker 동시 실행을 제한한다. 기본값은 실행 제한 10초, 완료 결과 보관 10분, 사용자당 활성 작업 2개, worker 2개다. `SQL_JOB_TIMEOUT_MS`, `SQL_JOB_TTL_MS`, `SQL_JOB_USER_LIMIT`, `SQL_JOB_WORKERS`로 조정한다. API 시작 시 남아 있는 `queued`·`running`은 재요청 가능한 실패 상태로 정리한다. [환경 예시](../.env.example), [worker 관리](../apps/api/src/sql-queue.ts)
+- SQL 생성은 저장된 리비전의 문서를 읽는다. 사용 중인 DB에 대한 적용은 사용자가 다운로드한 SQL로 수행하며, 자동 실행 검증에는 프로젝트 밖의 격리된 테스트 DB와 저장소 fixture를 사용한다. [지원 범위](./sql-support/postgresql.md)
 
 ## 다음 단계와 개발 요청 예시
 
@@ -100,4 +120,4 @@ DEFERRABLE·NOT VALID·MATCH·NULLS NOT DISTINCT 같은 세부 의미 옵션도 
 
 > docs/README.md와 docs/00-scope-and-architecture.md를 읽고, docs/04-postgresql-ddl-export.md의 4단계를 구현해줘. 지원 범위의 생성 SQL을 격리한 PostgreSQL에서 실행하고 의미를 확인해줘.
 
-구현 기록: 미착수.
+PostgreSQL adapter `0.2.0`은 PostgreSQL 17 대상의 전체·부분 DDL 내보내기를 제공한다. [PostgreSQL 지원 상태](./sql-support/postgresql.md)

@@ -5,12 +5,12 @@ import type { Diagnostic, DialectCapabilities, DialectMetadata, EditorDialect, R
 export const postgresqlMetadata: DialectMetadata = {
   id: 'postgresql',
   name: 'PostgreSQL',
-  adapterVersion: '0.1.0',
+  adapterVersion: '0.2.0',
   profiles: [{ version: '17', status: 'certified' }],
 };
 
 const modeled = {
-  model: 'supported', edit: 'not-implemented', import: 'not-implemented', export: 'not-implemented',
+  model: 'supported', edit: 'not-implemented', import: 'not-implemented', export: 'supported',
 } as const;
 const editable = { ...modeled, edit: 'supported' } as const;
 
@@ -24,7 +24,9 @@ export const postgresqlCapabilities = {
   check: editable,
   default: editable,
   index: editable,
-  expressionIndex: editable,
+  expressionIndex: { ...editable, export: 'unsupported' },
+  partialIndex: { ...editable, export: 'unsupported' },
+  comment: editable,
   enum: modeled,
   sequence: modeled,
   identity: modeled,
@@ -56,11 +58,12 @@ function referenceKeys(document: ErdDocument, tableId: string): ReferenceKey[] {
 
 type ColumnType = Catalog['columns'][number]['type'];
 
-const aliases: Record<string, string> = {
+const aliases = new Map(Object.entries({
   int: 'integer', int2: 'smallint', int4: 'integer', int8: 'bigint', decimal: 'numeric',
   bool: 'boolean', 'character varying': 'varchar', 'timestamp without time zone': 'timestamp',
   'timestamp with time zone': 'timestamptz',
-};
+}));
+export const canonicalType = (name: string) => aliases.get(name) ?? name;
 const integer = new Set(['smallint', 'integer', 'bigint']);
 const text = new Set(['text', 'varchar']);
 const datetime = new Set(['date', 'timestamp', 'timestamptz']);
@@ -75,8 +78,8 @@ function compatible(source: ColumnType, target: ColumnType): boolean {
   if (aNamespace !== bNamespace) return false;
   if (aNamespace !== 'pg_catalog') return a.name === b.name;
 
-  const sourceName = aliases[a.name] ?? a.name;
-  const targetName = aliases[b.name] ?? b.name;
+  const sourceName = canonicalType(a.name);
+  const targetName = canonicalType(b.name);
   if (sourceName === targetName) return true;
   if (source.arrayDimensions) return false;
 
@@ -120,7 +123,7 @@ export const postgresqlEditor: EditorDialect = {
   typeProblem(type) {
     const reference = type.reference;
     if (reference.kind !== 'native' || (reference.namespace && reference.namespace !== 'pg_catalog')) return;
-    const name = aliases[reference.name] ?? reference.name;
+    const name = canonicalType(reference.name);
     if (!(postgresqlTypes as readonly string[]).includes(name) || !type.arguments.length) return;
     const [first, second] = type.arguments;
     const between = (value: number | string, low: number, high: number) =>
@@ -176,7 +179,10 @@ export const postgresqlEditor: EditorDialect = {
       const problem = postgresqlEditor.typeProblem(item.type);
       if (problem) report('postgresql-invalid-type-arguments', item.id, problem);
     }
-    for (const item of catalog.indexes) add(['relation', tableNamespaces.get(item.tableId) ?? ''], item);
+    const backingIndexes = constraintBackingIndexes(catalog);
+    for (const item of catalog.indexes) if (!backingIndexes.has(item.id)) {
+      add(['relation', tableNamespaces.get(item.tableId) ?? ''], item);
+    }
 
     const primaryTables = new Set<string>();
     for (const item of catalog.constraints) {
@@ -205,3 +211,20 @@ export const postgresqlEditor: EditorDialect = {
     return diagnostics;
   },
 };
+
+
+export function constraintBackingIndexes(catalog: Catalog) {
+  const keys = new Map(catalog.constraints.flatMap(item => item.kind === 'pk' || item.kind === 'unique'
+    ? [[JSON.stringify([item.tableId, item.physicalName]), item.columnIds] as const] : []));
+  const backing = new Set<string>();
+  for (const index of catalog.indexes) {
+    const columns = keys.get(JSON.stringify([index.tableId, index.physicalName]));
+    if (index.unique && !index.predicate && !index.extensions?.length && columns?.length === index.keys.length &&
+        index.keys.every((key, i) => key.kind === 'column' && key.columnId === columns[i])) {
+      const signature = JSON.stringify([index.tableId, index.physicalName]);
+      // A second modeled copy is a name conflict.
+      if (keys.delete(signature)) backing.add(index.id);
+    }
+  }
+  return backing;
+}

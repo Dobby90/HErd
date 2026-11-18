@@ -170,3 +170,5 @@ export async function registerAuth(api: FastifyInstance, pool: Pool, settings: A
 
   return requireUser;
 }
+
+export type Authenticate = Awaited<ReturnType<typeof registerAuth>>;

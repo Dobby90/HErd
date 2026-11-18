@@ -15,7 +15,7 @@ pnpm dev
 | `pnpm typecheck` | 앱, 공통 패키지, 검증 코드의 TypeScript 검사 |
 | `pnpm lint` | TypeScript 소스의 ESLint 검사 |
 | `pnpm test` | 모델과 웹의 Vitest unit 프로젝트를 단일 실행하며 브라우저 시나리오는 Chromium 사용 |
-| `pnpm test:integration` | PostgreSQL 17의 스키마 덤프·프로젝트 API·OIDC 검증과 Chromium 서버 저장 E2E |
+| `pnpm test:integration` | PostgreSQL 17에서 저장·OIDC·생성 DDL·SQL 작업 검증과 Chromium E2E |
 | `pnpm db:migrate` | `DATABASE_URL`의 서비스 DB에 버전 관리된 마이그레이션 적용 |
 
 브라우저 테스트는 Docker 도구 구성에 포함된 Chromium을 사용합니다. 일반 개발 환경에서는 `CHROMIUM_PATH`에 설치한 Chromium 실행 파일을 지정할 수 있습니다.
@@ -38,14 +38,21 @@ pnpm dev
 
 OIDC를 사용하려면 `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`을 설정하고 공급자에 `<APP_ORIGIN>/api/auth/callback`을 등록합니다. 클라이언트는 Authorization Code, PKCE S256, `client_secret_basic`을 사용합니다. 운영에서 `NODE_ENV=production`과 HTTPS `APP_ORIGIN`을 설정하고 `pnpm db:migrate`를 실행한 뒤 API를 `node --env-file-if-exists=.env dist/api/main.js`로 시작합니다. 프록시는 같은 HTTPS origin에서 `dist/web`과 `/api`를 제공해야 합니다. [인증·DB 설정 및 검증](docs/03-projects-and-persistence.md#실행과-인증-설정)
 
+## PostgreSQL DDL 내보내기
+
+서버에 저장된 ERD에서 **DDL 내보내기**를 엽니다. 전체 스키마, 현재 뷰, 선택한 테이블 중 범위를 고릅니다. 뷰나 테이블을 선택하면 FK 대상, ENUM, 시퀀스, 스키마가 얼마나 추가되는지 생성 전에 확인할 수 있습니다. 편집 중인 문서는 먼저 저장하고, viewer는 최신 서버 리비전으로 생성합니다. 성공한 SQL은 원본 리비전과 함께 미리보기·복사·UTF-8 `.sql` 다운로드로 제공됩니다.
+
+SQL 작업 결과는 기본 10분 동안 보관됩니다. 생성 스크립트의 적용 대상은 새 PostgreSQL 17 데이터베이스입니다. 주문 관리 샘플의 식 인덱스를 포함해 현재 지원 범위를 벗어난 객체가 선택에 들어가면 진단을 표시합니다. [PostgreSQL 지원 범위](docs/sql-support/postgresql.md), [SQL 작업 설정](docs/04-postgresql-ddl-export.md#실행과-작업-설정)
+
 ## 진행 상태
 
 - [x] **1단계 개발 기반과 도메인 모델 완료.** 웹·API 실행, ERD v1 직렬화와 참조 무결성, PostgreSQL 17 파서·실제 스키마 덤프를 검증했습니다. [1단계 검증 결과](docs/01-foundation-and-domain.md#검증-결과)
 - [x] **2단계 로컬 ERD 편집기 완료.** 복합·자기 참조 FK 편집, 여러 뷰의 테이블 재사용, 삭제와 실행 취소·다시 실행, IndexedDB 복구와 탭 충돌 처리를 검증했습니다. [2단계 검증 결과](docs/02-erd-editor.md#검증-결과)
 - [x] **3단계 프로젝트·인증·서버 저장 완료.** OIDC와 역할별 권한, 실제 DB의 프로젝트·ERD CRUD, 자동 저장·충돌·복구를 검증했습니다. [3단계 검증 결과](docs/03-projects-and-persistence.md#검증-결과)
-- [ ] **4단계 PostgreSQL DDL 내보내기 예정.** [4단계 계획](docs/04-postgresql-ddl-export.md)
+- [x] **4단계 PostgreSQL DDL 내보내기 완료.** 생성 SQL의 PostgreSQL 17 실행과 catalog 의미, 부분 선택 의존성, 작업 권한·격리, UTF-8 다운로드를 검증했습니다. [4단계 검증 결과](docs/04-postgresql-ddl-export.md#검증-결과)
+- [ ] **5단계 PostgreSQL DDL 가져오기 예정.** [5단계 계획](docs/05-postgresql-ddl-import.md)
 
-2026-11-18 Docker 검증에서 클린 설치, 빌드·타입 검사·lint, 기본 테스트 38개, 통합 테스트 3개가 통과했습니다. OIDC는 모의 공급자로 검증했으며 운영 계정 연동은 배포 환경에서 확인합니다.
+2026-11-18 Docker 검증에서 클린 설치, 빌드·타입 검사·lint, 기본 테스트 40개, 통합 테스트 6개가 통과했습니다. OIDC는 모의 공급자로 검증했으며 운영 계정 연동은 배포 환경에서 확인합니다.
 
 - [단계별 계획](docs/README.md)
 - [PostgreSQL 지원 상태](docs/sql-support/postgresql.md)

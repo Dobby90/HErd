@@ -41,6 +41,9 @@ importers:
       fastify:
         specifier: 5.6.2
         version: 5.6.2
+      pgsql-parser:
+        specifier: 17.9.9
+        version: 17.9.9
       playwright-core:
         specifier: 1.57.0
         version: 1.57.0

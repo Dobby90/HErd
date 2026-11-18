@@ -1,24 +1,42 @@
-import type { Diagnostic, SqlDialect } from '@erd/sql-contract';
+import { documentExpressions, validateDocumentStructure } from '@erd/model';
+import type { SqlDialect } from '@erd/sql-contract';
+import { preparePostgresqlExport } from './export.js';
 import { postgresqlEditor, postgresqlMetadata } from './ui.js';
-
-function notImplemented(feature: 'import' | 'export'): Diagnostic[] {
-  return [{
-    code: 'not-implemented', severity: 'error', feature,
-    message: 'PostgreSQL ' + feature + ' is planned for a later stage.',
-  }];
-}
 
 export const postgresqlDialect: SqlDialect = {
   metadata: postgresqlMetadata,
   capabilities: postgresqlEditor.capabilities,
   validate: postgresqlEditor.validate,
+  prepareGenerate: preparePostgresqlExport,
   async parse(request) {
     return {
-      status: 'not-implemented', diagnostics: notImplemented('import'),
+      status: 'not-implemented',
+      diagnostics: [{ code: 'not-implemented', severity: 'error', feature: 'import', message: 'PostgreSQL DDL 가져오기는 5단계에서 제공됩니다.' }],
       profile: postgresqlMetadata.profiles.find(profile => profile.version === request.target.engineVersion),
     };
   },
-  async generate() {
-    return { status: 'not-implemented', diagnostics: notImplemented('export'), dependencies: [] };
+  async generate(request) {
+    const { target, document } = request;
+    if (target.engineVersion !== '17' || target.dialectId !== 'postgresql' ||
+        target.dialectId !== document.target.dialectId || target.engineVersion !== document.target.engineVersion) {
+      return { status: 'blocked', dependencies: [], diagnostics: [{ code: 'target-mismatch', severity: 'error', message: '문서의 PostgreSQL 17 대상을 사용하세요.' }] };
+    }
+    const structure = validateDocumentStructure(document);
+    if (structure.length) return { status: 'blocked', dependencies: [], diagnostics: structure };
+    if (request.tableIds !== undefined && (!request.tableIds.length ||
+        request.tableIds.some(id => !document.catalog.tables.some(table => table.id === id)))) {
+      return { status: 'blocked', dependencies: [], diagnostics: [{ code: 'invalid-generation-selection', severity: 'error', message: '문서의 테이블을 선택하세요.' }] };
+    }
+    const plan = await preparePostgresqlExport(request);
+    const diagnostics = [...postgresqlEditor.validate(plan.document, { target }), ...plan.diagnostics];
+    const expressions = [...documentExpressions(plan.document)];
+    if (expressions.some(({ expression }) => expression.engineVersion !== target.engineVersion || expression.dialectId !== target.dialectId)) {
+      diagnostics.push({ code: 'expression-target-mismatch', severity: 'error', message: 'SQL 식의 대상 버전이 문서와 다릅니다.' });
+    }
+    if ([plan.document, ...Object.values(plan.document.catalog).flat()].some(item => item.extensions?.length) ||
+        plan.document.catalog.columns.some(item => item.type.attributes?.length)) {
+      diagnostics.push({ code: 'unknown-extension', severity: 'error', message: '지원하는 모델 속성만 내보낼 수 있습니다.' });
+    }
+    return diagnostics.length ? { status: 'blocked', dependencies: plan.dependencies, diagnostics } : plan.generate();
   },
 };
