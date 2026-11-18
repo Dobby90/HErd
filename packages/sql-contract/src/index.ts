@@ -1,4 +1,4 @@
-import type { Catalog, ErdDocument, SqlTarget } from '@erd/model';
+import type { Catalog, ErdDocument, ForeignKey, SqlTarget } from '@erd/model';
 
 export interface Diagnostic {
   code: string;
@@ -64,4 +64,24 @@ export interface SqlDialect {
   understandsExtension?(namespace: string, version: number): boolean;
   parse(request: ParseRequest): Promise<ParseResult>;
   generate(request: GenerateRequest): Promise<GenerateResult>;
+}
+
+export interface ReferenceKey {
+  key: ForeignKey['targetKey'];
+  name: string;
+  columnIds: readonly string[];
+  unavailable?: string;
+}
+
+export interface EditorDialect {
+  metadata: DialectMetadata;
+  capabilities(target: SqlTarget): DialectCapabilities;
+  types(target: SqlTarget): readonly string[];
+  defaultType: Catalog['columns'][number]['type'];
+  typeProblem(type: Catalog['columns'][number]['type']): string | undefined;
+  actions: readonly NonNullable<ForeignKey['onDelete']>[];
+  referenceKeys(document: ErdDocument, tableId: string): ReferenceKey[];
+  validateForeignKey(document: ErdDocument, key: ForeignKey): Diagnostic[];
+  validate(document: ErdDocument, context: ValidationContext): Diagnostic[];
+  cardinality(document: ErdDocument, key: ForeignKey): { parentOptional: boolean; childMax: 1 | 'many' } | undefined;
 }

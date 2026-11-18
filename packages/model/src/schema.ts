@@ -3,7 +3,7 @@ import { z } from 'zod';
 const id = z.string().min(1);
 const named = z.object({
   id,
-  physicalName: z.string().min(1),
+  physicalName: z.string(),
   logicalName: z.string().optional(),
   description: z.string().optional(),
 });
@@ -62,8 +62,9 @@ const size = z.object({ width: z.number().positive(), height: z.number().positiv
 const view = z.object({
   id,
   name: id,
+  nameDisplay: z.enum(['physical', 'logical']).optional(),
   instances: z.array(position.extend({
-    id, tableId: id, size: size.optional(), visibleColumnIds: z.array(id).optional(), groupId: id.optional(),
+    id, tableId: id, collapsed: z.boolean().optional(), size: size.optional(), visibleColumnIds: z.array(id).optional(), groupId: id.optional(),
   })),
   groups: z.array(position.extend({ id, name: id, size: size.optional() })),
   notes: z.array(position.extend({ id, text: z.string(), size: size.optional(), groupId: id.optional() })),

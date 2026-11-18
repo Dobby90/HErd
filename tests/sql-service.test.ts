@@ -9,7 +9,7 @@ import type { ErdDocument } from '@erd/model';
 const target = sampleDocument.target;
 const parseRequest = { target, sql: 'SELECT 1', defaultNamespace: 'public' };
 
-it('distinguishes unregistered, uncertified and stage-one unavailable operations', async () => {
+it('distinguishes certified editing from unregistered, uncertified and unavailable DDL operations', async () => {
   const { api, sql } = createApi();
   try {
     expect(await sql.parse({ ...parseRequest, target: { ...target, dialectId: 'missing' } })).toMatchObject({
@@ -18,7 +18,7 @@ it('distinguishes unregistered, uncertified and stage-one unavailable operations
     expect(await sql.parse({ ...parseRequest, target: { ...target, engineVersion: '99' } })).toMatchObject({
       status: 'blocked', diagnostics: [{ code: 'uncertified-engine-version' }],
     });
-    expect(sql.capabilities(target)).toMatchObject({ table: { model: 'supported', import: 'not-implemented', export: 'not-implemented' } });
+    expect(sql.capabilities(target)).toMatchObject({ table: { model: 'supported', edit: 'supported', import: 'not-implemented', export: 'not-implemented' } });
     expect(await sql.parse(parseRequest)).toMatchObject({ status: 'not-implemented' });
     expect(await sql.generate({ document: sampleDocument, target })).toMatchObject({ status: 'not-implemented' });
     const unsupported = { ...target, engineVersion: '99' };
@@ -30,6 +30,7 @@ it('distinguishes unregistered, uncertified and stage-one unavailable operations
 
     const capabilities = sql.capabilities(target);
     expect(capabilities).not.toHaveProperty('diagnostics');
+    expect(capabilities).toMatchObject({ enum: { edit: 'not-implemented' }, sequence: { edit: 'not-implemented' }, identity: { edit: 'not-implemented' } });
     for (const feature of Object.values(capabilities)) {
       expect(feature).toMatchObject({ model: 'supported', import: 'not-implemented', export: 'not-implemented' });
     }

@@ -1,5 +1,5 @@
 import type { Diagnostic, SqlDialect } from '@erd/sql-contract';
-import { postgresqlCapabilities, postgresqlMetadata } from './ui.js';
+import { postgresqlEditor, postgresqlMetadata } from './ui.js';
 
 function notImplemented(feature: 'import' | 'export'): Diagnostic[] {
   return [{
@@ -10,30 +10,8 @@ function notImplemented(feature: 'import' | 'export'): Diagnostic[] {
 
 export const postgresqlDialect: SqlDialect = {
   metadata: postgresqlMetadata,
-  capabilities: () => postgresqlCapabilities,
-  validate(document) {
-    const diagnostics: Diagnostic[] = [];
-    const primaryTables = new Set<string>();
-    const indexes = new Map(document.catalog.indexes.map(index => [index.id, index]));
-    for (const constraint of document.catalog.constraints) {
-      if (constraint.kind === 'pk') {
-        if (primaryTables.has(constraint.tableId)) {
-          diagnostics.push({
-            code: 'postgresql-multiple-primary-keys', severity: 'error', objectId: constraint.id,
-            message: 'PostgreSQL allows one primary key per table.',
-          });
-        }
-        primaryTables.add(constraint.tableId);
-      }
-      if (constraint.kind === 'fk' && constraint.targetKey.kind === 'index' && indexes.get(constraint.targetKey.id)?.predicate) {
-        diagnostics.push({
-          code: 'postgresql-partial-reference-index', severity: 'error', objectId: constraint.id,
-          message: 'A partial unique index cannot back a PostgreSQL foreign key.',
-        });
-      }
-    }
-    return diagnostics;
-  },
+  capabilities: postgresqlEditor.capabilities,
+  validate: postgresqlEditor.validate,
   async parse(request) {
     return {
       status: 'not-implemented', diagnostics: notImplemented('import'),
