@@ -199,12 +199,37 @@ it('isolates stale tabs, preserves both versions, and retries failed reads and w
     await visible(first, '브라우저 저장 완료');
     await renameDocument(second, '늦게 저장한 편집');
     await visible(second, '탭 충돌 · 별도 복구본 저장 완료');
+    const firstConflict = await activeDraft(second);
+    await nav(second).getByRole('button', { name: /저장된 복구본.*shop-sample/ }).click();
+    await second.getByRole('heading', { name: '최신 복구본', exact: true }).waitFor();
+    await renameDocument(first, '두 번째 최신 복구본');
+    await visible(first, '브라우저 저장 완료');
+    await renameDocument(second, '두 번째 늦은 편집');
+    await visible(second, '탭 충돌 · 별도 복구본 저장 완료');
+
+    const secondConflict = await activeDraft(second);
+    expect(secondConflict.tabId).toBe(firstConflict.tabId);
+    expect(secondConflict.key).not.toBe(firstConflict.key);
+    const conflictButton = (draft: Draft) => nav(second).getByRole('button', {
+      name: `탭 충돌 복구본 · ${draft.updatedAt} · shop-sample`, exact: true,
+    });
+    await conflictButton(firstConflict).click();
+    await second.getByRole('heading', { name: '늦게 저장한 편집', exact: true }).waitFor();
+    await conflictButton(secondConflict).click();
+    await second.getByRole('heading', { name: '두 번째 늦은 편집', exact: true }).waitFor();
+    await conflictButton(firstConflict).click();
+    await second.getByRole('heading', { name: '늦게 저장한 편집', exact: true }).waitFor();
     await second.reload();
     await visible(second, '탭 충돌 복구본을 열었습니다.');
     await second.getByRole('heading', { name: '늦게 저장한 편집', exact: true }).waitFor();
     await first.reload();
     await visible(first, '브라우저 복구 완료');
-    await first.getByRole('heading', { name: '최신 복구본', exact: true }).waitFor();
+    await first.getByRole('heading', { name: '두 번째 최신 복구본', exact: true }).waitFor();
+
+    await renameDocument(second, '첫 번째 충돌 복구본의 후속 편집');
+    await visible(second, '브라우저 저장 완료');
+    expect(await activeDraft(second)).toMatchObject({ key: firstConflict.key, generation: firstConflict.generation + 1 });
+    expect((await storedDrafts(second)).find(draft => draft.key === secondConflict.key)).toEqual(secondConflict);
 
     await first.evaluate(() => sessionStorage.setItem('erd-test-idb-error', 'true'));
     await renameDocument(first, '저장 재시도');
@@ -213,7 +238,7 @@ it('isolates stale tabs, preserves both versions, and retries failed reads and w
     const reader = await context.newPage();
     reader.setDefaultTimeout(8_000);
     await reader.goto(origin);
-    await reader.getByRole('heading', { name: '최신 복구본', exact: true }).waitFor();
+    await reader.getByRole('heading', { name: '두 번째 최신 복구본', exact: true }).waitFor();
     await first.evaluate(() => sessionStorage.removeItem('erd-test-idb-error'));
     await action(first, '다시 시도').click();
     await visible(first, '브라우저 저장 완료');
@@ -250,8 +275,48 @@ it('isolates stale tabs, preserves both versions, and retries failed reads and w
     await rewriteVersion(reader, 1);
     await action(reader, '다시 시도').click();
     await reader.getByRole('heading', { name: '저장 재시도', exact: true }).waitFor();
+
+    const damagedId = 'recovery-metadata';
+    const repairable = {
+      ...await activeDraft(reader),
+      key: JSON.stringify(['anonymous:local', damagedId]),
+      documentId: damagedId,
+      serialized: serializeDocument({ ...sampleDocument, id: damagedId, name: '다른 복구본' }),
+    };
+    const damaged = { ...repairable, updatedAt: new Date(), documentId: { id: damagedId } };
+    await putStoredDraft(reader, damaged);
+    await renameDocument(reader, '현재 탭의 작업');
+    await visible(reader, '브라우저 저장 완료');
+    await nav(reader).getByRole('button', { name: '손상된 복구본', exact: true }).click();
+    await visible(reader, '복구본이 손상되었습니다.');
+    await reader.getByRole('heading', { name: '현재 탭의 작업', exact: true }).waitFor();
+    await action(reader, '다시 시도').click();
+    await visible(reader, '복구본이 손상되었습니다.');
+    expect((await storedDrafts(reader)).find(draft => draft.key === damaged.key)).toMatchObject(damaged);
+    await reader.getByRole('heading', { name: '현재 탭의 작업', exact: true }).waitFor();
+
+    await putStoredDraft(reader, repairable);
+    await action(reader, '다시 시도').click();
+    await reader.getByRole('heading', { name: '다른 복구본', exact: true }).waitFor();
+    await visible(reader, '브라우저 복구 완료');
+    await nav(reader).getByRole('button', { name: /저장된 복구본.*shop-sample/ }).click();
+    await reader.getByRole('heading', { name: '현재 탭의 작업', exact: true }).waitFor();
   });
 }, 90_000);
+
+function putStoredDraft(page: Page, draft: unknown) {
+  return page.evaluate(record => new Promise<void>((resolve, reject) => {
+    const opening = indexedDB.open('erd-local-recovery', 1);
+    opening.onerror = () => reject(opening.error);
+    opening.onsuccess = () => {
+      const database = opening.result;
+      const transaction = database.transaction('drafts', 'readwrite');
+      transaction.objectStore('drafts').put(record);
+      transaction.oncomplete = () => { database.close(); resolve(); };
+      transaction.onabort = () => { database.close(); reject(transaction.error); };
+    };
+  }), draft);
+}
 
 function storedDrafts(page: Page) {
   return page.evaluate(() => new Promise<Draft[]>((resolve, reject) => {
@@ -516,7 +581,7 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
   });
 }, 90_000);
 
-it('restores a v1 recovery draft and preserves advanced data when editing an enum column', async () => {
+it('restores a v1 recovery draft and preserves advanced data and indexed SQL when editing other attributes', async () => {
   await withEditor(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
@@ -534,18 +599,14 @@ it('restores a v1 recovery draft and preserves advanced data when editing an enu
       originalSql: 'public.state[]', attributes: [{ namespace: 'custom', version: 1, data: { keep: true } }],
     };
     legacy.extensions.push({ namespace: 'legacy', version: 1, data: { marker: 'keep' } });
+    const expression = {
+      ...legacy.target, sql: 'lower(\r\n-- keep the next line\r\nname)', references: ['product-name'],
+      referencesComplete: true, invalidated: true as const,
+    };
+    const legacyIndex = legacy.catalog.indexes[0];
+    legacyIndex.keys = [{ kind: 'expression', expression }];
     const key = JSON.stringify(['anonymous:local', legacy.id]);
-    await page.evaluate((draft: Draft) => new Promise<void>((resolve, reject) => {
-      const opening = indexedDB.open('erd-local-recovery', 1);
-      opening.onerror = () => reject(opening.error);
-      opening.onsuccess = () => {
-        const database = opening.result;
-        const transaction = database.transaction('drafts', 'readwrite');
-        transaction.objectStore('drafts').put(draft);
-        transaction.oncomplete = () => { database.close(); resolve(); };
-        transaction.onabort = () => { database.close(); reject(transaction.error); };
-      };
-    }), {
+    await putStoredDraft(page, {
       key, owner: 'anonymous:local', documentId: legacy.id, updatedAt: new Date().toISOString(),
       formatVersion: 1, baseRevision: null, generation: 1, serialized: serializeDocument(legacy),
     });
@@ -559,8 +620,15 @@ it('restores a v1 recovery draft and preserves advanced data when editing an enu
     await inspector(page).getByLabel('설명', { exact: true }).fill('편집한 설명');
     await action(page, '컬럼 적용').click();
     await visible(page, '브라우저 저장 완료');
+    await inspector(page).getByRole('button', { name: 'INDEX · products_name_idx', exact: true }).click();
+    const sqlInput = inspector(page).getByRole('textbox', { name: '인덱스 SQL 식 1', exact: true });
+    expect(await sqlInput.inputValue()).toBe(expression.sql.replace(/\r\n/g, '\n'));
+    await inspector(page).getByLabel('설명', { exact: true }).fill('인덱스 설명만 변경');
+    await action(page, '인덱스 적용').click();
+    await visible(page, '브라우저 저장 완료');
     await page.reload();
     await visible(page, '브라우저 복구 완료');
+    await inspector(page).getByText('보존된 SQL 식을 검토하세요.', { exact: true }).waitFor();
 
     const restored = deserializeDocument((await activeDraft(page)).serialized);
     expect(restored.catalog.columns.find(column => column.id === 'product-name')).toEqual({ ...productName, description: '편집한 설명' });
@@ -568,6 +636,7 @@ it('restores a v1 recovery draft and preserves advanced data when editing an enu
     expect(restored.catalog.enums).toEqual(legacy.catalog.enums);
     expect(restored.catalog.sequences).toEqual(legacy.catalog.sequences);
     expect(restored.extensions).toEqual(legacy.extensions);
+    expect(restored.catalog.indexes[0]).toEqual({ ...legacyIndex, description: '인덱스 설명만 변경' });
   });
 }, 90_000);
 
@@ -646,5 +715,27 @@ it('pans and zooms the canvas and commits a snapped multi-selection drag as one 
     await action(page, '실행 취소').click();
     await visible(page, '브라우저 저장 완료');
     expect(deserializeDocument((await activeDraft(page)).serialized).views[0].instances).toEqual(original);
+
+    await tableOnCanvas(page, 'users').getByText('users', { exact: true }).click();
+    const userNode = page.locator('.react-flow__node-table').filter({ has: page.getByText('users', { exact: true }) });
+    const xOnCanvas = () => userNode.evaluate(node => new DOMMatrixReadOnly(getComputedStyle(node).transform).m41);
+    const originalUser = original.find(item => item.tableId === 'users');
+    if (!originalUser) throw new Error('Missing users placement.');
+    await expect.poll(xOnCanvas).toBe(originalUser.x);
+    await userNode.press('ArrowRight');
+    await expect.poll(xOnCanvas).toBe(originalUser.x + 20);
+    await visible(page, '브라우저 저장 완료');
+    const keyboardMoved = original.map(item => item.id === originalUser.id ? { ...item, x: item.x + 20 } : item);
+    expect(deserializeDocument((await activeDraft(page)).serialized).views[0].instances).toEqual(keyboardMoved);
+
+    await action(page, '실행 취소').click();
+    await visible(page, '브라우저 저장 완료');
+    await expect.poll(xOnCanvas).toBe(originalUser.x);
+    await action(page, '다시 실행').click();
+    await visible(page, '브라우저 저장 완료');
+    await expect.poll(xOnCanvas).toBe(originalUser.x + 20);
+    await page.reload();
+    await visible(page, '브라우저 복구 완료');
+    await expect.poll(xOnCanvas).toBe(originalUser.x + 20);
   });
 }, 90_000);

@@ -118,14 +118,22 @@ export function EditorCanvas({ document, view, dialect, select, connect, move, s
     const selected = new Set(previous.filter(node => node.selected).map(node => node.id));
     return projected.nodes.map(node => ({ ...node, selected: selected.has(node.id) }));
   }), [projected]);
-  const persist = (moved: CanvasNode[]) => move(new Map(moved.map(node => [node.id, node.position])));
   return <ReactFlow<CanvasNode, Edge>
     aria-label="ERD 캔버스"
     nodes={nodes} edges={projected.edges} nodeTypes={nodeTypes}
-    onNodesChange={changes => setNodes(previous => applyNodeChanges(changes, previous))}
+    onNodesChange={changes => {
+      setNodes(previous => applyNodeChanges(changes, previous));
+      const positions = new Map<string, XYPosition>();
+      // React Flow batches keyboard moves and pointer drag completion with dragging set to false.
+      for (const change of changes) {
+        if (change.type === 'position' && change.dragging === false && change.position) {
+          positions.set(change.id, change.position);
+        }
+      }
+      if (positions.size) move(positions);
+    }}
     onNodeClick={(_, node) => select(node.id)}
     onEdgeClick={(_, edge) => select(String(edge.data?.objectId ?? ''))}
-    onNodeDragStop={(_, node, moved) => persist(moved.length ? moved : [node])}
     isValidConnection={connection => Boolean(connection.sourceHandle?.startsWith('out:') && connection.targetHandle?.startsWith('in:'))}
     onConnect={({ sourceHandle, targetHandle }) => {
       if (sourceHandle?.startsWith('out:') && targetHandle?.startsWith('in:')) connect(sourceHandle.slice(4), targetHandle.slice(3));

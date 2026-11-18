@@ -15,7 +15,10 @@ export interface Draft {
   generation: number;
   serialized: string;
   tabId?: string;
+  branchId?: string;
 }
+
+export type DraftEntry = Draft | { key: string; invalid: true };
 
 function request<T>(operation: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -37,30 +40,63 @@ function finished(transaction: IDBTransaction) {
   });
 }
 
-export async function readDrafts(): Promise<Draft[]> {
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function validMetadata(draft: unknown): draft is Draft {
+  if (!record(draft) || draft.owner !== owner || typeof draft.documentId !== 'string' || !draft.documentId ||
+      typeof draft.updatedAt !== 'string' || !Number.isFinite(Date.parse(draft.updatedAt)) ||
+      typeof draft.formatVersion !== 'number' || !Number.isSafeInteger(draft.formatVersion) || draft.formatVersion < 1 ||
+      typeof draft.generation !== 'number' || !Number.isSafeInteger(draft.generation) || draft.generation < 1 ||
+      draft.baseRevision !== null || typeof draft.serialized !== 'string') return false;
+  if (draft.tabId === undefined) return draft.branchId === undefined && draft.key === draftKey(draft.documentId);
+  if (typeof draft.tabId !== 'string' || !draft.tabId) return false;
+  const keyParts = [owner, draft.documentId, draft.tabId];
+  if (draft.branchId !== undefined) {
+    if (typeof draft.branchId !== 'string' || !draft.branchId) return false;
+    keyParts.push(draft.branchId);
+  }
+  return draft.key === JSON.stringify(keyParts);
+}
+
+export async function readDrafts(): Promise<DraftEntry[]> {
   const database = await open();
   try {
-    const all: Draft[] = await request(database.transaction(storeName).objectStore(storeName).getAll());
-    return all.filter(item => item && item.owner === owner).sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
+    const all: unknown[] = await request(database.transaction(storeName).objectStore(storeName).getAll());
+    const valid: Draft[] = [];
+    const invalid: DraftEntry[] = [];
+    for (const item of all) {
+      if (validMetadata(item)) valid.push(item);
+      else if (record(item) && item.owner === owner && typeof item.key === 'string') invalid.push({ key: item.key, invalid: true });
+    }
+    return [...valid.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), ...invalid];
   } finally {
     database.close();
   }
 }
 
-export function restoreDraft(draft: Draft) {
-  const document = deserializeDocument(draft.serialized);
-  if (draft.owner !== owner || typeof draft.updatedAt !== 'string' || !Number.isFinite(Date.parse(draft.updatedAt)) ||
-      document.id !== draft.documentId || document.formatVersion !== draft.formatVersion ||
-      !Number.isSafeInteger(draft.generation) || draft.generation < 1 || draft.baseRevision !== null ||
-      draft.key !== (draft.tabId ? JSON.stringify([owner, document.id, draft.tabId]) : draftKey(document.id))) {
-    throw new Error('Invalid recovery envelope.');
+export async function readDraft(key: string): Promise<unknown> {
+  const database = await open();
+  try {
+    return await request(database.transaction(storeName).objectStore(storeName).get(key));
+  } finally {
+    database.close();
   }
-  return document;
 }
 
-export async function writeDraft(document: ErdDocument, expected: number, tabId: string) {
+export function restoreDraft(draft: unknown) {
+  if (!validMetadata(draft)) throw new Error('Invalid recovery envelope.');
+  const document = deserializeDocument(draft.serialized);
+  if (document.id !== draft.documentId || document.formatVersion !== draft.formatVersion) {
+    throw new Error('Invalid recovery envelope.');
+  }
+  return { document, draft };
+}
+
+export async function writeDraft(document: ErdDocument, key: string, expected: number, tabId: string) {
   const serialized = serializeDocument(document);
-  const key = draftKey(document.id);
+  const branchId = crypto.randomUUID();
   const database = await open();
   try {
     const transaction = database.transaction(storeName, 'readwrite');
@@ -69,29 +105,26 @@ export async function writeDraft(document: ErdDocument, expected: number, tabId:
     const store = transaction.objectStore(storeName);
     const reading = store.get(key);
     reading.onsuccess = () => {
-      const current = reading.result as Draft | undefined;
-      let conflict = (current?.generation ?? 0) !== expected;
-      if (current && !conflict) {
+      let current: Draft | undefined;
+      let conflict = expected !== 0;
+      if (reading.result !== undefined) {
         try {
-          restoreDraft(current);
+          current = restoreDraft(reading.result).draft;
+          conflict = current.documentId !== document.id || current.generation !== expected;
         } catch {
           conflict = true;
         }
       }
-      const destination = conflict ? JSON.stringify([owner, document.id, tabId]) : key;
-      const save = (generation: number) => {
-        const draft: Draft = {
-          key: destination, owner, documentId: document.id, updatedAt: new Date().toISOString(),
-          formatVersion: document.formatVersion, baseRevision: null, generation, serialized,
-          tabId: conflict ? tabId : undefined,
-        };
-        store.put(draft);
-        result = { draft, conflict };
+      const draft: Draft = {
+        key: conflict ? JSON.stringify([owner, document.id, tabId, branchId]) : key,
+        owner, documentId: document.id, updatedAt: new Date().toISOString(),
+        formatVersion: document.formatVersion, baseRevision: null, generation: conflict ? 1 : expected + 1, serialized,
+        tabId: conflict ? tabId : current?.tabId,
+        branchId: conflict ? branchId : current?.branchId,
       };
-      if (conflict) {
-        const branch = store.get(destination);
-        branch.onsuccess = () => save((branch.result?.generation ?? 0) + 1);
-      } else save(expected + 1);
+      if (conflict) store.add(draft);
+      else store.put(draft);
+      result = { draft, conflict };
     };
     await complete;
     if (!result) throw new Error('IndexedDB did not save the draft.');

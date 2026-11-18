@@ -236,6 +236,10 @@ export function Editor() {
   const selectView = (id: string) => { chooseView(id); inspect(null); };
   const selectObject = (id: string) => inspect({ type: 'object', id });
 
+  async function openRecovery(key?: string) {
+    if (await (key ? session.restore(key) : session.retry())) selectView('');
+  }
+
   function move(positions: Map<string, XYPosition>) {
     if (!view || !positions.size) return;
     const groupDeltas = new Map(view.groups.flatMap(group => {
@@ -267,7 +271,7 @@ export function Editor() {
       </div>
       <div className="save-state">
         <p role={session.status.error ? 'alert' : 'status'}>{session.status.text}</p>
-        {session.status.retry && <button type="button" onClick={session.retry}>다시 시도</button>}
+        {session.status.retry && <button type="button" onClick={() => void openRecovery()}>다시 시도</button>}
         {session.otherTab && <p role="status">다른 탭에서 이 문서를 열었습니다.</p>}
       </div>
     </header>
@@ -304,9 +308,10 @@ export function Editor() {
             <li key={feature}>{feature.toUpperCase()} · {capability?.[feature].edit === 'supported' ? '편집 가능' : '보존 전용'}</li>)}
         </ul>
         {session.drafts.length > 0 && <><h2>브라우저 복구본</h2><ul className="object-list">
-          {session.drafts.map(draft => <li key={draft.key}><button type="button" disabled={session.unsaved} onClick={() => {
-            session.restore(draft); selectView('');
-          }}>{draft.tabId ? '탭 충돌 복구본' : '저장된 복구본'} · {draft.updatedAt} · {draft.documentId}</button></li>)}
+          {session.drafts.map(draft => <li key={draft.key}><button type="button" disabled={session.unsaved} onClick={() => void openRecovery(draft.key)}>
+            {'invalid' in draft ? '손상된 복구본' :
+              `${draft.tabId ? '탭 충돌 복구본' : '저장된 복구본'} · ${draft.updatedAt} · ${draft.documentId}`}
+          </button></li>)}
         </ul></>}
       </aside>
       <section className="workspace" aria-label="다이어그램">

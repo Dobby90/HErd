@@ -131,7 +131,7 @@ export function IndexForm({ document, table, existing, run, close }: {
     <OrderedItems title="인덱스 키" items={parts.map(({ id, part }, index) => ({
       key: id,
       content: part.kind === 'column' ? label(columns.find(c => c.id === part.columnId) ?? { physicalName: part.columnId }) :
-        <input name={id} aria-label={`인덱스 SQL 식 ${index + 1}`} defaultValue={part.expression.sql} required />,
+        <textarea name={id} aria-label={`인덱스 SQL 식 ${index + 1}`} defaultValue={part.expression.sql} required />,
     }))} change={(from, to) => setParts(to === null ? parts.filter((_, index) => index !== from) : moveItem(parts, from, to))} />
     <div className="actions">
       <label>인덱스 컬럼<select value={adding} onChange={event => setAdding(event.target.value)}>

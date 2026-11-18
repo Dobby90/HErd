@@ -96,7 +96,9 @@ export function OrderedColumns({ columns, value, set }: { columns: Column[]; val
 }
 
 export function sqlExpression(document: ErdDocument, sql: string, previous?: SqlExpression): SqlExpression {
-  return previous?.sql === sql ? previous : { ...document.target, sql };
+  // Textareas normalize line endings even if the user leaves the field untouched.
+  if (previous && previous.sql.replace(/\r\n?/g, '\n') === sql.replace(/\r\n?/g, '\n')) return previous;
+  return { ...document.target, sql };
 }
 
 export function putView(view: View) {
