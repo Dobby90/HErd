@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, chownSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { once } from 'node:events';
+import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { expect, it } from 'vitest';
 import { inspectPostgresql } from '../packages/dialect-postgresql/src/parser.js';
@@ -10,14 +12,14 @@ it('executes fixture DDL on PostgreSQL 17 and inspects its actual schema-only du
   const postgresId = (flag: string) => Number(execFileSync('id', [flag, 'postgres'], { encoding: 'utf8' }).trim());
   const uid = rootUser ? postgresId('-u') : process.getuid?.();
   const gid = rootUser ? postgresId('-g') : process.getgid?.();
+  const host = '127.0.0.1';
+  const port = String(await findLocalPort(host));
   const output = resolve('build');
   mkdirSync(output, { recursive: true });
   const base = mkdtempSync(resolve(output, 'pg-'));
   const data = resolve(base, 'data');
-  const socket = base;
   const serverLog = resolve(base, 'server.log');
-  const port = '55432';
-  const connection = ['-h', socket, '-p', port, '-U', 'postgres', '-d', 'postgres'];
+  const connection = ['-h', host, '-p', port, '-U', 'postgres', '-d', 'postgres'];
   const run = (name: string, args: string[], input?: string) => execFileSync(name, args, {
     uid, gid, input, encoding: 'utf8', timeout: 15_000, stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -38,7 +40,7 @@ it('executes fixture DDL on PostgreSQL 17 and inspects its actual schema-only du
     initialized = true;
     try {
       run('pg_ctl', ['-D', data, '-l', serverLog, '-w', 'start', '-o',
-        '-c listen_addresses= -c unix_socket_directories=' + quote(socket) + ' -p ' + port]);
+        "-c listen_addresses=" + host + " -c unix_socket_directories='' -p " + port]);
     } catch (error) {
       if (!existsSync(serverLog)) throw error;
       throw new Error('PostgreSQL startup failed:\n' + readFileSync(serverLog, 'utf8'), { cause: error });
@@ -69,6 +71,11 @@ it('executes fixture DDL on PostgreSQL 17 and inspects its actual schema-only du
   }
 });
 
-function quote(value: string) {
-  return "'" + value.replaceAll("'", "'\\''") + "'";
+async function findLocalPort(host: string): Promise<number> {
+  const server = createServer().listen(0, host);
+  await once(server, 'listening');
+  const address = server.address();
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  if (!address || typeof address === 'string') throw new Error('Expected a local TCP address');
+  return address.port;
 }
