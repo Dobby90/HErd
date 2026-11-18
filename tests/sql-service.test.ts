@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { createApi } from '../apps/api/src/app.js';
 import type { GenerateResult, ParseResult, SqlDialect } from '@erd/sql-contract';
 import { DialectRegistry, SqlService } from '@erd/sql-service';
-import { applyCommand, validateDocumentStructure } from '@erd/model';
+import { applyCommand, documentExpressions, validateDocumentStructure } from '@erd/model';
 import { sampleDocument } from '@erd/test-fixtures';
 
 const target = sampleDocument.target;
@@ -66,7 +66,11 @@ it('delegates all operations to a second adapter through the registry', async ()
   const registry = new DialectRegistry();
   registry.register(adapter);
   const service = new SqlService(registry);
-  const document = { ...sampleDocument, target: other };
+  const document = structuredClone(sampleDocument);
+  document.target = other;
+  for (const { expression } of documentExpressions(document)) {
+    Object.assign(expression, other);
+  }
   const input = { ...parseRequest, target: other };
   const output = { document, target: other };
   expect(service.capabilities(other)).toEqual({});

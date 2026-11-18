@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, chownSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, chownSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, it } from 'vitest';
 import { inspectPostgresql } from '../packages/dialect-postgresql/src/parser.js';
@@ -12,22 +12,37 @@ it('executes fixture DDL on PostgreSQL 17 and inspects its actual schema-only du
   const gid = rootUser ? postgresId('-g') : process.getgid?.();
   const output = resolve('build');
   mkdirSync(output, { recursive: true });
-  const base = mkdtempSync(resolve(output, 'pg-stage1-'));
+  const base = mkdtempSync(resolve(output, 'pg-'));
   const data = resolve(base, 'data');
   const socket = base;
+  const serverLog = resolve(base, 'server.log');
   const port = '55432';
   const connection = ['-h', socket, '-p', port, '-U', 'postgres', '-d', 'postgres'];
   const run = (name: string, args: string[], input?: string) => execFileSync(name, args, {
     uid, gid, input, encoding: 'utf8', timeout: 15_000, stdio: ['pipe', 'pipe', 'pipe'],
   });
+  const stopPostgresql = () => {
+    try {
+      run('pg_ctl', ['-D', data, '-w', 'status']);
+    } catch (error) {
+      if ((error as { status?: number }).status === 3) return;
+      throw error;
+    }
+    run('pg_ctl', ['-D', data, '-w', '-m', 'immediate', 'stop']);
+  };
   let initialized = false;
   try {
     if (rootUser && uid !== undefined && gid !== undefined) chownSync(base, uid, gid);
     chmodSync(base, 0o700);
     run('initdb', ['-D', data, '-U', 'postgres', '-A', 'trust', '--no-locale']);
     initialized = true;
-    run('pg_ctl', ['-D', data, '-l', resolve(base, 'server.log'), '-w', 'start', '-o',
-      '-c listen_addresses= -c unix_socket_directories=' + quote(socket) + ' -p ' + port]);
+    try {
+      run('pg_ctl', ['-D', data, '-l', serverLog, '-w', 'start', '-o',
+        '-c listen_addresses= -c unix_socket_directories=' + quote(socket) + ' -p ' + port]);
+    } catch (error) {
+      if (!existsSync(serverLog)) throw error;
+      throw new Error('PostgreSQL startup failed:\n' + readFileSync(serverLog, 'utf8'), { cause: error });
+    }
     const query = (sql: string) => run('psql', [...connection, '-X', '-At', '-v', 'ON_ERROR_STOP=1'], sql).trim();
     expect(query('SHOW server_version_num')).toMatch(/^17\d{4}$/);
     query(schemaDdl);
@@ -47,15 +62,7 @@ it('executes fixture DDL on PostgreSQL 17 and inspects its actual schema-only du
     expect(result.statementKinds).toEqual(expect.arrayContaining(['VariableSetStmt', 'AlterTableStmt', 'CreateEnumStmt', 'CreateSeqStmt', 'IndexStmt']));
   } finally {
     try {
-      if (initialized) {
-        try {
-          run('pg_ctl', ['-D', data, '-w', 'status']);
-        } catch (error) {
-          if ((error as { status?: number }).status !== 3) throw error;
-          initialized = false;
-        }
-        if (initialized) run('pg_ctl', ['-D', data, '-w', '-m', 'immediate', 'stop']);
-      }
+      if (initialized) stopPostgresql();
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
