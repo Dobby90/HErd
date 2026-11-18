@@ -88,4 +88,4 @@ TypeScript 기반 웹·API 개발 환경, ERD 원본 모델, SQL dialect 계약�
 
 > docs/README.md와 docs/00-scope-and-architecture.md를 읽고, docs/01-foundation-and-domain.md에 따라 1단계를 구현해줘. 명시된 검증을 실행하고 실제 완료한 항목과 남은 제약을 기록해줘.
 
-구현 기록: 미착수.
+구현 기록: pnpm 워크스페이스, ERD v1 모델, SQL registry, 샘플 웹·API와 PostgreSQL 17 파서 PoC를 추가했다. 호스트 의존성 준비에서 lockfile을 생성했다. 개발 서버와 빌드, 모델 검사, 워커와 실제 DB·덤프 결과는 검증 단계에서 확인한다. 현재 인증 후보와 검증 범위는 [PostgreSQL 지원 상태](./sql-support/postgresql.md)에 기록했다.
