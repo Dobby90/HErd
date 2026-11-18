@@ -15,6 +15,22 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
+it('keeps the development and Docker validation toolchain pins aligned', async () => {
+  const [packageJson, environmentJson, nodeVersionFile] = await Promise.all([
+    readFile('package.json', 'utf8'),
+    readFile('devorchestra.environment.json', 'utf8'),
+    readFile('.node-version', 'utf8'),
+  ]);
+  const manifest = JSON.parse(packageJson);
+  const environment = JSON.parse(environmentJson);
+  expect(environment.node).toBe(process.versions.node);
+  expect(nodeVersionFile.trim()).toBe(environment.node);
+  expect(manifest.engines.node).toBe(environment.node);
+  expect(environment.pnpm).toMatch(/^\d+\.\d+\.\d+$/);
+  expect(manifest.engines.pnpm).toBe(environment.pnpm);
+  expect(manifest.packageManager).toBe('pnpm@' + environment.pnpm);
+});
+
 it('starts both development servers, proxies API requests and shuts down', async () => {
   expect(config.server?.proxy?.['/api']).toBeDefined();
   const apiPort = await freePort();

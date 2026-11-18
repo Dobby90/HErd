@@ -33,6 +33,9 @@ it('preserves renamed expressions and rejects a command with broken references',
     id: 'broken', namespaceId: 'missing', physicalName: 'broken', columnIds: [],
   } });
   expect(rejected).toMatchObject({ applied: false, document: sampleDocument, undo: null });
+  expect(rejected.diagnostics).toEqual([
+    expect.objectContaining({ code: 'missing-namespace', severity: 'error', objectId: 'broken' }),
+  ]);
 });
 
 it('round-trips enum and sequence references with typed column attributes', () => {

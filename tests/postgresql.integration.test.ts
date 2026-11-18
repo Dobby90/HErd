@@ -5,6 +5,7 @@ import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { expect, it } from 'vitest';
 import { inspectPostgresql } from '@erd/dialect-postgresql/parser';
+import { postgresqlMetadata } from '@erd/dialect-postgresql/ui';
 import { schemaDdl } from '../packages/test-fixtures/src/postgresql.js';
 
 it('executes fixture DDL on PostgreSQL 17 and inspects its actual schema-only dump', async () => {
@@ -46,7 +47,10 @@ it('executes fixture DDL on PostgreSQL 17 and inspects its actual schema-only du
       throw new Error('PostgreSQL startup failed:\n' + readFileSync(serverLog, 'utf8'), { cause: error });
     }
     const query = (sql: string) => run('psql', [...connection, '-X', '-At', '-v', 'ON_ERROR_STOP=1'], sql).trim();
-    expect(query('SHOW server_version_num')).toMatch(/^17\d{4}$/);
+    const serverVersion = query('SHOW server_version_num');
+    expect(serverVersion).toMatch(/^17\d{4}$/);
+    const serverMajor = Math.floor(Number(serverVersion) / 10_000);
+    expect(postgresqlMetadata.profiles).toContainEqual({ version: String(serverMajor), status: 'certified' });
     query(schemaDdl);
     expect(query("SELECT count(*) FROM pg_tables WHERE schemaname = 'stage1'")).toBe('3');
     expect(query("SELECT count(*) FROM pg_constraint WHERE connamespace = 'stage1'::regnamespace AND contype = 'f'")).toBe('1');
@@ -60,6 +64,7 @@ it('executes fixture DDL on PostgreSQL 17 and inspects its actual schema-only du
     await expect(inspectPostgresql(dump)).rejects.toThrow(/syntax error/i);
     const sqlOnly = lines.filter(line => !/^\\(?:un)?restrict\s/.test(line)).join('\n');
     const result = await inspectPostgresql(sqlOnly);
+    expect(Math.floor(result.version / 10_000)).toBe(serverMajor);
     expect(result.tables).toEqual(expect.arrayContaining(['Users', 'Orders', 'OrderItems']));
     expect(result.statementKinds).toEqual(expect.arrayContaining(['VariableSetStmt', 'AlterTableStmt', 'CreateEnumStmt', 'CreateSeqStmt', 'IndexStmt']));
   } finally {
