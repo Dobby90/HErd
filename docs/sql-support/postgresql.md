@@ -12,7 +12,7 @@
 | 일반·고유·식 인덱스 | 지원 | 컬럼·식 키 순서와 부분 인덱스 조건 편집 | `not-implemented` (5단계 예정) | `not-implemented` (4단계 예정) |
 | ENUM·SEQUENCE·IDENTITY | 지원 | 기존 데이터 보존 | `not-implemented` (5단계 예정) | `not-implemented` (4단계 예정) |
 
-2단계 편집 범위는 구현 후보 기준이며 호스트 검증 결과를 기다립니다. UI와 서버 adapter는 동일한 PostgreSQL 의미 검증을 사용합니다. 빈 이름, 명명 범위 내 중복과 참조 불가 후보키를 객체별로 표시합니다.
+2단계 이전 후보는 `step-79`에서 PostgreSQL 17 통합 검증을 통과했습니다. 리뷰 수정 후보에는 정수 자식에서 NUMERIC 부모로의 암시적 변환과 날짜·시간 타입 간 FK 비교가 포함되며, 호스트 재검증을 기다립니다. UI와 서버 adapter는 동일한 PostgreSQL 의미 검증을 사용합니다. 빈 이름, 명명 범위 내 중복과 참조 불가 후보키를 객체별로 표시합니다.
 
 adapter의 import/export는 `not-implemented`를 반환합니다. 등록되지 않은 dialect와 인증되지 않은 엔진 버전은 실패 진단을 반환합니다. 알 수 없는 버전의 확장과 무효화된 식은 문서에 보존되고 SQL 생성은 차단됩니다.
 

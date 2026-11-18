@@ -97,12 +97,12 @@
 
 2단계 구현 후보에는 스키마 명령과 실행 취소·다시 실행, React Flow 기반 뷰, PostgreSQL 17 타입·후보키 검증, IndexedDB 복구가 포함된다. 설치·실행 방법과 탭 충돌 시 복구본 선택 방법은 [저장소 README](../README.md)에서 확인할 수 있다. ENUM·SEQUENCE·IDENTITY는 v1 데이터로 보존한다. DDL 입출력과 해당 기능의 검증은 이후 단계에서 진행한다.
 
-호스트의 Docker 환경 준비에서 Chromium과 선언한 의존성을 설치하고 pnpm lockfile을 생성했다. 검증 결과는 후속 Tester가 기록할 예정이다.
+호스트의 Docker 환경 준비에서 Chromium과 선언한 의존성을 설치하고 pnpm lockfile을 생성했다. 호스트 검증 `step-79`는 후보 `6271e398be280d49642c8c7a426296b6e4ed39fc`의 영향 범위에서 다음 결과를 기록했다.
 
-| 호스트 명령 | 결과 또는 보고서 |
-| --- | --- |
-| `build_1`, `build_2`, `build_3` | 빌드·타입 검사·lint 결과 대기 |
-| `node-test_4` | 모델·브라우저 Vitest 결과 대기. `build/test.xml` |
-| `node-test_5` | PostgreSQL 17 통합 Vitest 결과 대기. `build/test_integration.xml` |
+| 호스트 명령 | 실행 | 결과 및 보고서 |
+| --- | --- | --- |
+| `build_1`, `build_2`, `build_3` | `pnpm run build`, `pnpm run typecheck`, `pnpm run lint` | 모두 통과 |
+| `node-test_4` | `pnpm run test --run --reporter=junit --outputFile=build/test.xml` | 34개 통과, 실패·건너뜀 0개. `build/test.xml` |
+| `node-test_5` | `pnpm run test:integration --run --reporter=junit --outputFile=build/test_integration.xml` | 1개 통과, 실패·건너뜀 0개. `build/test_integration.xml` |
 
-완료 체크리스트는 후보에 대한 호스트 검증 결과가 확인되면 갱신한다.
+리뷰 후 수정한 후보에는 충돌별 복구본 보존, 손상된 복구본 재시도, 식 인덱스의 여러 줄 SQL 보존, 방향키 이동 이력과 FK 자료형 검증 보완이 포함된다. 이 후보의 호스트 재검증과 인수 기준 확인 후 완료 체크리스트를 갱신한다.
