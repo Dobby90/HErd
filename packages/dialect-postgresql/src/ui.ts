@@ -63,19 +63,28 @@ const aliases: Record<string, string> = {
 };
 const integer = new Set(['smallint', 'integer', 'bigint']);
 const text = new Set(['text', 'varchar']);
+const datetime = new Set(['date', 'timestamp', 'timestamptz']);
 
 function compatible(source: ColumnType, target: ColumnType): boolean {
   const a = source.reference;
   const b = target.reference;
   if (Boolean(source.arrayDimensions) !== Boolean(target.arrayDimensions)) return false;
   if (a.kind === 'enum' || b.kind === 'enum') return a.kind === 'enum' && b.kind === 'enum' && a.enumId === b.enumId;
-  const aName = aliases[a.name] ?? a.name;
-  const bName = aliases[b.name] ?? b.name;
   const aNamespace = a.namespace ?? 'pg_catalog';
   const bNamespace = b.namespace ?? 'pg_catalog';
   if (aNamespace !== bNamespace) return false;
-  return aName === bName || (aNamespace === 'pg_catalog' && !source.arrayDimensions &&
-    ((integer.has(aName) && integer.has(bName)) || (text.has(aName) && text.has(bName))));
+  if (aNamespace !== 'pg_catalog') return a.name === b.name;
+
+  const sourceName = aliases[a.name] ?? a.name;
+  const targetName = aliases[b.name] ?? b.name;
+  if (sourceName === targetName) return true;
+  if (source.arrayDimensions) return false;
+
+  // PostgreSQL uses equality in the referenced key's operator family, or
+  // implicitly casts the source to the key's comparison type.
+  return (integer.has(sourceName) && (integer.has(targetName) || targetName === 'numeric')) ||
+    (text.has(sourceName) && text.has(targetName)) ||
+    (datetime.has(sourceName) && datetime.has(targetName));
 }
 
 function validateForeignKey(document: ErdDocument, key: ForeignKey): Diagnostic[] {

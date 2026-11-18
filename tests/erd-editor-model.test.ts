@@ -100,6 +100,27 @@ it('keeps composite FK mappings and derives optionality and uniqueness using dia
   }));
 });
 
+it('validates directed PostgreSQL FK coercion and cross-type datetime equality', () => {
+  const document = structuredClone(sampleDocument);
+  const source = document.catalog.columns.find(column => column.id === 'item-product-id');
+  const target = document.catalog.columns.find(column => column.id === 'product-id');
+  const key = document.catalog.constraints.find(item => item.id === 'item-product');
+  if (!source || !target || key?.kind !== 'fk') throw new Error('Missing sample FK');
+
+  source.type.reference = { kind: 'native', name: 'integer' };
+  target.type.reference = { kind: 'native', name: 'numeric' };
+  expect(postgresqlEditor.validateForeignKey(document, key)).toEqual([]);
+  source.type.reference = { kind: 'native', name: 'numeric' };
+  target.type.reference = { kind: 'native', name: 'integer' };
+  expect(postgresqlEditor.validateForeignKey(document, key)).toMatchObject([
+    { code: 'postgresql-incompatible-foreign-key-types', objectId: key.id },
+  ]);
+
+  source.type.reference = { kind: 'native', name: 'timestamptz' };
+  target.type.reference = { kind: 'native', name: 'date' };
+  expect(postgresqlEditor.validateForeignKey(document, key)).toEqual([]);
+});
+
 it('previews and removes dependencies atomically while keeping unsafe expressions and references intact', () => {
   const document = structuredClone(sampleDocument);
   document.catalog.sequences.push({ id: 'seq', physicalName: 'owner_seq', namespaceId: 'public-schema', ownedByColumnId: 'user-id' });

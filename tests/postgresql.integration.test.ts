@@ -46,7 +46,7 @@ it('executes fixture DDL on PostgreSQL 17 and inspects its actual schema-only du
       if (!existsSync(serverLog)) throw error;
       throw new Error('PostgreSQL startup failed:\n' + readFileSync(serverLog, 'utf8'), { cause: error });
     }
-    const query = (sql: string) => run('psql', [...connection, '-X', '-At', '-v', 'ON_ERROR_STOP=1'], sql).trim();
+    const query = (sql: string) => run('psql', [...connection, '-X', '-At', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=verbose'], sql).trim();
     const serverVersion = query('SHOW server_version_num');
     expect(serverVersion).toMatch(/^17\d{4}$/);
     const serverMajor = Math.floor(Number(serverVersion) / 10_000);
@@ -57,6 +57,18 @@ it('executes fixture DDL on PostgreSQL 17 and inspects its actual schema-only du
     expect(query("SELECT count(*) FROM pg_sequences WHERE schemaname = 'stage1'")).toBe('2');
     expect(query("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'stage1' AND is_identity = 'YES'")).toBe('1');
     expect(query("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'stage1' AND data_type IN ('jsonb', 'uuid', 'ARRAY')")).toBe('3');
+    query(`
+      CREATE TEMP TABLE fk_numeric_parent (id numeric PRIMARY KEY);
+      CREATE TEMP TABLE fk_integer_child (id integer REFERENCES fk_numeric_parent);
+      INSERT INTO fk_numeric_parent VALUES (42);
+      INSERT INTO fk_integer_child VALUES (42);
+      CREATE TEMP TABLE fk_date_parent (id date PRIMARY KEY);
+      CREATE TEMP TABLE fk_datetime_child (id timestamptz REFERENCES fk_date_parent);
+    `);
+    expect(() => query(`
+      CREATE TEMP TABLE fk_integer_parent (id integer PRIMARY KEY);
+      CREATE TEMP TABLE fk_numeric_child (id numeric REFERENCES fk_integer_parent);
+    `)).toThrow(/42804:.*foreign key constraint .* cannot be implemented/i);
     const dump = run('pg_dump', [...connection, '--schema-only', '--schema=stage1']);
     const lines = dump.split(/\r?\n/);
     const meta = lines.filter(line => line.startsWith('\\'));
