@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   root: resolve(import.meta.dirname, 'apps/web'),
-  cacheDir: resolve(import.meta.dirname, 'node_modules/.cache/erd-web'),
+  cacheDir: resolve(import.meta.dirname, 'build/cache/erd-web'),
   esbuild: { jsx: 'automatic' },
   server: {
     host: '127.0.0.1',

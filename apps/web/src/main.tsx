@@ -1,7 +1,8 @@
 import { createRoot } from 'react-dom/client';
-import { SampleApp } from './sample-app.js';
+import { Editor } from './editor.js';
+import '@xyflow/react/dist/style.css';
 import './style.css';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing application root');
-createRoot(root).render(<SampleApp />);
+createRoot(root).render(<Editor />);

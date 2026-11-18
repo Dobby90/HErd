@@ -3,6 +3,8 @@
   "type": "module",
   "name": "@erd/web",
   "dependencies": {
+    "@xyflow/react": "12.10.0",
+    "@erd/sql-contract": "workspace:*",
     "react": "19.2.1",
     "react-dom": "19.2.1",
     "@erd/model": "workspace:*",

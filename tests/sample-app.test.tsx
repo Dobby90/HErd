@@ -1,11 +1,11 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from 'vitest';
 import { createApi } from '../apps/api/src/app.js';
-import { SampleApp } from '../apps/web/src/sample-app.js';
+import { Editor } from '../apps/web/src/editor.js';
 
-it('renders the validated sample with both views and all four tables', () => {
-  const html = renderToStaticMarkup(<SampleApp />);
-  for (const text of ['구조 검증 통과', 'users', 'orders', 'order_items', 'products', '주문 전체', '상품 연결']) {
+it('opens the editor on the validated sample with both views and all four tables', () => {
+  const html = renderToStaticMarkup(<Editor />);
+  for (const text of ['새 문서', '속성', '구조 검증 통과', 'users', 'orders', 'order_items', 'products', '주문 전체', '상품 연결']) {
     expect(html).toContain(text);
   }
 });

@@ -37,7 +37,8 @@ export function deletionImpact(document: ErdDocument, objectId: string) {
       if (instance.tableId === table?.id) {
         removed.add(instance.id);
         views.add(view.id);
-      } else if (instance.visibleColumnIds?.some(id => columns.has(id))) views.add(view.id);
+      } else if (column && instance.tableId === column.tableId &&
+          (!instance.visibleColumnIds || instance.visibleColumnIds.includes(column.id))) views.add(view.id);
     }
   }
   const blockedBy = new Set<string>();
@@ -48,7 +49,7 @@ export function deletionImpact(document: ErdDocument, objectId: string) {
   }
   for (const { ownerId, expression } of documentExpressions(document)) {
     if (removed.has(ownerId)) continue;
-    if (expression.references?.some(id => removed.has(id)) || !expression.referencesComplete) blockedBy.add(ownerId);
+    if (!expression.referencesComplete || !expression.references || expression.references.some(id => removed.has(id))) blockedBy.add(ownerId);
   }
   return { removed, views, columns, detachedSequences: detachedSequences.map(item => item.id), blockedBy: [...blockedBy] };
 }
