@@ -14,7 +14,8 @@ export interface AuthSettings {
 export const defaultDocumentLimits = { bytes: 20 * 1024 * 1024, tables: 1000, columns: 20_000, relationships: 5000 };
 export type DocumentLimits = typeof defaultDocumentLimits;
 export const defaultSqlJobSettings = { timeoutMs: 10_000, ttlMs: 10 * 60_000, userLimit: 2, workers: 2 };
-export type SqlJobSettings = typeof defaultSqlJobSettings;
+export const defaultSqlInputBytes = 5 * 1024 * 1024;
+export type SqlJobSettings = typeof defaultSqlJobSettings & { maxInputBytes?: number };
 
 function readLimit(env: NodeJS.ProcessEnv, key: string, fallback: number) {
   const value = env[key] === undefined ? fallback : Number(env[key]);
@@ -64,6 +65,7 @@ export function readConfig(env: NodeJS.ProcessEnv) {
     ttlMs: readLimit(env, 'SQL_JOB_TTL_MS', defaultSqlJobSettings.ttlMs),
     userLimit: readLimit(env, 'SQL_JOB_USER_LIMIT', defaultSqlJobSettings.userLimit),
     workers: readLimit(env, 'SQL_JOB_WORKERS', defaultSqlJobSettings.workers),
+    maxInputBytes: readLimit(env, 'SQL_JOB_MAX_INPUT_BYTES', defaultSqlInputBytes),
   };
   return { databaseUrl: env.DATABASE_URL, auth: { origin: webOrigin.origin, devLogin, oidc }, limits, jobs };
 }

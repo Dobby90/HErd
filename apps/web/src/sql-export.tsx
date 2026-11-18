@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ErdDocument } from '@erd/model';
-import type { DialectProfile, GenerateJobOptions, SqlJob } from '@erd/sql-contract';
+import type { DialectProfile, GenerateJobOptions, GenerateSqlJob } from '@erd/sql-contract';
 import { Modal } from './editor-fields.js';
 import { apiRequest } from './project-api.js';
 import type { ServerDocument } from './project-api.js';
 
-const labels: Record<SqlJob['state'], string> = {
+const labels: Record<GenerateSqlJob['state'], string> = {
   queued: '대기 중', running: '생성 중', succeeded: '완료', failed: '실패', cancelled: '취소됨',
 };
 const objects = { namespaces: '스키마', tables: '테이블', columns: '컬럼', constraints: '제약', indexes: '인덱스', enums: 'ENUM', sequences: '시퀀스' };
-const active = (job?: SqlJob) => job?.state === 'queued' || job?.state === 'running';
+const active = (job?: GenerateSqlJob) => job?.state === 'queued' || job?.state === 'running';
 const failure = (error: unknown) => error instanceof Error ? error.message : 'SQL 작업을 처리하지 못했습니다.';
 
 export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, disabled, viewer, prepare }: {
@@ -17,7 +17,7 @@ export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, 
   disabled: boolean; viewer: boolean; prepare(): Promise<ServerDocument>;
 }) {
   const [open, setOpen] = useState(false);
-  const [job, setJob] = useState<SqlJob>();
+  const [job, setJob] = useState<GenerateSqlJob>();
   const [fileName, setFileName] = useState('');
   const [scope, setScope] = useState<'all' | 'view' | 'tables'>('all');
   const [select, setSelect] = useState<string[]>([]);
@@ -30,7 +30,7 @@ export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, 
   const [copied, setCopied] = useState(false);
   const [expired, setExpired] = useState(false);
   const submission = useRef<{ signature: string; mutationId: string } | undefined>(undefined);
-  const currentJob = useRef<SqlJob | undefined>(undefined);
+  const currentJob = useRef<GenerateSqlJob | undefined>(undefined);
   currentJob.current = job;
   const live = active(job);
   const working = busy || live;
@@ -59,7 +59,7 @@ export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, 
     if (!job || !live || pollError) return;
     let current = true;
     const timer = setTimeout(() => {
-      void apiRequest<SqlJob>('/sql/jobs/' + job.id).then(next => {
+      void apiRequest<GenerateSqlJob>('/sql/jobs/' + job.id).then(next => {
         if (current) setJob(previous => previous?.id === next.id && active(previous) ? next : previous);
       }, error => { if (current) setPollError(failure(error)); });
     }, 300);
@@ -114,7 +114,7 @@ export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, 
       const payload = { kind: 'generate', erdId: saved.document.id, revision: saved.revision, options };
       const signature = JSON.stringify(payload);
       if (submission.current?.signature !== signature) submission.current = { signature, mutationId: crypto.randomUUID() };
-      const next = await apiRequest<SqlJob>('/projects/' + projectId + '/sql/jobs', {
+      const next = await apiRequest<GenerateSqlJob>('/projects/' + projectId + '/sql/jobs', {
         method: 'POST', csrf, body: { ...payload, mutationId: submission.current.mutationId },
       });
       submission.current = undefined;
@@ -133,7 +133,7 @@ export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, 
     setBusy(true);
     setPollError('');
     try {
-      const cancelled = await apiRequest<SqlJob>('/sql/jobs/' + job.id, { method: 'DELETE', csrf });
+      const cancelled = await apiRequest<GenerateSqlJob>('/sql/jobs/' + job.id, { method: 'DELETE', csrf });
       if (currentJob.current?.id === job.id) setJob(cancelled);
     } catch (error) {
       setError(failure(error));

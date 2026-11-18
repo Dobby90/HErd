@@ -83,14 +83,34 @@ PostgreSQL SQL 텍스트 또는 `.sql` 파일을 분석하고, 변환 결과·�
 6. 분석 중 취소·timeout·원본 문서 수정·권한 회수·작업 만료·apply 재시도에서 데이터 손실이나 중복 생성이 없다.
 7. 사용자 SQL이 서비스 DB에서 실행되지 않는지 확인한다. 실행 검증은 저장소의 통제된 fixture만 사용한다.
 
+### 검증 결과
+
+2026-11-18 Docker에서 Node.js 24.12.0, pnpm 10.11.0, PostgreSQL 17.12와 Chromium 156.0.8078.79를 사용했다. 클린 설치, 빌드, 타입 검사, lint, 기본 테스트 43개, 통합 테스트 9개가 통과했다. 운영 빌드의 worker에서 가져오기 작업도 실행했다.
+
+| 기준 | 판정 | 확인 내용 |
+| --- | --- | --- |
+| 1. 모델·SQL·모델 의미 비교 | 통과 | 4단계 전체·부분 fixture의 생성 SQL을 분석한 후 재생성했다. 내부 ID·배치와 문장 순서를 제외한 전체 DDL이 일치했다. [왕복 테스트](../tests/ddl-import.test.ts) |
+| 2. 실제 스키마 덤프 | 통과 | PostgreSQL 17.12에서 채집한 fixture와 새 `pg_dump --schema-only`의 변환 결과가 일치했다. 재생성한 별도 DB도 타입·기본값·제약·설명·ENUM·시퀀스 catalog가 원본과 같았다. [덤프 fixture](../packages/test-fixtures/sql/postgresql-17-schema.sql), [덤프 검증](../tests/ddl-import.integration.test.ts) |
+| 3. 원문 위치와 리터럴 | 통과 | 중첩 주석, 인용 식별자, UTF-8 BOM, 줄바꿈·따옴표·세미콜론이 포함된 리터럴을 검증했다. 문법 오류와 차단된 psql 명령이 원문 위치를 가리켰다. [전처리 테스트](../tests/ddl-import.test.ts) |
+| 4. 제약·스키마·보조 객체 | 통과 | 복합·자기·순환 FK, 스키마가 다른 동명 테이블, `USING INDEX` 정규화, ENUM, SERIAL과 시퀀스 소유권, 이름과 옵션이 있는 IDENTITY를 확인했다. [왕복 테스트](../tests/ddl-import.test.ts), [덤프 검증](../tests/ddl-import.integration.test.ts) |
+| 5. 손실·무시·오류 | 통과 | 지원 문장과 덤프 제어문, 제외된 view, 중복·미해결 의존성을 분리했다. 제외 항목의 확인이 없거나 다른 결과의 fingerprint를 보내면 적용을 차단했다. 입력 수정 후 이전 확인은 초기화됐다. [API 검증](../tests/sql-import-jobs.integration.test.ts), [브라우저 검증](../tests/ddl-import-browser.integration.test.ts) |
+| 6. 작업 수명과 안전한 적용 | 통과 | 취소·시간 초과·권한 회수·만료된 분석의 적용을 차단했다. 동시 교체 중 한 건만 저장됐고 스냅샷은 한 건만 남았다. 응답 유실 후 같은 mutation은 분석 만료 뒤에도 중복 생성 없이 원래 성공 결과를 받았다. 브라우저에서 늦게 도착한 분석 응답과 리비전 충돌도 확인했다. [API 검증](../tests/sql-import-jobs.integration.test.ts), [브라우저 검증](../tests/ddl-import-browser.integration.test.ts) |
+| 7. 사용자 SQL과 서비스 DB 격리 | 통과 | 분석과 적용에 전달한 식별 테이블이 서비스 DB에 실제 생성되지 않았다. SQL 실행 검증에는 저장소의 고정 fixture와 격리된 테스트 DB만 사용했다. [DB 격리 검증](../tests/sql-import-jobs.integration.test.ts) |
+
 ## 완료 기준
 
-- [ ] SQL 입력→분석→미리보기→적용 흐름이 동작한다.
-- [ ] 지원 범위의 의미 비교와 인증 버전 dump 검증을 통과한다.
-- [ ] 미지원·무시·오류가 분리되고 조용한 손실이 없다.
-- [ ] replace 전 이력·revision·멱등성이 원자적으로 처리된다.
-- [ ] 입력 크기·작업 시간·취소·TTL이 실제로 적용된다.
-- [ ] `docs/sql-support/postgresql.md`에 import 범위와 남은 제한을 갱신했다.
+- [x] SQL 입력→분석→미리보기→적용 흐름이 동작한다.
+- [x] 지원 범위의 의미 비교와 인증 버전 dump 검증을 통과한다.
+- [x] 미지원·무시·오류가 분리되고 조용한 손실이 없다.
+- [x] replace 전 이력·revision·멱등성이 원자적으로 처리된다.
+- [x] 입력 크기·작업 시간·취소·TTL이 실제로 적용된다.
+- [x] `docs/sql-support/postgresql.md`에 import 범위와 남은 제한을 갱신했다.
+
+## 실행과 적용 설정
+
+- `pnpm db:migrate`로 기존 서비스 DB에 가져오기 마이그레이션을 적용한다. 분석 요청은 `POST /api/projects/:projectId/sql/jobs`에 `kind: parse`, `target`, `defaultNamespace`, `sql`, `mutationId`를 보낸다. editor와 owner가 작업을 생성·조회·적용할 수 있다. 기본 제한은 5 MiB, 10,000문장, 실행 10초, 결과 보관 10분이다. 입력 바이트는 `SQL_JOB_MAX_INPUT_BYTES`로 설정하며 시간·보관·활성 작업 상한은 내보내기와 공유한다. [환경 예시](../.env.example), [작업 API](../apps/api/src/sql-jobs.ts)
+- `POST /api/sql/jobs/:jobId/apply`에서 `mode: create`에는 `name`, `mode: replace`에는 `erdId`와 `baseRevision`을 사용한다. 두 방식에 `mutationId`가 필요하다. 제외 항목을 받아들이려면 해당 결과의 `lossFingerprint`를 보낸다. 성공 응답의 `{ erdId, revision, updatedAt }`은 별도 테이블에 24시간 보관한다. [적용 API](../apps/api/src/sql-import-apply.ts), [마이그레이션](../db/migrations/003-sql-import.sql)
+- 교체는 원래 문서 ID와 제목을 유지하고 가져온 객체의 새 ID와 기본 뷰를 적용한다. 이전 모델과 배치는 `before-import` 스냅샷에 보존하고, 현재 편집 세션의 실행 취소 이력과 복구본을 새 리비전으로 초기화한다. 기본 뷰는 한 행에 테이블 네 개를 배치하고 컬럼 수를 기준으로 행 높이를 계산한다. [지원 범위](./sql-support/postgresql.md#postgresql-17-ddl-import)
 
 ## 다음 단계와 개발 요청 예시
 
@@ -98,4 +118,4 @@ PostgreSQL SQL 텍스트 또는 `.sql` 파일을 분석하고, 변환 결과·�
 
 > docs/README.md와 docs/00-scope-and-architecture.md를 읽고, docs/05-postgresql-ddl-import.md의 5단계를 구현해줘. 외부 ERD 파일 호환은 추가하지 말고, 지원 DDL의 보존·진단·원자적 적용·멱등성을 검증해줘.
 
-구현 기록: 미착수.
+PostgreSQL adapter `0.3.0`은 UTF-8 생성 DDL과 PostgreSQL 17 plain schema-only 덤프의 테이블 중심 구조를 분석한다. [현재 지원 범위](./sql-support/postgresql.md)

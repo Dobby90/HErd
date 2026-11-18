@@ -1,25 +1,32 @@
 import { existsSync } from 'node:fs';
 import { Worker } from 'node:worker_threads';
 import type { ErdDocument } from '@erd/model';
-import type { GenerateRequest, SqlJob, SqlJobOutput } from '@erd/sql-contract';
+import type { GenerateRequest, GenerateSqlJob, ParseJobOutput, ParseRequest, ParseSqlJob, SqlJobOutput } from '@erd/sql-contract';
 import type { Pool } from 'pg';
+import { defaultSqlInputBytes } from './config.js';
 import type { SqlJobSettings } from './config.js';
 
 const stopped = (code: string, message: string): SqlJobOutput => ({
   diagnostics: [{ code, message, severity: 'error' }], dependencies: [],
 });
-type Completion = { state: 'succeeded' | 'failed'; output: SqlJobOutput };
-type Claimed = Pick<SqlJob, 'id' | 'options' | 'target'> & { snapshot: ErdDocument };
+type Completion = { state: 'succeeded' | 'failed'; output: SqlJobOutput | ParseJobOutput };
+type Claimed = (Pick<GenerateSqlJob, 'id' | 'options' | 'target' | 'kind'> & { snapshot: ErdDocument }) |
+  (Pick<ParseSqlJob, 'id' | 'options' | 'target' | 'kind'> & { snapshot: { sql: string } });
 const workerFailure: Completion = { state: 'failed', output: stopped('SQL_WORKER_ERROR', 'SQL 작업이 완료되지 않았습니다.') };
 const workerTimeout: Completion = { state: 'failed', output: stopped('SQL_JOB_TIMEOUT', 'SQL 작업의 실행 제한 시간을 초과했습니다.') };
 
-async function generate(job: Claimed, timeoutMs: number, signal: AbortSignal): Promise<Completion | undefined> {
+async function executeSql(job: Claimed, settings: SqlJobSettings, signal: AbortSignal): Promise<Completion | undefined> {
   if (signal.aborted) return;
   const source = new URL('./sql-worker-dev.mjs', import.meta.url);
   const worker = new Worker(existsSync(source) ? source : new URL('./sql-worker.js', import.meta.url), {
     env: {},
     resourceLimits: { maxOldGenerationSizeMb: 256, stackSizeMb: 4 },
-    workerData: {
+    workerData: job.kind === 'parse' ? {
+      kind: 'parse', jobId: job.id,
+      request: { sql: job.snapshot.sql, target: job.target, defaultNamespace: job.options.defaultNamespace,
+        limits: { maxBytes: settings.maxInputBytes ?? defaultSqlInputBytes } } satisfies ParseRequest,
+    } : {
+      kind: 'generate',
       request: { document: job.snapshot, target: job.target, tableIds: job.options.tableIds,
         options: { includeComments: job.options.includeComments } } satisfies GenerateRequest,
       previewOnly: job.options.previewOnly ?? false,
@@ -32,7 +39,7 @@ async function generate(job: Claimed, timeoutMs: number, signal: AbortSignal): P
       abort = () => resolve(undefined);
       signal.addEventListener('abort', abort, { once: true });
       if (signal.aborted) abort();
-      timer = setTimeout(() => resolve(workerTimeout), timeoutMs);
+      timer = setTimeout(() => resolve(workerTimeout), settings.timeoutMs);
       worker.once('message', (result: Completion) => resolve(result));
       worker.once('error', () => resolve(workerFailure));
       worker.once('exit', () => resolve(workerFailure));
@@ -83,6 +90,7 @@ export class SqlQueue {
       AND started_at <= clock_timestamp() - $3 * interval '1 millisecond'`,
     [JSON.stringify(workerTimeout.output), this.settings.ttlMs, this.settings.timeoutMs * 2]);
     await this.pool.query('DELETE FROM sql_jobs WHERE expires_at <= clock_timestamp()');
+    await this.pool.query('DELETE FROM sql_import_mutations WHERE expires_at <= clock_timestamp()');
   }
 
   wake() {
@@ -102,7 +110,7 @@ export class SqlQueue {
         const { rows: [job] } = await this.pool.query<Claimed>(`WITH next AS (
           SELECT id FROM sql_jobs WHERE state = 'queued' ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
         ) UPDATE sql_jobs j SET state = 'running', started_at = clock_timestamp() FROM next WHERE j.id = next.id
-          RETURNING j.id, j.options, j.target, j.snapshot`);
+          RETURNING j.id, j.kind, j.options, j.target, j.snapshot`);
         if (!job || this.closed) break;
         const controller = new AbortController();
         const task = this.execute(job, controller.signal).catch(this.onError).finally(() => {
@@ -117,7 +125,7 @@ export class SqlQueue {
   private async execute(job: Claimed, signal: AbortSignal) {
     const { rowCount } = await this.pool.query("SELECT 1 FROM sql_jobs WHERE id = $1 AND state = 'running'", [job.id]);
     if (!rowCount || signal.aborted) return;
-    const outcome = await generate(job, this.settings.timeoutMs, signal).catch(() => workerFailure);
+    const outcome = await executeSql(job, this.settings, signal).catch(() => workerFailure);
     if (!outcome || signal.aborted) return;
     await this.pool.query(`UPDATE sql_jobs SET state = $2, snapshot = NULL, output = $3,
       expires_at = clock_timestamp() + $4 * interval '1 millisecond' WHERE id = $1 AND state = 'running'`,

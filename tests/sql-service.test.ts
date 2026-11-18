@@ -18,8 +18,10 @@ it('distinguishes certified editing from unregistered, uncertified and unavailab
     expect(await sql.parse({ ...parseRequest, target: { ...target, engineVersion: '99' } })).toMatchObject({
       status: 'blocked', diagnostics: [{ code: 'uncertified-engine-version' }],
     });
-    expect(sql.capabilities(target)).toMatchObject({ table: { model: 'supported', edit: 'supported', import: 'not-implemented', export: 'supported' } });
-    expect(await sql.parse(parseRequest)).toMatchObject({ status: 'not-implemented' });
+    expect(sql.capabilities(target)).toMatchObject({ table: { model: 'supported', edit: 'supported', import: 'supported', export: 'supported' } });
+    expect(await sql.parse({ ...parseRequest, sql: 'CREATE TABLE example (id integer)' })).toMatchObject({
+      status: 'parsed', catalog: { tables: [{ physicalName: 'example' }] },
+    });
     expect(await sql.generate({ document: sampleDocument, target, tableIds: ['users'] })).toMatchObject({ status: 'generated' });
     expect(await sql.generate({ document: sampleDocument, target })).toMatchObject({
       status: 'blocked', diagnostics: [expect.objectContaining({ code: 'postgresql-unsupported-index' })],
@@ -34,9 +36,9 @@ it('distinguishes certified editing from unregistered, uncertified and unavailab
     const capabilities = sql.capabilities(target);
     expect(capabilities).not.toHaveProperty('diagnostics');
     expect(capabilities).toMatchObject({ enum: { edit: 'not-implemented' }, sequence: { edit: 'not-implemented' }, identity: { edit: 'not-implemented' } });
-    for (const feature of Object.values(capabilities)) {
-      expect(feature).toMatchObject({ model: 'supported', import: 'not-implemented' });
-    }
+    expect(capabilities).toMatchObject({
+      namespace: { import: 'supported' }, expressionIndex: { import: 'unsupported' }, partialIndex: { import: 'unsupported' },
+    });
     const draft = structuredClone(sampleDocument);
     const column = draft.catalog.columns[0];
     column.type.attributes = [{ namespace: 'postgresql', version: 99, data: {} }];

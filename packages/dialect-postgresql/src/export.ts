@@ -16,7 +16,7 @@ type Table = Catalog['tables'][number];
 type Column = Catalog['columns'][number];
 type Sequence = Catalog['sequences'][number];
 
-function sequenceOptions(sequence: Sequence) {
+function sequenceOptions(sequence: Pick<Sequence, 'dataType' | 'increment' | 'start' | 'min' | 'max' | 'cache' | 'cycle'>, includeType = true) {
   const type = sequence.dataType ?? 'bigint';
   const [minType, maxType] = bounds.get(type)!;
   const [minInt, maxInt] = bounds.get('bigint')!;
@@ -37,7 +37,7 @@ function sequenceOptions(sequence: Sequence) {
   if (increment === 0n || low >= high) throw new Error('시퀀스의 증가량과 최솟값·최댓값을 확인하세요.');
   const start = option(sequence.start, low, high);
   return [
-    'AS ' + type,
+    includeType ? 'AS ' + type : '',
     increment === undefined ? '' : 'INCREMENT BY ' + increment,
     minimum === undefined ? '' : 'MINVALUE ' + minimum,
     maximum === undefined ? '' : 'MAXVALUE ' + maximum,
@@ -107,7 +107,7 @@ export async function preparePostgresqlExport(request: GenerateRequest): Promise
   const backing = constraintBackingIndexes(catalog);
   const columnTypes = new Map<string, string>();
   const sequenceParameters = new Map<string, string>();
-  const identityNames = new Map<string, string>();
+  const identityOptions = new Map<string, string>();
   const relationNames = new Map<string, Set<string>>();
   const reserve = (namespaceId: string, name: string) => {
     if (!relationNames.has(namespaceId)) relationNames.set(namespaceId, new Set());
@@ -152,14 +152,22 @@ export async function preparePostgresqlExport(request: GenerateRequest): Promise
       issue('postgresql-unsupported-type', column.id, (error as Error).message);
     }
     if (systemColumns.has(column.physicalName)) issue('postgresql-system-column-name', column.id, 'PostgreSQL 시스템 컬럼명과 충돌합니다.');
-    if (!column.identity) continue;
+    if (!column.identity) {
+      if (column.identitySequence) issue('postgresql-invalid-identity', column.id, 'IDENTITY 설정에 생성 모드를 지정하세요.');
+      continue;
+    }
     const type = column.type.reference;
     if (type.kind !== 'native' || !bounds.has(canonicalType(type.name)) || column.type.arrayDimensions || column.default) {
       issue('postgresql-invalid-identity', column.id, 'IDENTITY는 DEFAULT가 없는 smallint·integer·bigint 컬럼에 지정하세요.');
     }
     const parent = tables.get(column.tableId)!;
     const used = relationNames.get(parent.namespaceId)!;
-    const preferred = parent.physicalName + '_' + column.physicalName + '_seq';
+    const explicit = column.identitySequence?.physicalName;
+    if (explicit !== undefined && (!validText(explicit) || !explicit.trim() || Buffer.byteLength(explicit) > 63 || used.has(explicit))) {
+      issue('postgresql-identity-name-conflict', column.id, 'IDENTITY 시퀀스 이름이 유효하지 않거나 스키마 안에서 중복됩니다.');
+      continue;
+    }
+    const preferred = explicit ?? parent.physicalName + '_' + column.physicalName + '_seq';
     let name = preferred;
     if (Buffer.byteLength(preferred) > 63 || used.has(preferred)) {
       const suffix = createHash('sha256').update(JSON.stringify([parent.physicalName, column.physicalName])).digest('hex').slice(0, 24);
@@ -172,7 +180,14 @@ export async function preparePostgresqlExport(request: GenerateRequest): Promise
       }
     }
     reserve(parent.namespaceId, name);
-    identityNames.set(column.id, qualified(schema.get(parent.namespaceId)!, name));
+    try {
+      const typeName = type.kind === 'native' ? canonicalType(type.name) : '';
+      if (typeName !== 'smallint' && typeName !== 'integer' && typeName !== 'bigint') continue;
+      const settings = sequenceOptions({ ...column.identitySequence, dataType: typeName }, false);
+      identityOptions.set(column.id, ['SEQUENCE NAME ' + qualified(schema.get(parent.namespaceId)!, name), settings].filter(Boolean).join(' '));
+    } catch (error) {
+      issue('postgresql-invalid-identity', column.id, (error as Error).message);
+    }
   }
   for (const item of catalog.sequences) {
     try {
@@ -213,7 +228,7 @@ export async function preparePostgresqlExport(request: GenerateRequest): Promise
         const mode = column.identity === 'always' ? 'ALWAYS' : 'BY DEFAULT';
         const extras = [
           !column.nullable ? 'NOT NULL' : '',
-          column.identity ? 'GENERATED ' + mode + ' AS IDENTITY (SEQUENCE NAME ' + identityNames.get(id) + ')' : '',
+          column.identity ? 'GENERATED ' + mode + ' AS IDENTITY (' + identityOptions.get(id) + ')' : '',
           column.default ? 'DEFAULT (' + expressions.get(id) + ')' : '',
         ].filter(Boolean);
         return ['  ' + columnName(id), columnTypes.get(id), ...extras].join(' ');

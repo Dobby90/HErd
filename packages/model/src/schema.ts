@@ -28,12 +28,21 @@ const typeDescriptor = z.strictObject({
   attributes: z.array(extension).optional(),
 });
 const table = catalogObject.extend({ columnIds: z.array(id) });
+const sequenceSettings = z.strictObject({
+  increment: z.string().optional(),
+  start: z.string().optional(),
+  min: z.string().optional(),
+  max: z.string().optional(),
+  cache: z.string().optional(),
+  cycle: z.boolean().optional(),
+});
 const column = named.extend({
   tableId: id,
   type: typeDescriptor,
   nullable: z.boolean(),
   default: sqlExpressionSchema.optional(),
   identity: z.enum(['always', 'by-default']).optional(),
+  identitySequence: sequenceSettings.extend({ physicalName: id.optional() }).optional(),
 });
 const tableMember = named.extend({ tableId: id });
 const keyColumns = z.array(id).min(1);
@@ -86,12 +95,7 @@ export const erdDocumentSchema = z.object({
     enums: z.array(catalogObject.extend({ values: z.array(z.string()) })),
     sequences: z.array(catalogObject.extend({
       dataType: z.enum(['smallint', 'integer', 'bigint']).optional(),
-      increment: z.string().optional(),
-      start: z.string().optional(),
-      min: z.string().optional(),
-      max: z.string().optional(),
-      cache: z.string().optional(),
-      cycle: z.boolean().optional(),
+      ...sequenceSettings.shape,
       ownedByColumnId: id.optional(),
     })),
   }),

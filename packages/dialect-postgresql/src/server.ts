@@ -1,6 +1,7 @@
 import { documentExpressions, validateDocumentStructure } from '@erd/model';
 import type { SqlDialect } from '@erd/sql-contract';
 import { preparePostgresqlExport } from './export.js';
+import { importPostgresql } from './import.js';
 import { postgresqlEditor, postgresqlMetadata } from './ui.js';
 
 export const postgresqlDialect: SqlDialect = {
@@ -8,13 +9,7 @@ export const postgresqlDialect: SqlDialect = {
   capabilities: postgresqlEditor.capabilities,
   validate: postgresqlEditor.validate,
   prepareGenerate: preparePostgresqlExport,
-  async parse(request) {
-    return {
-      status: 'not-implemented',
-      diagnostics: [{ code: 'not-implemented', severity: 'error', feature: 'import', message: 'PostgreSQL DDL 가져오기는 5단계에서 제공됩니다.' }],
-      profile: postgresqlMetadata.profiles.find(profile => profile.version === request.target.engineVersion),
-    };
-  },
+  parse: importPostgresql,
   async generate(request) {
     const { target, document } = request;
     if (target.engineVersion !== '17' || target.dialectId !== 'postgresql' ||

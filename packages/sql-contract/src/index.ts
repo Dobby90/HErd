@@ -37,11 +37,14 @@ export interface ParseRequest {
 }
 export interface StatementResult {
   ordinal: number;
-  status: 'converted' | 'unsupported' | 'invalid';
+  status: 'converted' | 'ignored-nonstructural' | 'unsupported' | 'error';
+  kind?: string;
+  objectId?: string;
+  message?: string;
   location?: Diagnostic['location'];
 }
 export type ParseResult =
-  | { status: 'blocked' | 'not-implemented'; diagnostics: Diagnostic[]; profile?: EngineProfile }
+  | { status: 'blocked' | 'not-implemented'; diagnostics: Diagnostic[]; profile?: EngineProfile; statements?: StatementResult[]; losses?: Diagnostic[] }
   | { status: 'parsed'; catalog: Catalog; diagnostics: Diagnostic[]; profile: EngineProfile;
       statements: StatementResult[]; losses: Diagnostic[] };
 
@@ -116,15 +119,41 @@ export interface SqlJobOutput {
   sql?: string;
 }
 
-export interface SqlJob {
+interface JobStatus {
   id: string;
-  erdId: string;
-  revision: number;
-  kind: 'generate';
   state: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   target: SqlTarget;
   adapterVersion: string;
-  options: GenerateJobOptions;
   expiresAt: string | null;
+}
+
+export interface GenerateSqlJob extends JobStatus {
+  kind: 'generate';
+  erdId: string;
+  revision: number;
+  options: GenerateJobOptions;
   output: SqlJobOutput | null;
+}
+
+export interface ParseJobOutput {
+  diagnostics: Diagnostic[];
+  statements?: StatementResult[];
+  losses?: Diagnostic[];
+  catalog?: Catalog;
+  lossFingerprint?: string;
+}
+
+export interface ParseSqlJob extends JobStatus {
+  kind: 'parse';
+  erdId: null;
+  revision: null;
+  options: { defaultNamespace: string };
+  output: ParseJobOutput | null;
+}
+
+export type SqlJob = GenerateSqlJob | ParseSqlJob;
+export interface ImportApplied {
+  erdId: string;
+  revision: number;
+  updatedAt: string;
 }

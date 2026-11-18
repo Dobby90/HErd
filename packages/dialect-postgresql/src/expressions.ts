@@ -5,7 +5,9 @@ import { canonicalType, postgresqlTypes } from './ui.js';
 type Node = Record<string, unknown>;
 type Item = Catalog['enums'][number] | Catalog['sequences'][number];
 type Value = { sql: string; truth: boolean | 'unknown' };
-type Context = { mode: 'default' | 'check'; table: Catalog['tables'][number]; catalog: Catalog; schema: Map<string, string> };
+type Context = { mode: 'default' | 'check'; table: Catalog['tables'][number]; catalog: Catalog; schema: Map<string, string>; searchPath?: readonly string[];
+  checkReference?(kind: 'type' | 'function' | 'operator', path: string[]): void;
+};
 
 const node = (value: unknown): Node => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('PostgreSQL 식의 구조를 해석하지 못했습니다.');
@@ -60,14 +62,24 @@ export async function compileExpression(sql: string, context: Context) {
   const target = node(node(targets[0]).ResTarget);
   if (!hasOnly(target, ['val', 'location'])) throw unsupported();
 
+  return compileAstExpression(target.val, context);
+}
+
+export function compileAstExpression(input: unknown, context: Context) {
   const references = new Set<string>();
-  const { catalog, table, schema, mode } = context;
+  const { catalog, table, schema, mode, searchPath } = context;
+  const lookup = (items: Item[], path: string[]) => {
+    const scopes = path.length === 1 ? (searchPath ?? [schema.get(table.namespaceId)!]) : path.slice(0, -1);
+    for (const scope of scopes) {
+      const found = path.length <= 2 && items.find(item => schema.get(item.namespaceId) === scope && item.physicalName === path.at(-1));
+      if (found) return found;
+    }
+  };
   const findNamed = (items: Item[], path: string[], feature: string) => {
-    const scope = path.length === 1 ? schema.get(table.namespaceId) : path[0];
-    const item = path.length <= 2 && items.find(entry => schema.get(entry.namespaceId) === scope && entry.physicalName === path.at(-1));
-    if (!item || !scope) throw new Error('문서에서 ' + feature + ' 참조를 해결할 수 없습니다.');
+    const item = lookup(items, path);
+    if (!item) throw new Error('문서에서 ' + feature + ' 참조를 해결할 수 없습니다.');
     references.add(item.id);
-    return qualified(scope, item.physicalName);
+    return qualified(schema.get(item.namespaceId)!, item.physicalName);
   };
 
   function render(input: unknown, depth: number): Value {
@@ -109,6 +121,7 @@ export async function compileExpression(sql: string, context: Context) {
       case 'TypeCast': {
         const type = node(part.typeName);
         const path = names(type.names);
+        context.checkReference?.('type', path);
         const args = list(type.typmods).map(item => {
           const term = node(node(node(item).A_Const).ival);
           return Number(term.ival ?? 0);
@@ -117,16 +130,19 @@ export async function compileExpression(sql: string, context: Context) {
         if (type.setof || type.pct_type || dimensions > 6 || path.length < 1 || path.length > 2) throw unsupported();
         const schemaName = path.length === 2 ? path[0] : undefined;
         const name = path.at(-1)!;
-        const modeled = catalog.enums.some(item => item.physicalName === name &&
-          schema.get(item.namespaceId) === (schemaName ?? schema.get(table.namespaceId)));
+        const modeled = lookup(catalog.enums, path);
         const native = (!schemaName || schemaName === 'pg_catalog') && (postgresqlTypes as readonly string[]).includes(canonicalType(name));
-        if (modeled && !native && !args.length) return value('CAST(' + child(part.arg).sql + ' AS ' + findNamed(catalog.enums, path, 'ENUM') + '[]'.repeat(dimensions) + ')', false);
+        const builtinPosition = searchPath?.indexOf('pg_catalog') ?? -1;
+        const enumPrecedesBuiltin = modeled && !schemaName && builtinPosition >= 0 &&
+          searchPath!.slice(0, builtinPosition).includes(schema.get(modeled.namespaceId)!);
+        if (modeled && (!native || enumPrecedesBuiltin) && !args.length) return value('CAST(' + child(part.arg).sql + ' AS ' + findNamed(catalog.enums, path, 'ENUM') + '[]'.repeat(dimensions) + ')', false);
         return value('CAST(' + child(part.arg).sql + ' AS ' + builtinType(name, args, dimensions, schemaName) + ')',
           ['bool', 'boolean'].includes(name) && !dimensions);
       }
       case 'FuncCall': {
         if (!hasOnly(part, ['funcname', 'args', 'funcformat', 'location']) || part.funcformat !== 'COERCE_EXPLICIT_CALL') throw unsupported();
         const path = names(part.funcname);
+        context.checkReference?.('function', path);
         const name = path.at(-1)!;
         if (!(path.length === 1 || (path.length === 2 && path[0] === 'pg_catalog'))) throw unsupported();
         const args = list(part.args);
@@ -179,6 +195,7 @@ export async function compileExpression(sql: string, context: Context) {
       case 'A_Expr': {
         const [operator, extra] = names(part.name);
         if (extra) throw unsupported();
+        if (allowedOps.has(operator)) context.checkReference?.('operator', [operator]);
         if (part.kind === 'AEXPR_OP' && allowedOps.has(operator)) {
           const right = child(part.rexpr).sql;
           if (!part.lexpr && ['+', '-'].includes(operator)) return value('(' + operator + ' ' + right + ')', false);
@@ -211,6 +228,6 @@ export async function compileExpression(sql: string, context: Context) {
     }
   }
 
-  const rendered = render(target.val, 0);
+  const rendered = render(input, 0);
   return { sql: mode === 'check' ? requireTruth(rendered) : rendered.sql, references: [...references] };
 }

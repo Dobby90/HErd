@@ -120,4 +120,4 @@ DEFERRABLE·NOT VALID·MATCH·NULLS NOT DISTINCT 같은 세부 의미 옵션도 
 
 > docs/README.md와 docs/00-scope-and-architecture.md를 읽고, docs/04-postgresql-ddl-export.md의 4단계를 구현해줘. 지원 범위의 생성 SQL을 격리한 PostgreSQL에서 실행하고 의미를 확인해줘.
 
-PostgreSQL adapter `0.2.0`은 PostgreSQL 17 대상의 전체·부분 DDL 내보내기를 제공한다. [PostgreSQL 지원 상태](./sql-support/postgresql.md)
+4단계에서는 PostgreSQL adapter `0.2.0`으로 PostgreSQL 17 대상의 전체·부분 DDL 내보내기를 제공했다. [현재 PostgreSQL 지원 상태](./sql-support/postgresql.md)

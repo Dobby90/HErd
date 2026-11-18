@@ -39,13 +39,13 @@ const documentFields = 'e.updated_at AS "updatedAt", e.revision';
 const projectNotFound = () => new ApiError(404, 'PROJECT_NOT_FOUND', '프로젝트를 찾을 수 없습니다.');
 const documentNotFound = () => new ApiError(404, 'ERD_NOT_FOUND', 'ERD를 찾을 수 없습니다.');
 
-function requireRole(role: Role, level: 'owner' | 'editor') {
+export function requireRole(role: Role, level: 'owner' | 'editor') {
   if (role !== 'owner' && (level === 'owner' || role !== 'editor')) {
     throw new ApiError(403, 'FORBIDDEN', '이 작업을 수행할 프로젝트 권한이 없습니다.');
   }
 }
 
-function title(value: unknown): string {
+export function title(value: unknown): string {
   if (typeof value !== 'string' || !value.trim() || value.length > 200 || value.includes('\0')) {
     throw new ApiError(400, 'INVALID_NAME', '이름은 1~200자로 입력하세요.');
   }
@@ -65,7 +65,7 @@ function assertBytes(value: string, limits: DocumentLimits) {
   }
 }
 
-function inputDocument(value: unknown, limits: DocumentLimits): ErdDocument {
+export function inputDocument(value: unknown, limits: DocumentLimits): ErdDocument {
   if (value === undefined) throw new ApiError(400, 'INVALID_DOCUMENT', 'ERD 문서를 입력하세요.');
   assertBytes(JSON.stringify(value), limits);
   const shape = erdDocumentSchema.safeParse(value);
@@ -96,7 +96,7 @@ export function storedDocument(row: DocumentRow, limits: DocumentLimits): ErdDoc
   return document;
 }
 
-async function findProject(db: Query, userId: string, id: string, lock: '' | 'share' | 'update' = ''): Promise<Project> {
+export async function findProject(db: Query, userId: string, id: string, lock: '' | 'share' | 'update' = ''): Promise<Project> {
   const select = `SELECT ${projectFields} FROM projects p
     JOIN project_members m ON m.project_id = p.id AND m.user_id = $1 WHERE p.id = $2`;
   const params = [userId, id];
@@ -127,7 +127,7 @@ export async function findDocument(db: Query, userId: string, id: string, lock: 
   return { ...document, role: membership.role };
 }
 
-async function insertDocument(db: Query, userId: string, projectId: string, document: ErdDocument, limits: DocumentLimits) {
+export async function insertDocument(db: Query, userId: string, projectId: string, document: ErdDocument, limits: DocumentLimits) {
   const serialized = JSON.stringify(document);
   assertBytes(serialized, limits);
   const { rows: [saved] } = await db.query<Saved>(`INSERT INTO erds (id, project_id, title, payload, updated_by)
@@ -183,8 +183,8 @@ async function saveDocument(pool: Pool, userId: string, id: string, body: Record
 export function registerProjects(api: FastifyInstance, pool: Pool, authenticate: Authenticate, sql: SqlService, limits: DocumentLimits) {
   api.get('/api/ready', async () => {
     try {
-      const { rowCount } = await pool.query('SELECT 1 FROM schema_migrations WHERE name = ANY($1::text[])', [['001-projects.sql', '002-sql-jobs.sql']]);
-      if (rowCount !== 2) throw new Error('Service migration is missing.');
+      const { rowCount } = await pool.query('SELECT 1 FROM schema_migrations WHERE name = ANY($1::text[])', [['001-projects.sql', '002-sql-jobs.sql', '003-sql-import.sql']]);
+      if (rowCount !== 3) throw new Error('Service migration is missing.');
       return { status: 'ready' };
     } catch {
       throw new ApiError(503, 'DATABASE_UNAVAILABLE', '서비스 데이터베이스를 확인해 주세요.');

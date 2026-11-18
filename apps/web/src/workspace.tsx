@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
+import type { ImportApplied } from '@erd/sql-contract';
 import { duplicateDocument } from '@erd/model';
 import { createEditorDocument, DocumentEditor, editorTargets } from './editor.js';
 import { field, Form, Modal } from './editor-fields.js';
@@ -9,6 +10,7 @@ import { readDraft, readDrafts, restoreDraft } from './recovery.js';
 import { removeServerDraft, serverDrafts } from './server-drafts.js';
 import type { ServerDraft } from './server-drafts.js';
 import { SqlExport } from './sql-export.js';
+import { SqlImport } from './sql-import.js';
 import { ServerEditor } from './server-editor.js';
 
 type Location = { projectId?: string; documentId?: string };
@@ -23,8 +25,8 @@ const message = (error: unknown) => error instanceof Error ? error.message : '�
 const date = (value: string) => new Date(value).toLocaleString();
 const textMatch = (text: string, query: string) => text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
 
-function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActions, preview, fork, discard, logIn }: {
-  entry: OpenDocument; projectId: string; csrf: string | null | undefined; readOnly: boolean; suspended: boolean; topActions: ReactNode; preview(): void; fork(): void;
+function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActions, onImported, preview, fork, discard, logIn }: {
+  entry: OpenDocument; projectId: string; csrf: string | null | undefined; readOnly: boolean; suspended: boolean; topActions: ReactNode; onImported(result: ImportApplied): void; preview(): void; fork(): void;
   discard(draft?: ServerDraft): void; logIn(): void;
 }) {
   const { editor, drafts } = entry;
@@ -48,7 +50,10 @@ function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActio
     }
   }
 
-  return <DocumentEditor readOnly={readOnly || suspended} topActions={topActions}
+  return <DocumentEditor readOnly={readOnly || suspended} topActions={<>{topActions}
+    {!readOnly && <SqlImport projectId={projectId} csrf={csrf} disabled={suspended} onApplied={onImported}
+      replacement={{ id: entry.id, target: state.history.present.target, savedRevision: async () => (await editor.savedForExport()).revision }} />}
+  </>}
     exportAction={viewId => <SqlExport document={state.history.present} revision={state.revision} dirty={editor.hasChanges()}
       projectId={projectId} csrf={csrf} viewId={viewId} disabled={suspended} viewer={readOnly}
       prepare={() => readOnly ? apiRequest<ServerDocument>('/erds/' + state.history.present.id) : editor.savedForExport()} />}
@@ -104,6 +109,7 @@ export function Workspace() {
   const [query, setQuery] = useState('');
   const [epoch, reload] = useState(0);
   const [problem, setProblem] = useState('');
+  const [importNotice, setImportNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const running = useRef(false);
   const [loginPrompt, setLoginPrompt] = useState(false);
@@ -122,6 +128,7 @@ export function Workspace() {
     window.history.pushState(null, '', '/?' + query);
     setLocation(next);
     setPreview(undefined);
+    setImportNotice('');
     setQuery('');
     setProblem('');
     reload(value => value + 1);
@@ -274,6 +281,15 @@ export function Workspace() {
         <WorkspaceEditor key={open.id + ':' + open.editor.instanceKey} entry={open} projectId={project.id} csrf={csrf} readOnly={project.role === 'viewer'} suspended={busy}
           topActions={<><button type="button" onClick={backToProject}>ERD 목록</button>
             <button type="button" disabled={busy} onClick={logOut}>로그아웃</button></>}
+          onImported={result => {
+            open.editor.stop();
+            void open.editor.discard().catch(() => undefined);
+            editors.current.delete(open.id);
+            setOpen(undefined);
+            setPreview(undefined);
+            setImportNotice(`리비전 ${result.revision}에 가져오기를 적용했습니다. 교체 전 버전은 서버 이력에 저장되었습니다.`);
+            refresh();
+          }}
           preview={() => void act(async () => setPreview(await apiRequest<ServerDocument>('/erds/' + open.id)))}
           fork={() => void act(async () => {
             const source = open.editor.snapshot().history.present;
@@ -285,6 +301,7 @@ export function Workspace() {
           })}
           discard={discard} logIn={() => setLoginPrompt(true)} />}
       {problem && <p className="workspace-notice" role="alert">{problem}</p>}
+      {!problem && importNotice && <p className="workspace-notice" role="status">{importNotice}</p>}
       {loginPrompt && <Modal title="다시 로그인" close={() => setLoginPrompt(false)}>{loginButtons}</Modal>}
     </>;
   }
@@ -355,6 +372,8 @@ export function Workspace() {
         </div>}
         {writable && <div className="actions">
           <button type="button" disabled={busy} onClick={() => setDialog('new')}>새 ERD</button>
+          <SqlImport key={project.id} projectId={project.id} csrf={csrf} disabled={busy}
+            onApplied={result => go({ projectId: project.id, documentId: result.erdId })} />
           <button type="button" disabled={busy} onClick={openLocal}>로컬 복구본 가져오기</button>
         </div>}
         <label>ERD 검색<input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>

@@ -322,7 +322,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
           <button type="button" onClick={() => selectObject(item.id)}>{item.name}</button></li>)}</ul>
         <h2>SQL 지원</h2>
         <ul className="support-list">
-          <li>DDL 가져오기 · {capability?.table.import === 'supported' ? '지원' : '미구현'}</li>
+          <li>DDL 가져오기 · {capability?.table.import === 'supported' ? (local ? '서버 문서에서 지원' : '지원') : '미구현'}</li>
           <li>DDL 내보내기 · {capability?.table.export === 'supported' ? (local ? '서버 문서에서 지원' : '지원') : '미구현'}</li>
           {(['enum', 'sequence', 'identity'] as const).map(feature =>
             <li key={feature}>{feature.toUpperCase()} · {capability?.[feature].edit === 'supported' ? '편집 가능' : '보존 전용'}</li>)}

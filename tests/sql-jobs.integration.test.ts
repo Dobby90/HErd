@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import type { SqlJob } from '@erd/sql-contract';
+import type { GenerateSqlJob as SqlJob } from '@erd/sql-contract';
 import { expect, it } from 'vitest';
 import { createApi } from '../apps/api/src/app.js';
 import { createDatabase, migrate } from '../apps/api/src/database.js';
@@ -41,7 +41,7 @@ it('pins snapshots and enforces job ownership, cancellation, timed termination, 
 
     try {
       const profiles = (await api.inject('/api/sql/dialects')).json();
-      expect(profiles).toMatchObject([{ metadata: { id: 'postgresql', adapterVersion: '0.2.0', profiles: [{ version: '17', status: 'certified' }] },
+      expect(profiles).toMatchObject([{ metadata: { id: 'postgresql', adapterVersion: '0.3.0', profiles: [{ version: '17', status: 'certified' }] },
         versions: [{ version: '17', capabilities: { table: { export: 'supported' }, expressionIndex: { export: 'unsupported' } } }] }]);
       const owner = await credentials('owner');
       const viewer = await credentials('viewer');
@@ -63,7 +63,7 @@ it('pins snapshots and enforces job ownership, cancellation, timed termination, 
       const response = await submit();
       expect(response.statusCode, response.body).toBe(202);
       const job = response.json<SqlJob>();
-      expect(job).toMatchObject({ revision: 1, state: 'queued', target: exportTarget, adapterVersion: '0.2.0' });
+      expect(job).toMatchObject({ revision: 1, state: 'queued', target: exportTarget, adapterVersion: '0.3.0' });
       expect((await api.inject({ url: '/api/sql/jobs/' + job.id, headers: owner.headers })).statusCode).toBe(404);
       expect((await api.inject({ method: 'DELETE', url: '/api/sql/jobs/' + job.id, headers: owner.headers })).statusCode).toBe(404);
       const changed = structuredClone(document);
@@ -102,7 +102,7 @@ it('pins snapshots and enforces job ownership, cancellation, timed termination, 
       const orphans = [randomUUID(), randomUUID()];
       for (const [index, state] of ['queued', 'running'].entries()) {
         await db.query(`INSERT INTO sql_jobs (id, project_id, erd_id, user_id, mutation_id, request_hash, revision,
-          target, adapter_version, options, snapshot, state) VALUES ($1,$2,$3,$4,$5,'fixture',2,$6,'0.2.0','{}',$7,$8)`,
+          target, adapter_version, options, snapshot, state) VALUES ($1,$2,$3,$4,$5,'fixture',2,$6,'0.3.0','{}',$7,$8)`,
         [orphans[index], project.id, document.id, owner.id, randomUUID(), JSON.stringify(exportTarget), JSON.stringify(changed), state]);
       }
       await api.close();

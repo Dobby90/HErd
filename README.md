@@ -15,7 +15,7 @@ pnpm dev
 | `pnpm typecheck` | 앱, 공통 패키지, 검증 코드의 TypeScript 검사 |
 | `pnpm lint` | TypeScript 소스의 ESLint 검사 |
 | `pnpm test` | 모델과 웹의 Vitest unit 프로젝트를 단일 실행하며 브라우저 시나리오는 Chromium 사용 |
-| `pnpm test:integration` | PostgreSQL 17에서 저장·OIDC·생성 DDL·SQL 작업 검증과 Chromium E2E |
+| `pnpm test:integration` | PostgreSQL 17에서 저장·OIDC·DDL 입출력·SQL 작업 검증과 Chromium E2E |
 | `pnpm db:migrate` | `DATABASE_URL`의 서비스 DB에 버전 관리된 마이그레이션 적용 |
 
 브라우저 테스트는 Docker 도구 구성에 포함된 Chromium을 사용합니다. 일반 개발 환경에서는 `CHROMIUM_PATH`에 설치한 Chromium 실행 파일을 지정할 수 있습니다.
@@ -44,15 +44,22 @@ OIDC를 사용하려면 `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`을
 
 SQL 작업 결과는 기본 10분 동안 보관됩니다. 생성 스크립트의 적용 대상은 새 PostgreSQL 17 데이터베이스입니다. 주문 관리 샘플의 식 인덱스를 포함해 현재 지원 범위를 벗어난 객체가 선택에 들어가면 진단을 표시합니다. [PostgreSQL 지원 범위](docs/sql-support/postgresql.md), [SQL 작업 설정](docs/04-postgresql-ddl-export.md#실행과-작업-설정)
 
+## PostgreSQL DDL 가져오기
+
+프로젝트에서 **DDL로 새 ERD 만들기**를 열거나 서버 편집기에서 **DDL로 모델 교체**를 엽니다. PostgreSQL 17 DDL을 붙여 넣거나 UTF-8 `.sql` 또는 텍스트 형식의 `pg_dump --schema-only` 파일을 선택합니다. 기본 입력 한도는 5 MiB입니다. 분석에서 이름 해석 결과와 문장별 판정을 확인하고, 제외 항목이 있을 때는 해당 분석의 손실 목록을 확인한 뒤 적용합니다.
+
+모델 교체는 현재 서버 리비전을 기준으로 적용하며 기존 모델과 뷰는 교체 직전 스냅샷에 저장합니다. 서버 이력 복원 화면은 6단계입니다. 기존 서비스 DB의 가져오기 기능은 `pnpm db:migrate`로 추가합니다. [가져오기 API와 설정](docs/05-postgresql-ddl-import.md#실행과-적용-설정), [PostgreSQL 지원 범위](docs/sql-support/postgresql.md#postgresql-17-ddl-import)
+
 ## 진행 상태
 
 - [x] **1단계 개발 기반과 도메인 모델 완료.** 웹·API 실행, ERD v1 직렬화와 참조 무결성, PostgreSQL 17 파서·실제 스키마 덤프를 검증했습니다. [1단계 검증 결과](docs/01-foundation-and-domain.md#검증-결과)
 - [x] **2단계 로컬 ERD 편집기 완료.** 복합·자기 참조 FK 편집, 여러 뷰의 테이블 재사용, 삭제와 실행 취소·다시 실행, IndexedDB 복구와 탭 충돌 처리를 검증했습니다. [2단계 검증 결과](docs/02-erd-editor.md#검증-결과)
 - [x] **3단계 프로젝트·인증·서버 저장 완료.** OIDC와 역할별 권한, 실제 DB의 프로젝트·ERD CRUD, 자동 저장·충돌·복구를 검증했습니다. [3단계 검증 결과](docs/03-projects-and-persistence.md#검증-결과)
 - [x] **4단계 PostgreSQL DDL 내보내기 완료.** 생성 SQL의 PostgreSQL 17 실행과 catalog 의미, 부분 선택 의존성, 작업 권한·격리, UTF-8 다운로드를 검증했습니다. [4단계 검증 결과](docs/04-postgresql-ddl-export.md#검증-결과)
-- [ ] **5단계 PostgreSQL DDL 가져오기 예정.** [5단계 계획](docs/05-postgresql-ddl-import.md)
+- [x] **5단계 PostgreSQL DDL 가져오기 완료.** PostgreSQL 17 덤프의 모델 변환, 문장별 진단, 새 ERD 생성과 리비전 기반 교체를 검증했습니다. [5단계 검증 결과](docs/05-postgresql-ddl-import.md#검증-결과)
+- [ ] **6단계 공유·이력·이미지 출력 예정.** [6단계 계획](docs/06-sharing-history-and-images.md)
 
-2026-11-18 Docker 검증에서 클린 설치, 빌드·타입 검사·lint, 기본 테스트 40개, 통합 테스트 6개가 통과했습니다. OIDC는 모의 공급자로 검증했으며 운영 계정 연동은 배포 환경에서 확인합니다.
+2026-11-18 Docker 검증에서 클린 설치, 빌드·타입 검사·lint, 기본 테스트 43개, 통합 테스트 9개가 통과했습니다. OIDC는 모의 공급자로 검증했으며 운영 계정 연동은 배포 환경에서 확인합니다.
 
 - [단계별 계획](docs/README.md)
 - [PostgreSQL 지원 상태](docs/sql-support/postgresql.md)

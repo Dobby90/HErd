@@ -5,12 +5,12 @@ import type { Diagnostic, DialectCapabilities, DialectMetadata, EditorDialect, R
 export const postgresqlMetadata: DialectMetadata = {
   id: 'postgresql',
   name: 'PostgreSQL',
-  adapterVersion: '0.2.0',
+  adapterVersion: '0.3.0',
   profiles: [{ version: '17', status: 'certified' }],
 };
 
 const modeled = {
-  model: 'supported', edit: 'not-implemented', import: 'not-implemented', export: 'supported',
+  model: 'supported', edit: 'not-implemented', import: 'supported', export: 'supported',
 } as const;
 const editable = { ...modeled, edit: 'supported' } as const;
 
@@ -24,8 +24,8 @@ export const postgresqlCapabilities = {
   check: editable,
   default: editable,
   index: editable,
-  expressionIndex: { ...editable, export: 'unsupported' },
-  partialIndex: { ...editable, export: 'unsupported' },
+  expressionIndex: { ...editable, import: 'unsupported', export: 'unsupported' },
+  partialIndex: { ...editable, import: 'unsupported', export: 'unsupported' },
   comment: editable,
   enum: modeled,
   sequence: modeled,
