@@ -171,6 +171,56 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
   });
 }, 90_000);
 
+it('previews column deletion in the editor and restores the column and its FK together on undo', async () => {
+  await withEditor(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    await page.goto(origin);
+    await visible(page, '브라우저 임시 저장 대기');
+    const impact = page.getByRole('dialog', { name: '스키마 삭제 영향' });
+    const confirm = impact.getByRole('button', { name: '실제 삭제 확인', exact: true });
+    const close = impact.getByRole('button', { name: '닫기', exact: true });
+    async function previewColumnDeletion(table: string, column: string) {
+      await nav(page).getByRole('button', { name: table, exact: true }).click();
+      await inspector(page).getByRole('button', { name: column, exact: true }).click();
+      await inspector(page).getByRole('button', { name: '스키마에서 실제 삭제', exact: true }).click();
+    }
+
+    await previewColumnDeletion('products', 'name');
+    await impact.getByRole('alert').getByText(/products_name_idx/).waitFor();
+    expect(await confirm.isDisabled()).toBe(true);
+    await close.click();
+    expect(await action(page, '실행 취소').isDisabled()).toBe(true);
+
+    await action(page, '상품 연결').click();
+    const orderNumber = tableOnCanvas(page, 'orders').getByText('number', { exact: true });
+    const foreignKeys = page.locator('.fk-edge');
+    await orderNumber.waitFor();
+    await expect.poll(() => foreignKeys.count()).toBe(2);
+    await previewColumnDeletion('orders', 'number');
+    await impact.getByText(/orders_pkey.*order_items_order_fk/).waitFor();
+    await impact.getByText('주문 전체, 상품 연결', { exact: true }).waitFor();
+    await close.click();
+    await orderNumber.waitFor();
+    expect(await foreignKeys.count()).toBe(2);
+    expect(await action(page, '실행 취소').isDisabled()).toBe(true);
+
+    await previewColumnDeletion('orders', 'number');
+    await confirm.click();
+    await orderNumber.waitFor({ state: 'detached' });
+    await expect.poll(() => foreignKeys.count()).toBe(1);
+    await visible(page, '구조 검증 통과');
+    await action(page, '실행 취소').click();
+    await orderNumber.waitFor();
+    await expect.poll(() => foreignKeys.count()).toBe(2);
+    await visible(page, '구조 검증 통과');
+    await action(page, '다시 실행').click();
+    await orderNumber.waitFor({ state: 'detached' });
+    await expect.poll(() => foreignKeys.count()).toBe(1);
+    await visible(page, '브라우저 저장 완료');
+  });
+}, 90_000);
+
 it('isolates stale tabs, preserves both versions, and retries failed reads and writes', async () => {
   await withEditor(async (context, origin) => {
     await context.addInitScript(() => {
