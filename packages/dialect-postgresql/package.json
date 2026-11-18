@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/server.ts",
+    "./ui": "./src/ui.ts"
+  },
+  "name": "@erd/dialect-postgresql",
+  "dependencies": {
+    "@erd/model": "workspace:*",
+    "@erd/sql-contract": "workspace:*",
+    "pgsql-parser": "17.9.9"
+  }
+}

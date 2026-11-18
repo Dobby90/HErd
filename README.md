@@ -1,0 +1,27 @@
+# ERD 도구
+
+Node.js 24.12.0과 pnpm 10.11.0을 사용합니다. Docker 기반 검증 구성은 `devorchestra.environment.json`에 있습니다. 일반 개발에서는 지정 버전의 도구를 선택한 뒤 다음 명령을 저장소 루트에서 실행합니다.
+
+```sh
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+브라우저에서 <http://127.0.0.1:5173>을 열면 읽기 전용 주문 관리 샘플을 볼 수 있습니다. API의 liveness는 `GET /api/health`로 확인합니다. 웹 개발 서버는 `/api`를 3001 포트로 프록시합니다. 포트를 바꾸려면 `.env.example`을 `.env`에 복사하고 값을 수정하세요.
+
+| 명령 | 내용 |
+| --- | --- |
+| `pnpm build` | 웹과 API의 운영 빌드를 `dist/web`과 `dist/api`에 생성 |
+| `pnpm typecheck` | 앱, 공통 패키지, 검증 코드의 TypeScript 검사 |
+| `pnpm lint` | TypeScript 소스의 ESLint 검사 |
+| `pnpm test` | DB 없이 Vitest unit 프로젝트를 단일 실행 |
+| `pnpm test:integration` | PostgreSQL 17에서 테스트 전용 클러스터와 schema-only dump 검사 |
+
+통합 검증은 PostgreSQL 17 실행 파일이 있는 Docker 환경에서 실행합니다. 테스트는 `build` 아래에 임시 데이터와 Unix 소켓 디렉터리를 만들고 내장 fixture만 실행한 뒤 클러스터를 종료하고 디렉터리를 정리합니다. 루트로 시작된 컨테이너에서는 PostgreSQL 프로세스가 컨테이너의 `postgres` 사용자로 실행됩니다.
+
+운영에서 `node dist/api/main.js`로 API를 실행하고 동일 origin에서 `dist/web` 정적 파일과 `/api`를 제공하도록 프록시를 구성합니다. API와 웹은 설치된 의존성을 사용합니다.
+
+편집, 저장, 인증, DDL 입출력 UI는 후속 단계 범위입니다. 단계별 계획과 파서 후보 상태는 아래 문서에서 확인할 수 있습니다.
+
+- [단계별 계획](docs/README.md)
+- [PostgreSQL 지원 상태](docs/sql-support/postgresql.md)

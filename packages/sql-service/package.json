@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "name": "@erd/sql-service",
+  "dependencies": {
+    "@erd/model": "workspace:*",
+    "@erd/sql-contract": "workspace:*"
+  }
+}

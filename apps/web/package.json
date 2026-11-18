@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "type": "module",
+  "name": "@erd/web",
+  "dependencies": {
+    "react": "19.2.1",
+    "react-dom": "19.2.1",
+    "@erd/model": "workspace:*",
+    "@erd/test-fixtures": "workspace:*",
+    "@erd/dialect-postgresql": "workspace:*"
+  }
+}
