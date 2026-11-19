@@ -96,7 +96,7 @@ it('saves canvas display options across views independently of the name mode', a
     await openEditor(page, origin, document);
 
     const mode = page.getByLabel('이름 표시');
-    const nameOptions = ['전체 보기', '논리명', '물리명'];
+    const nameOptions = ['논리명 + 물리명', '논리명', '물리명'];
     expect(await mode.inputValue()).toBe('physical');
     expect(await mode.locator('option').allTextContents()).toEqual(nameOptions);
     await mode.selectOption('both');
@@ -115,7 +115,7 @@ it('saves canvas display options across views independently of the name mode', a
 
     await action(page, '내보내기').click();
     await action(page, '이미지 내보내기').click();
-    const image = page.getByRole('dialog', { name: '뷰 이미지 내보내기' });
+    const image = page.getByRole('dialog', { name: '이미지 내보내기' });
     const imageNames = image.getByLabel('표시할 이름');
     expect(await imageNames.inputValue()).toBe('both');
     expect(await imageNames.locator('option').allTextContents()).toEqual(nameOptions);
@@ -168,7 +168,7 @@ it('uses canvas visibility for image exports and allows per-export overrides', a
     document.canvasDisplay = { columns: false, groups: false, notes: false, relationships: false };
     await openEditor(page, origin, document);
     await openExport(page, '이미지');
-    const dialog = page.getByRole('dialog', { name: '뷰 이미지 내보내기' });
+    const dialog = page.getByRole('dialog', { name: '이미지 내보내기' });
     const columns = dialog.getByLabel('컬럼 표시');
     const options = ['메모 포함', '그룹 포함', '관계선 포함'].map(name => dialog.getByLabel(name));
     expect(await columns.inputValue()).toBe('collapsed');
@@ -180,7 +180,23 @@ it('uses canvas visibility for image exports and allows per-export overrides', a
       return dialog.getByRole('img').evaluate(async node => {
         const markup = await fetch((node as HTMLImageElement).src).then(response => response.text());
         const svg = new DOMParser().parseFromString(markup, 'image/svg+xml');
-        return { text: Array.from(svg.querySelectorAll('text'), label => label.textContent), edges: svg.querySelectorAll('polyline').length };
+        const labels = Array.from(svg.querySelectorAll('text'));
+        const relationshipLabels = labels.filter(label => /^(비)?식별 관계 · | · 논리 · /.test(label.textContent ?? ''));
+        const rect = (element: Element) => {
+          const [x, y, width, height] = ['x', 'y', 'width', 'height'].map(name => Number(element.getAttribute(name)));
+          return { x, y, right: x + width, bottom: y + height };
+        };
+        const occupied = Array.from(svg.querySelectorAll('rect[stroke="#c9d1df"], rect[stroke="#e2c68c"]'), rect);
+        const coveredLabels: (string | null)[] = [];
+        for (const label of relationshipLabels) {
+          const box = rect(label.previousElementSibling!);
+          if (occupied.some(other => box.x < other.right && other.x < box.right && box.y < other.bottom && other.y < box.bottom)) {
+            coveredLabels.push(label.textContent);
+          }
+          occupied.push(box);
+        }
+        return { text: labels.map(label => label.textContent), edges: svg.querySelectorAll('polyline').length,
+          relationshipLabels: relationshipLabels.length, coveredLabels };
       });
     }
     const hidden = await previewSvg();
@@ -197,6 +213,8 @@ it('uses canvas visibility for image exports and allows per-export overrides', a
       'quantity', document.views[0].notes[0].text, document.views[0].groups[0].name, '고객별 상품 집계 · 논리 · N:M',
     ]));
     expect(visible.edges).toBe(4);
+    expect(visible.relationshipLabels).toBe(4);
+    expect(visible.coveredLabels).toEqual([]);
     await dialog.getByRole('button', { name: '닫기' }).click();
     expect(await page.locator('.canvas-column, .note-text, .react-flow__edge').count()).toBe(0);
   });
@@ -372,7 +390,7 @@ it('fits visible names, reuses canvas widths for arrangement, and keeps inspecto
     expect(await fits(users.locator('.canvas-table-text'))).toBe(true);
     expect(await fits(products.getByRole('button', { name: longColumn + ' 이름 편집' }))).toBe(true);
 
-    await action(page, '이름순 그리드 재배치').click();
+    await action(page, '이름순 재배치').click();
     await waitSaved(page);
     const placements = (await savedDocument(page)).document.views[0].instances;
     const customer = placements.find(item => item.id === 'overview-users')!;
@@ -391,8 +409,8 @@ it('fits visible names, reuses canvas widths for arrangement, and keeps inspecto
     await tab(page, '인덱스').click();
     await inspector(page).getByRole('button', { name: '인덱스 추가' }).waitFor();
     await tab(page, '이름·배치').click();
-    await inspector(page).getByRole('heading', { name: '현재 뷰 배치' }).waitFor();
-    await inspector(page).getByRole('button', { name: '현재 뷰에서 제거' }).waitFor();
+    await inspector(page).getByRole('heading', { name: '현재 다이어그램 배치' }).waitFor();
+    await inspector(page).getByRole('button', { name: '현재 다이어그램에서 제거' }).waitFor();
     await inspector(page).getByLabel('물리명', { exact: true }).fill('customers');
     await inspector(page).getByRole('button', { name: '테이블 적용' }).click();
     await expect.poll(() => width(users)).toBe(195);
@@ -713,34 +731,34 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
     await action(page, '다시 실행').click();
     await page.locator('.fk-edge').waitFor();
 
-    await action(page, '뷰 설정').click();
-    await action(page, '뷰 복제').click();
+    await action(page, '다이어그램 설정').click();
+    await action(page, '다이어그램 복제').click();
     await nav(page).getByRole('button', { name: 'parents', exact: true }).click();
     await tab(page, '이름·배치').click();
     await inspector(page).getByLabel('물리명', { exact: true }).fill('parent_records');
     await action(page, '테이블 적용').click();
     await tableOnCanvas(page, 'parent_records').waitFor();
-    await action(page, '기본 뷰').click();
+    await action(page, '기본 다이어그램').click();
     await tableOnCanvas(page, 'parent_records').waitFor();
     await page.locator('.fk-edge').waitFor();
-    await action(page, '기본 뷰 복제').click();
+    await action(page, '기본 다이어그램 복제').click();
     await nav(page).getByRole('button', { name: 'parent_records', exact: true }).click();
     await tab(page, '이름·배치').click();
-    await action(page, '현재 뷰에서 제거').click();
+    await action(page, '현재 다이어그램에서 제거').click();
     await tableOnCanvas(page, 'parent_records').waitFor({ state: 'detached' });
     expect(await nav(page).getByRole('button', { name: 'parent_records', exact: true }).count()).toBe(1);
-    await action(page, '기본 뷰').click();
+    await action(page, '기본 다이어그램').click();
     await tableOnCanvas(page, 'parent_records').waitFor();
     await waitSaved(page);
     await page.reload();
     await waitSaved(page);
     await page.getByRole('heading', { name: '물류', exact: true }).waitFor();
     await page.locator('.fk-edge').waitFor();
-    await action(page, '기본 뷰 복제').click();
+    await action(page, '기본 다이어그램 복제').click();
     await tableOnCanvas(page, 'children').waitFor();
     expect(await tableOnCanvas(page, 'parent_records').count()).toBe(0);
 
-    await action(page, '기본 뷰').click();
+    await action(page, '기본 다이어그램').click();
     await nav(page).getByRole('button', { name: 'parent_records', exact: true }).click();
     await tab(page, '이름·배치').click();
     await action(page, '스키마에서 테이블 삭제').click();
@@ -813,12 +831,12 @@ it('commits schema form values and reloads server documents with object-specific
     const field = (name: string) => inspector(page).getByLabel(name, { exact: true });
     const property = (name: string) => inspector(page).getByRole('button', { name, exact: true });
 
-    await action(page, '네임스페이스 추가').click();
+    await action(page, '스키마 추가').click();
     await field('물리명').fill('stock');
-    await action(page, '네임스페이스 만들기').click();
+    await action(page, '스키마 만들기').click();
     await field('물리명').fill('inventory');
     await field('설명').fill('Inventory data');
-    await action(page, '네임스페이스 적용').click();
+    await action(page, '스키마 적용').click();
 
     const publicSection = nav(page).locator('.schema-section').filter({
       has: page.getByRole('button', { name: 'public', exact: true }),
@@ -827,7 +845,7 @@ it('commits schema form values and reloads server documents with object-specific
     await field('물리명').fill('parts');
     await action(page, '테이블 만들기').click();
     await tab(page, '이름·배치').click();
-    await inspector(page).getByLabel('네임스페이스').selectOption({ label: 'inventory' });
+    await inspector(page).getByLabel('스키마').selectOption({ label: 'inventory' });
     await field('논리명').fill('부품');
     await field('설명').fill('Part definitions');
     await action(page, '테이블 적용').click();
@@ -982,10 +1000,10 @@ it('adds reciprocal and self foreign keys and edits an independent logical relat
     await inspector(page).getByLabel('관계 이름').fill('상품과 고객');
     await inspector(page).getByLabel('원본 테이블').selectOption({ label: 'products' });
     await inspector(page).getByLabel('대상 테이블').selectOption({ label: 'users' });
-    await inspector(page).getByLabel('관계 차수').selectOption('many-to-many');
+    await inspector(page).getByLabel('카디널리티').selectOption('many-to-many');
     await action(page, '논리 관계 적용').click();
     await action(page, '상품과 고객').click();
-    expect(await inspector(page).getByLabel('관계 차수').inputValue()).toBe('many-to-many');
+    expect(await inspector(page).getByLabel('카디널리티').inputValue()).toBe('many-to-many');
     await page.locator('.logical-edge').getByText('상품과 고객 · 논리 · N:M', { exact: true }).waitFor();
     await expect.poll(() => page.locator('.fk-edge').count()).toBe(6);
     await page.locator('.fk-edge').filter({ hasText: '자식 0..N · 부모 0..1' }).first().waitFor();
@@ -1012,17 +1030,17 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
     await nav(page).getByRole('button', { name: 'order_items', exact: true }).waitFor();
     await search.clear();
 
-    await action(page, '뷰 추가').click();
-    await page.getByLabel('새 뷰 이름').fill('작업용');
-    await action(page, '뷰 만들기').click();
-    await action(page, '뷰 설정').click();
-    await page.getByRole('dialog', { name: '뷰 설정' }).getByLabel('뷰 이름', { exact: true }).fill('작업용 상세');
-    await action(page, '뷰 이름 적용').click();
+    await action(page, '다이어그램 추가').click();
+    await page.getByLabel('새 다이어그램 이름').fill('작업용');
+    await action(page, '다이어그램 만들기').click();
+    await action(page, '다이어그램 설정').click();
+    await page.getByRole('dialog', { name: '다이어그램 설정' }).getByLabel('다이어그램 이름', { exact: true }).fill('작업용 상세');
+    await action(page, '다이어그램 이름 적용').click();
     await workspace.getByRole('heading', { name: '작업용 상세' }).waitFor();
     for (const name of ['users', 'orders']) {
       await nav(page).getByRole('button', { name, exact: true }).click();
       await tab(page, '이름·배치').click();
-      await action(page, '현재 뷰에 배치').click();
+      await action(page, '현재 다이어그램에 배치').click();
     }
     await action(page, '추가').click();
     await action(page, '그룹 추가').click();
@@ -1067,8 +1085,8 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
     await waitSaved(page);
     const original = (await savedDocument(page)).document.views.find(view => view.name === '작업용 상세');
     if (!original) throw new Error('Missing the committed view.');
-    await action(page, '뷰 설정').click();
-    await action(page, '뷰 복제').click();
+    await action(page, '다이어그램 설정').click();
+    await action(page, '다이어그램 복제').click();
     await waitSaved(page);
     const copy = (await savedDocument(page)).document.views.find(view => view.name === '작업용 상세 복제');
     if (!copy) throw new Error('Missing the cloned view.');
@@ -1079,9 +1097,9 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
     expect(copy.instances.map(item => item.tableId)).toEqual(original.instances.map(item => item.tableId));
     expect(copy.instances.find(item => item.tableId === 'orders')).toMatchObject({ groupId: copy.groups[0].id, collapsed: true });
 
-    await action(page, '뷰 설정').click();
+    await action(page, '다이어그램 설정').click();
     page.once('dialog', dialog => dialog.accept());
-    await action(page, '뷰 삭제').click();
+    await action(page, '다이어그램 삭제').click();
     await nav(page).getByRole('button', { name: '작업용 상세 복제', exact: true }).waitFor({ state: 'detached' });
     await action(page, '작업용 상세').click();
     await tableOnCanvas(page, '주문').waitFor();

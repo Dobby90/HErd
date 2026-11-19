@@ -243,7 +243,7 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
     <button type="button" disabled={disabled} onClick={() => setOpen(true)}>{heading}</button>
     {open && <Modal title={heading} close={close}>
       <section className="sql-import">
-        {append && <p className="muted">추가할 뷰 · {append.viewName ?? '기본 뷰'}</p>}
+        {append && <p className="muted">추가할 다이어그램 · {append.viewName ?? '기본 다이어그램'}</p>}
         <fieldset disabled={working}>
           <label>SQL 대상<select value={selected ? targetKey(selected) : ''} disabled={Boolean(destination)}
             onChange={event => { invalidate(); setChoice(event.target.value); }}>
@@ -292,12 +292,12 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
         </> : null}
         {catalog && !expired && <>
           {append
-            ? <p>새 테이블을 현재 뷰에 배치합니다. 적용 전 버전은 서버 이력에 저장됩니다.</p>
+            ? <p>새 테이블을 현재 다이어그램에 배치합니다. 적용 전 버전은 서버 이력에 저장됩니다.</p>
             : destination
-            ? <p>적용하면 기존 모델과 배치를 새 모델과 기본 뷰로 교체합니다. 교체 전 버전은 서버 이력에 저장됩니다.</p>
+            ? <p>적용하면 기존 모델과 배치를 새 모델과 기본 다이어그램로 교체합니다. 교체 전 버전은 서버 이력에 저장됩니다.</p>
             : <label>새 ERD 이름<input value={name} onChange={event => setName(event.target.value)} maxLength={200} disabled={working} /></label>}
           <button type="button" className="primary" disabled={!canApply} onClick={() => void applyResult()}>
-            {append ? '현재 뷰에 테이블 추가' : destination ? '확인하고 모델 교체' : '새 ERD에 적용'}
+            {append ? '현재 다이어그램에 테이블 추가' : destination ? '확인하고 모델 교체' : '새 ERD에 적용'}
           </button>
         </>}
         {applying && <p role="status">가져오기 적용 중</p>}

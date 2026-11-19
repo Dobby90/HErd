@@ -31,7 +31,7 @@ it('exports and opens pinned SVG and PNG with off-screen Korean nodes, and rejec
         const page = context.pages()[0] ?? await context.newPage();
         page.setDefaultTimeout(12_000);
         const button = (name: string) => page.getByRole('button', { name, exact: true });
-        const image = page.getByRole('dialog', { name: '뷰 이미지 내보내기' });
+        const image = page.getByRole('dialog', { name: '이미지 내보내기' });
         const preview = image.getByRole('img', { name: 'ERD 이미지 출력 미리보기' });
         const createImage = () => button('출력 미리보기').click();
         await page.goto(origin + '/?workspace=1');

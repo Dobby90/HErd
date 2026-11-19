@@ -36,6 +36,7 @@ const detailSize = 12;
 const gutter = 14;
 const margin = 24;
 const canvasColor = '#f7f8fa';
+const labelGap = 4;
 function annotationFill(color: string) {
   const channels = [1, 3, 5].map(offset => Math.round(255 * .82 + Number.parseInt(color.slice(offset, offset + 2), 16) * .18));
   return 'rgb(' + channels.join(', ') + ')';
@@ -86,6 +87,26 @@ function edgeShapes(points: Point[], color: string, dash?: [number, number]): Sh
     { kind: 'line', points: [end, { x: base, y: end.y - 4 }, { x: base, y: end.y + 4 }], color, fill: true }];
 }
 
+function clearLabelY(label: Box, occupied: Box[]) {
+  const blockers = occupied.filter(box => label.x < box.x + box.width + labelGap &&
+    box.x < label.x + label.width + labelGap);
+  const overlaps = (box: Box, y: number) => y < box.y + box.height + labelGap &&
+    box.y < y + label.height + labelGap;
+  if (!blockers.some(box => overlaps(box, label.y))) return label.y;
+
+  // Keep the label centered on the connector and find the nearest gap above or below it.
+  blockers.sort((a, b) => a.y - b.y);
+  let below = label.y;
+  for (const box of blockers) {
+    if (overlaps(box, below)) below = box.y + box.height + labelGap;
+  }
+  let above = label.y;
+  for (const box of blockers.reverse()) {
+    if (overlaps(box, above)) above = box.y - label.height - labelGap;
+  }
+  return label.y - above <= below - label.y ? above : below;
+}
+
 function projectScene(document: ErdDocument, view: View, dialect: EditorDialect | undefined, options: ImageOptions,
   measure: CanvasRenderingContext2D): Scene {
   let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
@@ -118,7 +139,9 @@ function projectScene(document: ErdDocument, view: View, dialect: EditorDialect 
   const ids = options.instanceIds && new Set(options.instanceIds);
   const background: Shape[] = [];
   const relations: Shape[] = [];
+  const labels: Shape[] = [];
   const foreground: Shape[] = [];
+  const occupied: Box[] = [];
   const instances = new Map<string, TableBox[]>();
   const groupIds = new Set<string>();
   const tables = new Map(document.catalog.tables.map(table => [table.id, table]));
@@ -173,19 +196,25 @@ function projectScene(document: ErdDocument, view: View, dialect: EditorDialect 
       rowY += rowHeight + detailHeight * column.details.length;
     }
     const group = instances.get(table.id) ?? [];
-    group.push({ x, y, width, height, rows });
+    const box = { x, y, width, height, rows };
+    group.push(box);
     instances.set(table.id, group);
+    occupied.push(box);
     tableCount++;
   }
-  if (ids && !tableCount) throw new Error('이 뷰에서 출력할 테이블을 선택하세요.');
+  if (ids && !tableCount) throw new Error('이 다이어그램에서 출력할 테이블을 선택하세요.');
 
   for (const group of options.groups ? view.groups : []) {
     if (ids && !groupIds.has(group.id)) continue;
     const title = singleLine(group.name);
-    const width = Math.max(group.size?.width ?? 480, widthOf(title, labelSize) + 2 * gutter);
+    const titleWidth = widthOf(title, labelSize);
+    const width = Math.max(group.size?.width ?? 480, titleWidth + 2 * gutter);
     add(background, { kind: 'rect', x: group.x, y: group.y, width, height: group.size?.height ?? 250,
       fill: group.color ? annotationFill(group.color) : '#eef0fa', stroke: group.color ?? '#a9afd0' });
-    text(background, group.x + gutter, group.y + 24, title, labelSize, group.color ? '#172033' : '#545780');
+    const titleX = group.x + gutter;
+    const titleY = group.y + 24;
+    occupied.push({ x: titleX - 2, y: titleY - labelSize, width: titleWidth + 2, height: labelSize + 4 });
+    text(background, titleX, titleY, title, labelSize, group.color ? '#172033' : '#545780');
   }
   for (const note of options.notes ? view.notes : []) {
     if (ids && (!note.groupId || !groupIds.has(note.groupId))) continue;
@@ -193,7 +222,9 @@ function projectScene(document: ErdDocument, view: View, dialect: EditorDialect 
     const width = lines.reduce((wide, line) => Math.max(wide, widthOf(line, labelSize) + 2 * gutter), note.size?.width ?? 210);
     const lineHeight = 23;
     const height = Math.max(note.size?.height ?? 0, lines.length * lineHeight + 16);
-    add(foreground, { kind: 'rect', x: note.x, y: note.y, width, height,
+    const box = { x: note.x, y: note.y, width, height };
+    occupied.push(box);
+    add(foreground, { kind: 'rect', ...box,
       fill: note.color ? annotationFill(note.color) : '#fff6dc', stroke: note.color ?? '#e2c68c' });
     lines.forEach((line, index) => text(foreground, note.x + gutter, note.y + 24 + index * lineHeight, line, labelSize,
       note.color ? '#172033' : '#5a4726'));
@@ -207,18 +238,30 @@ function projectScene(document: ErdDocument, view: View, dialect: EditorDialect 
     if (ids && (sources.length === 0) !== (targets.length === 0)) omitted++;
     for (const source of sources) {
       for (const target of from === to ? [source] : targets) {
-        if (relations.length >= 100_000) throw new Error('관계선이 너무 많습니다. 뷰를 나누어 출력하세요.');
+        if (relations.length + labels.length >= 100_000) throw new Error('관계선이 너무 많습니다. 다이어그램을 나누어 출력하세요.');
         const line = connection(source, target, fromColumn, toColumn);
         const dash: [number, number] | undefined = kind === 'logical' ? [2, 4] : kind === 'non-identifying' ? [6, 3] : undefined;
         const color = kind === 'logical' ? '#8e7fa7' : '#7d8aa2';
         for (const shape of edgeShapes(line, color, dash)) add(relations, shape);
         if (label) {
           const value = singleLine(label);
-          const width = widthOf(value, detailSize);
-          const x = line[1].x - width / 2;
-          const y = (line[1].y + line[2].y) / 2;
-          add(relations, { kind: 'rect', x: x - 4, y: y - 9, width: width + 8, height: 18, fill: '#ffffff' });
-          text(relations, x, y + 4, value, detailSize, '#5d687d');
+          measure.font = font(detailSize);
+          const ink = measure.measureText(value);
+          const leftBearing = Math.max(0, ink.actualBoundingBoxLeft);
+          const ascent = Math.max(9, ink.actualBoundingBoxAscent);
+          const width = leftBearing + Math.max(ink.width, ink.actualBoundingBoxRight) + 8;
+          const height = ascent + Math.max(3, ink.actualBoundingBoxDescent) + 6;
+          const anchor = { x: line[1].x, y: (line[1].y + line[2].y) / 2 };
+          const box = { x: anchor.x - width / 2, y: anchor.y - height / 2, width, height };
+          box.y = clearLabelY(box, occupied);
+          occupied.push(box);
+          const labelEdge = Math.min(Math.max(anchor.y, box.y), box.y + height);
+          if (labelEdge !== anchor.y) {
+            add(relations, { kind: 'rect', x: anchor.x - .5, y: Math.min(anchor.y, labelEdge),
+              width: 1, height: Math.abs(anchor.y - labelEdge), fill: color });
+          }
+          add(labels, { kind: 'rect', ...box, fill: '#ffffff' });
+          text(labels, box.x + 4 + leftBearing, box.y + 3 + ascent, value, detailSize, '#5d687d');
         }
       }
     }
@@ -236,12 +279,12 @@ function projectScene(document: ErdDocument, view: View, dialect: EditorDialect 
       relate(link.sourceTableId, link.targetTableId, 'logical', options.relationshipLabels ? logicalRelationshipLabel(link) : undefined);
     }
   }
-  const shapes = [...background, ...relations, ...foreground];
-  if (!shapes.length) throw new Error('이 뷰에 출력할 객체가 없습니다.');
+  const shapes = [...background, ...relations, ...labels, ...foreground];
+  if (!shapes.length) throw new Error('이 다이어그램에 출력할 객체가 없습니다.');
   const width = Math.ceil(right - left + margin * 2);
   const height = Math.ceil(bottom - top + margin * 2);
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || Math.max(Math.abs(left), Math.abs(top), Math.abs(right), Math.abs(bottom)) > 10_000_000) {
-    throw new Error('출력 좌표 범위가 너무 큽니다. 뷰를 나누어 출력하세요.');
+    throw new Error('출력 좌표 범위가 너무 큽니다. 다이어그램을 나누어 출력하세요.');
   }
   return { shapes, bounds: { x: left - margin, y: top - margin, width, height }, omitted, tables: tableCount };
 }
@@ -338,13 +381,13 @@ export async function renderDiagramImage(document: ErdDocument, view: View, dial
   const info = { width, height, omitted: scene.omitted, tables: scene.tables };
   if (options.format === 'svg') return { ...info, blob: svg(scene, view.name, options.background, encodeFont(bytes)) };
   if (!(scale > 0) || width > pngLimits.side || height > pngLimits.side || width * height > pngLimits.pixels) {
-    throw new Error(`PNG ${width} × ${height}px가 출력 한도를 초과합니다. 배율을 낮추거나 뷰를 나누세요.`);
+    throw new Error(`PNG ${width} × ${height}px가 출력 한도를 초과합니다. 배율을 낮추거나 다이어그램을 나누세요.`);
   }
   try {
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext('2d');
-    if (!context || context.isContextLost()) throw new Error('이미지 메모리가 부족합니다. 배율을 낮추거나 뷰를 나누세요.');
+    if (!context || context.isContextLost()) throw new Error('이미지 메모리가 부족합니다. 배율을 낮추거나 다이어그램을 나누세요.');
     if (options.background) {
       context.fillStyle = canvasColor;
       context.fillRect(0, 0, width, height);
@@ -354,7 +397,7 @@ export async function renderDiagramImage(document: ErdDocument, view: View, dial
     for (const shape of scene.shapes) draw(context, shape);
     const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
     signal.throwIfAborted();
-    if (!blob?.size || context.isContextLost()) throw new Error('PNG를 만들지 못했습니다. 배율을 낮추거나 뷰를 나누세요.');
+    if (!blob?.size || context.isContextLost()) throw new Error('PNG를 만들지 못했습니다. 배율을 낮추거나 다이어그램을 나누세요.');
     return { ...info, blob };
   } finally {
     canvas.width = 0;

@@ -34,7 +34,7 @@ export function SampleApp() {
         </dl>
       </section>
       <section aria-labelledby="views">
-        <h2 id="views">뷰</h2>
+        <h2 id="views">다이어그램</h2>
         <div className="view-list">
           {document.views.map(view => (
             <article key={view.id}>

@@ -162,7 +162,7 @@ export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, 
         <fieldset disabled={working}>
           <label>내보낼 범위<select value={scope} onChange={event => setScope(event.target.value as typeof scope)}>
             <option value="all">전체 스키마</option>
-            <option value="view" disabled={!view}>현재 뷰{view ? ' · ' + view.name : ''}</option>
+            <option value="view" disabled={!view}>현재 다이어그램{view ? ' · ' + view.name : ''}</option>
             <option value="tables">선택한 테이블</option>
           </select></label>
           {scope === 'tables' && <div className="sql-table-list">{displayed.catalog.tables.map(table =>

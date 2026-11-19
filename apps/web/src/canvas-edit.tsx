@@ -150,7 +150,7 @@ export function QuickTableForm({ document, table, mode, cancel, apply }: {
     const names = canvasNames(form, table);
     const name = names.physicalName;
     const namespaceId = table?.namespaceId ?? (field(form, 'namespace') || namespaces[0]?.id);
-    if (!namespaceId) return report('네임스페이스를 먼저 추가하세요.');
+    if (!namespaceId) return report('스키마를 먼저 추가하세요.');
     if (names.description?.includes('\0')) return report('코멘트에 NUL 문자를 사용할 수 없습니다.');
     if (name !== table?.physicalName) {
       if (!validPhysicalName(name)) return report('물리명은 UTF-8 기준 1~63바이트여야 합니다.');

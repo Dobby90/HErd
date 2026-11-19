@@ -84,11 +84,11 @@ function ImageExportDialog({ document, view, dialect, selection, verify, close }
     }
   }
 
-  return <Modal title="뷰 이미지 내보내기" close={close}>
-    <p>출력 뷰 <strong>{view.name}</strong></p>
+  return <Modal title="이미지 내보내기" close={close}>
+    <p>내보낼 다이어그램 <strong>{view.name}</strong></p>
     <div className="image-options">
       <label>출력 범위<select value={scope} onChange={event => { reset(); setScope(event.target.value === 'selected' ? 'selected' : 'view'); }}>
-        <option value="view">현재 뷰 전체</option><option value="selected">선택한 테이블</option>
+        <option value="view">현재 다이어그램 전체</option><option value="selected">선택한 테이블</option>
       </select></label>
       <label>표시할 이름<select value={options.names} onChange={event => change({ names: viewNameDisplaySchema.parse(event.target.value) })}>
         <ViewNameOptions />
@@ -97,7 +97,7 @@ function ImageExportDialog({ document, view, dialect, selection, verify, close }
         const value = event.target.value;
         change({ columns: value === 'all' || value === 'collapsed' ? value : 'view' });
       }}>
-        <option value="view">뷰의 접기·숨김 유지</option><option value="all">모든 컬럼 표시</option><option value="collapsed">모든 컬럼 접기</option>
+        <option value="view">현재 접기·숨김 상태 유지</option><option value="all">모든 컬럼 표시</option><option value="collapsed">모든 컬럼 접기</option>
       </select></label>
       <label>이미지 형식<select value={options.format} onChange={event => change({ format: event.target.value === 'svg' ? 'svg' : 'png' })}>
         <option value="png">PNG</option><option value="svg">SVG</option>
@@ -159,7 +159,7 @@ function ImageExportDialog({ document, view, dialect, selection, verify, close }
       <p role="status">{result.width} × {result.height}px · 테이블 {result.tables}개{result.omitted > 0 && ` · 범위 밖 관계 ${result.omitted}개 생략`}</p>
       <img key={preview} className="image-preview" src={preview} alt="ERD 이미지 출력 미리보기" onLoad={() => setDecoded(true)} onError={() => {
         setResult(undefined);
-        setProblem('이미지 미리보기를 열지 못했습니다. 배율을 낮추거나 뷰를 나누세요.');
+        setProblem('이미지 미리보기를 열지 못했습니다. 배율을 낮추거나 다이어그램을 나누세요.');
       }} />
     </>}
   </Modal>;

@@ -50,7 +50,7 @@ function parseInput(body: Record<string, unknown>, maxBytes: number) {
   const destination = body.append === undefined ? undefined : objectBody(body.append);
   const viewId = destination?.viewId;
   if (viewId !== undefined && (typeof viewId !== 'string' || !viewId || viewId.length > 1024)) {
-    throw new ApiError(400, 'INVALID_SQL_REQUEST', '테이블을 추가할 뷰를 확인하세요.');
+    throw new ApiError(400, 'INVALID_SQL_REQUEST', '테이블을 추가할 다이어그램을 확인하세요.');
   }
   const append = destination && { erdId: uuid(destination.erdId), baseRevision: revisionNumber(destination.baseRevision), viewId };
   return { kind: 'parse' as const, target: target.data, sql, options: { defaultNamespace, append } };
@@ -115,7 +115,7 @@ export function registerSqlJobs(api: FastifyInstance, pool: Pool, authenticate: 
           throw new ApiError(409, 'DOCUMENT_TARGET_MISMATCH', '분석과 대상 문서의 SQL 대상이 다릅니다.');
         }
         if (append.viewId && !base.views.some(view => view.id === append.viewId)) {
-          throw new ApiError(409, 'VIEW_NOT_FOUND', '테이블을 추가할 뷰를 찾을 수 없습니다.');
+          throw new ApiError(409, 'VIEW_NOT_FOUND', '테이블을 추가할 다이어그램을 찾을 수 없습니다.');
         }
         baseCatalog = base.catalog;
       }

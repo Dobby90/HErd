@@ -771,7 +771,7 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
   const catalog = model.catalog;
   const output = baseCatalog ? model.additions() : catalog;
   if (baseCatalog && !output.tables.length && !diagnostics.length) {
-    diagnostics.push(issue('no-new-tables', '현재 뷰에 추가할 CREATE TABLE 정의가 필요합니다.'));
+    diagnostics.push(issue('no-new-tables', '현재 다이어그램에 추가할 CREATE TABLE 정의가 필요합니다.'));
   } else if (!baseCatalog && !catalog.tables.length && !catalog.sequences.length && !catalog.enums.length && !catalog.namespaces.length) {
     diagnostics.push(issue('no-importable-objects', '변환할 스키마 또는 테이블 관련 객체가 없습니다.'));
   }

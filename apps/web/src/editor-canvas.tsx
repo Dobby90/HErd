@@ -107,7 +107,7 @@ const TableNode = memo(function TableNode({ id, data, selected }: NodeProps<Canv
       {data.logicalName && <span className="canvas-logical-name" title={data.logicalName}>{data.logicalName}</span>}
     </span>
       {active && remove && tableId && <CanvasDeleteButton label={data.label + ' 테이블 삭제'}
-        title="모든 뷰에서 테이블 삭제" remove={() => remove(tableId)} />}
+        title="모든 다이어그램에서 테이블 삭제" remove={() => remove(tableId)} />}
       {link && <button type="button" className="quiet canvas-node-action nodrag nopan" aria-label={data.label + ' 관계 연결 대상 선택'}
         title="연결할 테이블로 선택" onClick={event => { event.stopPropagation(); link(id); }}><Icon name="link" /></button>}
     </strong>
@@ -503,7 +503,7 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
       {canvasForm && <div className="canvas-popover" style={{ left: canvasForm.screen.x, top: canvasForm.screen.y }}>{canvasForm.content}</div>}
     </div>
     <div id={mapId} className="canvas-map" hidden={!showMap}>
-      {showMap && <MiniMap<CanvasNode> ariaLabel="뷰 미니맵" pannable zoomable nodeColor={mapNodeColor} maskColor="var(--map-mask)"
+      {showMap && <MiniMap<CanvasNode> ariaLabel="다이어그램 미니맵" pannable zoomable nodeColor={mapNodeColor} maskColor="var(--map-mask)"
         maskStrokeColor="var(--accent)" maskStrokeWidth={1.5} style={{ width: 178, height: 98 }} />}
     </div>
   </ReactFlowProvider>;

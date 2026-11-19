@@ -296,6 +296,7 @@ summary { cursor: pointer; }
 .workspace { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .canvas-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: .38rem;
   min-height: 43px;
@@ -305,9 +306,10 @@ summary { cursor: pointer; }
   position: relative;
   z-index: 5;
 }
-.canvas-toolbar > .ui-icon, .canvas-toolbar .icon-button { color: var(--muted); }
-.canvas-toolbar h2 { margin-right: auto; min-width: 0; font-size: .86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.canvas-tools { display: flex; align-items: center; justify-content: flex-end; gap: .35rem; flex-wrap: wrap; }
+.canvas-title { display: flex; align-items: center; min-width: 0; max-width: 100%; gap: .38rem; }
+.canvas-title > .ui-icon, .canvas-title .icon-button { color: var(--muted); }
+.canvas-title h2 { min-width: 0; font-size: .86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-tools { display: flex; align-items: center; justify-content: flex-end; flex: 1; min-width: min(100%, 23rem); gap: .35rem; flex-wrap: wrap; }
 .canvas-modes { display: inline-flex; align-items: center; gap: 2px; padding: 2px; background: var(--hover); border-radius: 8px; }
 .canvas-modes button { width: 27px; min-height: 27px; border-radius: 6px; }
 .canvas-modes button[aria-pressed="true"] { background: var(--surface); color: var(--accent-ink); border-color: var(--line); }
@@ -315,6 +317,7 @@ summary { cursor: pointer; }
 .canvas-toolbar-primary[aria-pressed="true"] { background: var(--primary); color: white; }
 .canvas-toolbar-primary:active { cursor: grabbing; }
 .canvas-tools :is(select, button) { font-size: .77rem; }
+.canvas-tools > button, .canvas-tools > .action-menu > button { padding-inline: .4rem; }
 .canvas-tools .checkbox { margin: 0 .18rem; color: var(--muted); white-space: nowrap; }
 .canvas-tools select { padding: .29rem .37rem; }
 .canvas { position: relative; flex: 1; min-height: 208px; background: var(--canvas); }
@@ -614,7 +617,6 @@ dialog:has(.sql-export, .sql-import, .image-options, .version-list) { width: min
 @media (max-width: 900px) {
   .topbar { flex-wrap: wrap; }
   .document-actions { max-width: 100%; flex: 0 1 auto; }
-  .canvas-toolbar { flex-wrap: wrap; }
 }
 @media (max-width: 780px) {
   .editor { height: auto; min-height: 100dvh; }

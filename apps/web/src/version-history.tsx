@@ -102,9 +102,9 @@ export function VersionHistory({ erdId, csrf, readOnly, disabled, save, openVers
       {problem && <p role="alert">{problem}</p>}
       {selected ? <section>
         <h3>{kinds[selected.kind]} · 리비전 {selected.sourceRevision}</h3>
-        <p>{selected.document.name} · 테이블 {selected.document.catalog.tables.length}개 · 뷰 {selected.document.views.length}개</p>
+        <p>{selected.document.name} · 테이블 {selected.document.catalog.tables.length}개 · 다이어그램 {selected.document.views.length}개</p>
         {selected.description && <p>{selected.description}</p>}
-        {confirming && <p>현재 ERD의 모델, 제목, 모든 뷰를 이 버전으로 교체합니다. 현재 서버 버전은 복원 전 스냅샷으로 보존됩니다.</p>}
+        {confirming && <p>현재 ERD의 모델, 제목, 모든 다이어그램를 이 버전으로 교체합니다. 현재 서버 버전은 복원 전 스냅샷으로 보존됩니다.</p>}
         {pending && problem && <p>복원 응답을 확인하지 못했습니다. 동일한 요청으로 다시 시도하거나 서버 최신본을 여세요.</p>}
         <div className="actions">
           {!pending && <button type="button" disabled={busy} onClick={() => { setConfirming(false); setSelected(undefined); }}>버전 목록</button>}

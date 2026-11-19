@@ -22,7 +22,7 @@ export function viewLabel(value: Named, mode: View['nameDisplay']) {
 }
 
 export function ViewNameOptions() {
-  return <><option value="both">전체 보기</option><option value="logical">논리명</option><option value="physical">물리명</option></>;
+  return <><option value="both">논리명 + 물리명</option><option value="logical">논리명</option><option value="physical">물리명</option></>;
 }
 export const viewColumnIds = (table: Table, instance: View['instances'][number]) =>
   instance.collapsed ? [] : instance.visibleColumnIds ?? table.columnIds;

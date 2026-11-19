@@ -72,7 +72,7 @@ it('measures both release models through the built browser, API and PostgreSQL',
           const apiAfterOpen = await rssMiB();
 
           const search = performance.now();
-          await page.getByLabel('스키마 및 뷰 검색').fill('최종 배송 찾기');
+          await page.getByLabel('스키마 및 다이어그램 검색').fill('최종 배송 찾기');
           await button('최종 배송 찾기').click();
           const highlighted = node(tables - 1).locator('.canvas-column.search-match');
           await highlighted.waitFor();
@@ -153,7 +153,7 @@ it('measures both release models through the built browser, API and PostgreSQL',
 
           let pngPreviewMs: number | undefined;
           if (tables === 100) {
-            await page.getByLabel('스키마 및 뷰 검색').fill('');
+            await page.getByLabel('스키마 및 다이어그램 검색').fill('');
             await button('창고 상세').click();
             await openExport(page, '이미지');
             const start = performance.now();
@@ -161,7 +161,7 @@ it('measures both release models through the built browser, API and PostgreSQL',
             await page.getByRole('img', { name: 'ERD 이미지 출력 미리보기' }).waitFor();
             await button('PNG 다운로드').waitFor();
             pngPreviewMs = elapsed(start);
-            await page.getByRole('dialog', { name: '뷰 이미지 내보내기' }).getByRole('button', { name: '닫기' }).click();
+            await page.getByRole('dialog', { name: '이미지 내보내기' }).getByRole('button', { name: '닫기' }).click();
           }
 
           results.push({ tables, columns: document.catalog.columns.length, foreignKeys: fks, views: document.views.length,

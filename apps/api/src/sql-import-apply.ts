@@ -31,7 +31,7 @@ function placements(catalog: Catalog, y = 0): ErdDocument['views'][number]['inst
 function draft(catalog: Catalog, target: SqlTarget, id: string, name: string): ErdDocument {
   const candidate: ErdDocument = {
     id: 'import-candidate', name, target, formatVersion: 1, catalog, relationships: [], extensions: [],
-    views: [{ id: 'import-view', name: '기본 뷰', instances: placements(catalog), notes: [], groups: [] }],
+    views: [{ id: 'import-view', name: '기본 다이어그램', instances: placements(catalog), notes: [], groups: [] }],
   };
   return duplicateDocument(candidate, id, name);
 }
@@ -44,10 +44,10 @@ function appendTables(document: ErdDocument, added: Catalog, viewId?: string) {
     sequences: [...sequences, ...added.sequences],
   };
   if (!document.views.length && !viewId) {
-    document.views.push({ id: randomUUID(), name: '기본 뷰', instances: [], groups: [], notes: [] });
+    document.views.push({ id: randomUUID(), name: '기본 다이어그램', instances: [], groups: [], notes: [] });
   }
   const view = viewId ? document.views.find(value => value.id === viewId) : document.views[0];
-  if (!view || !added.tables.length) throw new ApiError(409, 'SQL_IMPORT_NOT_READY', '테이블을 추가할 분석 결과와 뷰가 필요합니다.');
+  if (!view || !added.tables.length) throw new ApiError(409, 'SQL_IMPORT_NOT_READY', '테이블을 추가하려면 SQL 분석 결과와 대상 다이어그램이 필요합니다.');
   const tableSizes = new Map(tables.map(table => [table.id, table.columnIds.length]));
   const bottom = [
     ...view.instances.map(instance => instance.y + Math.max(instance.size?.height ?? 0, 84 + (tableSizes.get(instance.tableId) ?? 0) * 50)),

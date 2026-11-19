@@ -128,7 +128,7 @@ it('requires confirmation and current access, preserves the prior revision, and 
       expect(snapshots).toEqual([{ source_revision: 2, kind: 'before-import', payload: changed }]);
       const current = (await api.inject({ url: erd, headers: owner.headers })).json();
       expect(current).toMatchObject({ revision: 3, document: { id: saved.erdId, name: '업데이트한 이름',
-        catalog: { tables: [{ physicalName: 'replacement' }] }, views: [{ name: '기본 뷰', instances: [{ x: 0, y: 0 }] }] } });
+        catalog: { tables: [{ physicalName: 'replacement' }] }, views: [{ name: '기본 다이어그램', instances: [{ x: 0, y: 0 }] }] } });
       expect(current.document.views[0].id).not.toBe(previous.views[0].id);
 
       const active = (await analyze('CREATE TABLE cancelled (id integer);')).json<ParseSqlJob>();

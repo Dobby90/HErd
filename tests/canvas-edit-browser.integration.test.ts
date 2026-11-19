@@ -80,18 +80,18 @@ it('edits and arranges the canvas, connects each relation type, and persists val
           await card(child).locator('strong').click();
         };
         const fk = page.getByRole('dialog', { name: '외래 키 설정' });
-        await connect('비식별 FK', 'users', 'shipment_records');
+        await connect('비식별 관계', 'users', 'shipment_records');
         await fk.getByLabel(/에 대응할 원본 컬럼/).selectOption({ label: 'customer_id' });
         await button('외래 키 적용').click();
         await fk.waitFor({ state: 'hidden' });
-        await connect('식별 FK', 'orders', 'shipment_records');
+        await connect('식별 관계', 'orders', 'shipment_records');
         await expect.poll(() => fk.locator('select').evaluateAll(nodes =>
           nodes.filter(node => (node as HTMLSelectElement).selectedOptions[0]?.text.startsWith('새 컬럼')).length)).toBe(2);
         await button('외래 키 적용').click();
         await fk.waitFor({ state: 'hidden' });
         await connect('논리 관계', 'products', 'shipment_records');
         const relation = page.getByRole('dialog', { name: '논리 관계 연결' });
-        await relation.getByLabel('관계 차수').selectOption('many-to-many');
+        await relation.getByLabel('카디널리티').selectOption('many-to-many');
         await button('논리 관계 적용').click();
         await relation.waitFor({ state: 'hidden' });
         await expect.poll(() => page.locator('.identifying-edge').count()).toBe(4);
@@ -149,7 +149,7 @@ it('edits and arranges the canvas, connects each relation type, and persists val
           return catalog.constraints.some(item => item.tableId === carrier?.id && item.kind === 'pk');
         }).toBe(true);
         const mode = page.getByLabel('이름 표시');
-        await mode.selectOption({ label: '전체 보기' });
+        await mode.selectOption({ label: '논리명 + 물리명' });
         await page.locator('.react-flow__controls-fitview').click();
         await expect.poll(async () => (await read()).document.views[0].nameDisplay).toBe('both');
         await button('shipment_records 이름 편집').dblclick();
@@ -193,7 +193,7 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         expect(await mode.inputValue()).toBe('both');
         await shipment.getByText('택배사의 연동 식별자', { exact: true }).waitFor();
         await openExport(page, '이미지');
-        const image = page.getByRole('dialog', { name: '뷰 이미지 내보내기' });
+        const image = page.getByRole('dialog', { name: '이미지 내보내기' });
         expect(await image.getByLabel('표시할 이름').inputValue()).toBe('both');
         await image.getByLabel('이미지 형식').selectOption('svg');
         await button('출력 미리보기').click();
@@ -231,7 +231,7 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         await shipment.locator('strong').click();
         await button('shipment_records 테이블 삭제').click();
         await impact.getByRole('heading', { name: 'public.shipment_records' }).waitFor();
-        await impact.getByRole('heading', { name: '영향받는 뷰 2개' }).waitFor();
+        await impact.getByRole('heading', { name: '영향받는 다이어그램 2개' }).waitFor();
         await impact.getByText('논리 관계 1개 삭제', { exact: true }).waitFor();
         expect(await impact.getByText(table.id, { exact: true }).count()).toBe(0);
         await impact.getByRole('button', { name: '실제 삭제 확인' }).click();

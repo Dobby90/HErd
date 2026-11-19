@@ -61,7 +61,7 @@ export function DeleteSchema({ document, objectId, run, close, removed }: {
     <section className="deletion-preview">
       <div className="deletion-target"><Icon name="trash" /><div>
         <h3>{names.get(objectId) ?? '선택한 스키마 객체'}</h3>
-        <p>{table ? '테이블 정의와 모든 뷰의 배치를 삭제합니다.' : column ? '컬럼 정의와 연결된 스키마 객체를 삭제합니다.' : '선택한 스키마 객체를 삭제합니다.'}</p>
+        <p>{table ? '테이블 정의와 모든 다이어그램의 배치를 삭제합니다.' : column ? '컬럼 정의와 연결된 스키마 객체를 삭제합니다.' : '선택한 스키마 객체를 삭제합니다.'}</p>
       </div></div>
       {blocked && <div className="deletion-blocked" role="alert">
         <h3>먼저 확인할 의존 항목 {impact.blockedBy.length}개</h3>
@@ -71,7 +71,7 @@ export function DeleteSchema({ document, objectId, run, close, removed }: {
         </li>)}</ul>
       </div>}
       {affectedViews.length > 0 && <div className="deletion-views">
-        <h3>영향받는 뷰 {affectedViews.length}개</h3>
+        <h3>영향받는 다이어그램 {affectedViews.length}개</h3>
         <ul>{affectedViews.map(view => {
           const count = view.instances.filter(item => impact.removed.has(item.id)).length;
           return <li key={view.id}>{view.name}{Boolean(count) && <span className="muted">배치 {count}개</span>}</li>;
@@ -257,7 +257,7 @@ export function ForeignKeyForm({ document, dialect, seed, run, close }: {
   const augmented = added.length ? { ...document, catalog: { ...document.catalog, columns: [...document.catalog.columns, ...added] } } : document;
   const validation = key ? dialect.validateForeignKey(augmented, key) : [];
   const modeProblem = key && mode === 'non-identifying' && isIdentifyingForeignKey(key, primary)
-    ? '비식별 FK에는 자식 기본키에 포함되지 않은 컬럼이 하나 이상 필요합니다.' : '';
+    ? '비식별 관계에는 자식 기본키에 포함되지 않은 컬럼이 하나 이상 필요합니다.' : '';
   const existingKeyNames = new Set(document.catalog.constraints.filter(item => item.tableId === seed.tableId).map(item => item.physicalName));
   const suggestedName = availableName([table?.physicalName, parent?.physicalName, 'fk'].filter(Boolean).join('_'), existingKeyNames);
   if (!table) return null;
@@ -291,7 +291,7 @@ export function ForeignKeyForm({ document, dialect, seed, run, close }: {
       }
       const useNull = onDelete === 'set-null' || onUpdate === 'set-null';
       if (mode === 'identifying' && useNull) {
-        setError('식별 FK의 자식 컬럼은 NULL을 허용하지 않습니다. 다른 참조 동작을 선택하세요.');
+        setError('식별 관계의 자식 컬럼은 NULL을 허용하지 않습니다. 다른 참조 동작을 선택하세요.');
         return;
       }
       if (mode === 'non-identifying' && useNull && sourceColumns.some(column =>
@@ -309,7 +309,7 @@ export function ForeignKeyForm({ document, dialect, seed, run, close }: {
         if (pk?.kind === 'pk' && columnIds.length !== pk.columnIds.length && (document.catalog.constraints.some(item =>
           item.kind === 'fk' && item.targetKey.kind === 'constraint' && item.targetKey.id === pk.id) ||
           document.catalog.indexes.some(item => item.tableId === table.id && item.physicalName === pk.physicalName))) {
-          setError('자식 기본키를 참조하는 FK 또는 같은 이름의 인덱스가 있습니다. 기존 기본키 컬럼에 매핑하거나 비식별 FK를 선택하세요.');
+          setError('자식 기본키를 참조하는 FK 또는 같은 이름의 인덱스가 있습니다. 기존 기본키 컬럼에 매핑하거나 비식별 관계를 선택하세요.');
           return;
         }
         const pkNames = schemaRelationNames(document, table.namespaceId);
@@ -334,8 +334,8 @@ export function ForeignKeyForm({ document, dialect, seed, run, close }: {
         setError('');
       }}>
         <option value="">기존 기본키 구성 사용</option>
-        <option value="identifying">식별 FK</option>
-        <option value="non-identifying">비식별 FK</option>
+        <option value="identifying">식별 관계</option>
+        <option value="non-identifying">비식별 관계</option>
       </select></label>
       {mode === 'identifying' && <p className="muted">매핑한 자식 컬럼을 기본키에 포함하고 NULL을 허용하지 않습니다.</p>}
       <NameFields value={seed.existing ?? { physicalName: seed.mode ? suggestedName : '' }} />

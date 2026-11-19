@@ -17,15 +17,19 @@ export const displayFields = [
 ] as const satisfies ReadonlyArray<readonly [keyof CanvasDisplay, string]>;
 
 type LogicalRelationship = ErdDocument['relationships'][number];
-export const logicalCardinalities = { 'one-to-one': '1:1', 'one-to-many': '1:N', 'many-to-many': 'N:M' } as const;
+export const logicalCardinalities = {
+  'one-to-one': { label: '일대일', notation: '1:1' },
+  'one-to-many': { label: '일대다', notation: '1:N' },
+  'many-to-many': { label: '다대다', notation: 'N:M' },
+} as const;
 
 export function logicalRelationshipLabel(relation: LogicalRelationship) {
-  return `${relation.name} · 논리 · ${logicalCardinalities[relation.cardinality]}`;
+  return `${relation.name} · 논리 · ${logicalCardinalities[relation.cardinality].notation}`;
 }
 
 export function foreignKeyLabel(identifying: boolean, meaning: ReturnType<EditorDialect['cardinality']>) {
   if (!meaning) return 'FK · 검토 필요';
-  return `${identifying ? '식별' : '비식별'} · 자식 0..${meaning.childMax === 1 ? '1' : 'N'} · 부모 ${meaning.parentOptional ? '0..1' : '1'}`;
+  return `${identifying ? '식별 관계' : '비식별 관계'} · 자식 0..${meaning.childMax === 1 ? '1' : 'N'} · 부모 ${meaning.parentOptional ? '0..1' : '1'}`;
 }
 
 const defaults: CanvasDisplay = {

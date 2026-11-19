@@ -150,13 +150,13 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         await history.getByText('첫 설계', { exact: true }).waitFor();
         await history.getByRole('button', { name: '닫기' }).click();
 
-        const search = page.getByLabel('스키마 및 뷰 검색');
+        const search = page.getByLabel('스키마 및 다이어그램 검색');
         await search.fill('Region');
         const result = page.getByRole('complementary', { name: '문서 탐색' }).getByRole('button', { name: 'Region', exact: true });
         await result.click();
         await page.locator('.canvas-column.search-match').filter({ hasText: 'Region' }).waitFor();
         expect(await result.locator('mark').textContent()).toBe('Region');
-        await button('이름순 그리드 재배치').click();
+        await button('이름순 재배치').click();
         const node = page.locator('.react-flow__node[data-id="a-placement"]');
         await expect.poll(() => node.getAttribute('style')).toContain('translate(0px, 0px)');
         await button('문서 제목 변경').click();
@@ -231,12 +231,12 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         expect(await button('관계 연결').count()).toBe(0);
         expect(await button('캔버스에 테이블 추가').count()).toBe(0);
         expect(await button('실행 취소').count()).toBe(0);
-        expect(await button('이름순 그리드 재배치').count()).toBe(0);
+        expect(await button('이름순 재배치').count()).toBe(0);
         await button('내보내기').click();
         await button('DDL 내보내기').waitFor();
         await button('내보내기').click();
         await openExport(page, '이미지');
-        await dialog('뷰 이미지 내보내기').getByRole('button', { name: '닫기' }).click();
+        await dialog('이미지 내보내기').getByRole('button', { name: '닫기' }).click();
         const canvasNode = page.locator('.react-flow__node[data-id="a-placement"]');
         const box = (await canvasNode.boundingBox())!;
         const position = await canvasNode.evaluate(node => (node as HTMLElement).style.transform);

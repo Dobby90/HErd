@@ -75,21 +75,21 @@ function TableDetails({ name, namespace, logicalName, initialTab, panels }: {
 }
 
 function ViewSettings({ view, run, choose, close }: { view: View; run: Run; choose(id: string): void; close(): void }) {
-  return <Modal title="뷰 설정" close={close}>
-    <Form button="뷰 이름 적용" submit={form => { if (run(putView({ ...view, name: field(form, 'name') }))) close(); }}>
-      <label>뷰 이름<input name="name" defaultValue={view.name} required /></label>
+  return <Modal title="다이어그램 설정" close={close}>
+    <Form button="다이어그램 이름 적용" submit={form => { if (run(putView({ ...view, name: field(form, 'name') }))) close(); }}>
+      <label>다이어그램 이름<input name="name" defaultValue={view.name} required /></label>
     </Form>
     <div className="actions">
       <button type="button" onClick={() => {
         const copy = duplicateView(view);
         if (run(putView(copy))) { choose(copy.id); close(); }
-      }}>뷰 복제</button>
+      }}>다이어그램 복제</button>
       <button type="button" className="danger" onClick={() => {
-        if (window.confirm('이 뷰와 배치를 삭제하시겠습니까?') && run({ kind: 'remove-view', viewId: view.id })) {
+        if (window.confirm('이 다이어그램과 배치를 삭제하시겠습니까?') && run({ kind: 'remove-view', viewId: view.id })) {
           choose('');
           close();
         }
-      }}>뷰 삭제</button>
+      }}>다이어그램 삭제</button>
     </div>
   </Modal>;
 }
@@ -98,7 +98,7 @@ function CanvasDisplaySettings({ settings, apply, close }: {
   settings: CanvasDisplay; apply(value: CanvasDisplay): void; close(): void;
 }) {
   return <Modal title="ERD 표시 옵션" close={close}>
-    <p className="muted">이 ERD의 모든 뷰에 적용됩니다.</p>
+    <p className="muted">이 ERD의 모든 다이어그램에 적용됩니다.</p>
     <Form button="표시 옵션 적용" cancel={close} submit={form => {
       const next = { ...settings };
       for (const [key] of displayFields) next[key] = form.has(key);
@@ -121,7 +121,7 @@ function DeleteViewObject({ view, object, run, close, removed }: {
   const action = group ? '그룹 삭제' : '메모 삭제';
   return <Modal title={action} close={close}>
     <section className="deletion-preview">
-      <p>{group ? `'${group.name}' 그룹을 삭제하면 포함된 테이블과 메모는 그룹에서 분리됩니다.` : '현재 뷰에서 이 메모를 삭제합니다.'}</p>
+      <p>{group ? `'${group.name}' 그룹을 삭제하면 포함된 테이블과 메모는 그룹에서 분리됩니다.` : '현재 다이어그램에서 이 메모를 삭제합니다.'}</p>
       <div className="actions">
         <button type="button" onClick={close}>취소</button>
         <button type="button" className="danger" onClick={() => {
@@ -164,8 +164,9 @@ function RelationshipForm({ document, relation, seed, run, close }: {
         {document.catalog.tables.map(table => <option key={table.id} value={table.id}>{label(table)}</option>)}
       </select>
     </label>)}
-    <label>관계 차수<select name="cardinality" defaultValue={relation?.cardinality ?? 'one-to-many'}>
-      {Object.entries(logicalCardinalities).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+    <label>카디널리티<select name="cardinality" defaultValue={relation?.cardinality ?? 'one-to-many'}>
+      {Object.entries(logicalCardinalities).map(([value, { label, notation }]) =>
+        <option key={value} value={value}>{label}({notation})</option>)}
     </select></label>
     {relation && <button type="button" onClick={() => {
       if (run({ kind: 'remove-relationship', id: relation.id })) close();
@@ -223,9 +224,9 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
   </>;
   if (relationship || selection.type === 'relationship') return <RelationshipForm key={JSON.stringify(relationship) ?? 'new'} document={document} relation={relationship} run={run} close={() => inspect(null)} />;
   if (namespace || selection.type === 'namespace') return <>
-    <h3>{namespace ? '네임스페이스' : '새 네임스페이스'}</h3>
+    <h3>{namespace ? '스키마' : '새 스키마'}</h3>
     <Form key={JSON.stringify(namespace) ?? 'new'} disabled={capability?.namespace.edit !== 'supported'}
-      button={namespace ? '네임스페이스 적용' : '네임스페이스 만들기'} submit={form => {
+      button={namespace ? '스키마 적용' : '스키마 만들기'} submit={form => {
         const value = { ...named(form), id: namespace?.id ?? id() };
         if (run({ kind: 'put-catalog', collection: 'namespaces', value })) inspect({ type: 'object', id: value.id });
       }}><NameFields value={namespace ?? { physicalName: '' }} /></Form>
@@ -237,7 +238,7 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
       {column && removeButton}</>;
     if (constraint?.kind === 'fk') return <>{back}
       <h3>외래 키</h3><p>{label(constraint)}</p>
-      <p className="muted">{isIdentifyingForeignKey(constraint, primaryColumnsByTable(document)) ? '식별 FK' : '비식별 FK'}</p>
+      <p className="muted">{isIdentifyingForeignKey(constraint, primaryColumnsByTable(document)) ? '식별 관계' : '비식별 관계'}</p>
       <p>{constraint.pairs.map(pair => {
         const source = catalog.columns.find(item => item.id === pair.sourceColumnId);
         const target = catalog.columns.find(item => item.id === pair.targetColumnId);
@@ -270,7 +271,7 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
             tab: table ? 'settings' : 'columns' });
         }}>
         <NameFields value={table ?? { physicalName: '' }} />
-        <label>네임스페이스<select name="namespace" defaultValue={table?.namespaceId ?? (selection.type === 'table' ? selection.namespaceId : undefined)}>
+        <label>스키마<select name="namespace" defaultValue={table?.namespaceId ?? (selection.type === 'table' ? selection.namespaceId : undefined)}>
           {catalog.namespaces.map(item => <option key={item.id} value={item.id}>{label(item)}</option>)}
         </select></label>
       </Form>;
@@ -327,7 +328,7 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
           {settings}
         </section>
         {!readOnly && view && instance && <section className="inspector-section">
-          <h4>현재 뷰 배치</h4>
+          <h4>현재 다이어그램 배치</h4>
           <Form key={JSON.stringify(instance)} button="배치 적용" submit={form => run(putView({
             ...view, instances: view.instances.map(item => item.id === instance.id ? {
               ...item, groupId: field(form, 'group') || undefined, collapsed: form.has('collapsed'),
@@ -340,12 +341,12 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
           <button type="button" onClick={() => {
             run({ kind: 'remove-instance', viewId: view.id, instanceId: instance.id });
             inspect({ type: 'object', id: table.id, tab: 'settings' });
-          }}>현재 뷰에서 제거</button>
+          }}>현재 다이어그램에서 제거</button>
         </section>}
         {!readOnly && view && !view.instances.some(item => item.tableId === table.id) && <button type="button" onClick={() => {
           const item = placement(view, table.id);
           if (run(putView({ ...view, instances: [...view.instances, item] }))) inspect({ type: 'object', id: item.id, tab: 'settings' });
-        }}>현재 뷰에 배치</button>}
+        }}>현재 다이어그램에 배치</button>}
         {!readOnly && <section className="inspector-section">
           <button type="button" className="danger" onClick={() => remove(table.id)}><Icon name="trash" />스키마에서 테이블 삭제</button>
         </section>}
@@ -368,7 +369,7 @@ type EditingSession = {
 export function createEditorDocument(name: string, target: SqlTarget) {
   return createDocument({
     id: id(), name, target, namespace: { id: id(), physicalName: 'public' },
-    view: emptyView('기본 뷰'),
+    view: emptyView('기본 다이어그램'),
   }).document;
 }
 
@@ -675,15 +676,15 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
           {!schemaCollapsed && <h2>스키마</h2>}
           <div className="actions navigator-header-actions">
             {!schemaCollapsed && !readOnly && <button type="button" className="quiet icon-button"
-              aria-label="네임스페이스 추가" title="네임스페이스 추가"
+              aria-label="스키마 추가" title="스키마 추가"
               onClick={() => openProperties({ type: 'namespace' })}><Icon name="plus" /></button>}
             <button type="button" className="quiet icon-button" aria-expanded={!schemaCollapsed} aria-controls={`${mobilePanesId}-schema`}
               aria-label={schemaCollapsed ? '스키마 펼치기' : '스키마 접기'} title={schemaCollapsed ? '스키마 펼치기' : '스키마 접기'}
               onClick={toggleSchema}><Icon name={schemaCollapsed ? 'right' : 'back'} /></button>
           </div>
         </div>
-        <label className="schema-search"><Icon name="search" /><span className="sr-only">스키마 및 뷰 검색</span>
-          <input type="search" placeholder="스키마 및 뷰 검색" value={query} onChange={event => {
+        <label className="schema-search"><Icon name="search" /><span className="sr-only">스키마 및 다이어그램 검색</span>
+          <input type="search" placeholder="스키마 및 다이어그램 검색" value={query} onChange={event => {
             setQuery(event.target.value);
             setSearchFocus(undefined);
           }} />
@@ -712,8 +713,8 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
               onClick={() => openProperties({ type: 'table', namespaceId: namespace.id })}><Icon name="plus" />테이블 추가</button>}
           </section>;
         })}
-        <div className="section-heading nav-heading section-separated"><h2>뷰</h2>{!readOnly && <button type="button" className="quiet icon-button"
-          aria-label="뷰 추가" title="뷰 추가" onClick={() => setDialog('view')}><Icon name="plus" /></button>}</div>
+        <div className="section-heading nav-heading section-separated"><h2>다이어그램</h2>{!readOnly && <button type="button" className="quiet icon-button"
+          aria-label="다이어그램 추가" title="다이어그램 추가" onClick={() => setDialog('view')}><Icon name="plus" /></button>}</div>
         <ul className="object-list">{document.views.filter(item => matches(item.name)).map(item => <li key={item.id}>
           <button type="button" aria-pressed={view?.id === item.id} onClick={() => selectView(item.id)}><Icon name="view" /><span>{item.name}</span></button>
         </li>)}</ul>
@@ -736,10 +737,12 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
       <section className="workspace" id={`${mobilePanesId}-canvas`} aria-label="다이어그램">
         {view ? <>
           <div className="canvas-toolbar">
-            <Icon name="view" />
-            <h2>{view.name}</h2>
-            {!readOnly && <button type="button" className="quiet icon-button" title="뷰 설정" aria-label="뷰 설정"
-              onClick={() => setDialog('view-settings')}><Icon name="settings" /></button>}
+            <div className="canvas-title">
+              <Icon name="view" />
+              <h2 title={view.name}>{view.name}</h2>
+              {!readOnly && <button type="button" className="quiet icon-button" title="다이어그램 설정" aria-label="다이어그램 설정"
+                onClick={() => setDialog('view-settings')}><Icon name="settings" /></button>}
+            </div>
             <div className="canvas-tools">
               <div className="canvas-modes" role="group" aria-label="캔버스 모드">
                 <button type="button" className="quiet icon-button" aria-label="선택 모드" title="선택 모드 (V)"
@@ -756,9 +759,9 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
                   }} onClick={() => chooseTool({ kind: 'place' })}><Icon name="plus" />테이블</button>
                 <ActionMenu label="관계 연결" icon="link">
                   <button type="button" disabled={!dialect || !view.instances.length}
-                    onClick={() => chooseTool({ kind: 'relation', mode: 'identifying' })}>식별 FK</button>
+                    onClick={() => chooseTool({ kind: 'relation', mode: 'identifying' })}>식별 관계</button>
                   <button type="button" disabled={!dialect || !view.instances.length}
-                    onClick={() => chooseTool({ kind: 'relation', mode: 'non-identifying' })}>비식별 FK</button>
+                    onClick={() => chooseTool({ kind: 'relation', mode: 'non-identifying' })}>비식별 관계</button>
                   <button type="button" disabled={!view.instances.length}
                     onClick={() => chooseTool({ kind: 'relation', mode: 'logical' })}>논리 관계</button>
                 </ActionMenu>
@@ -769,11 +772,11 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
               }}>
                 <ViewNameOptions />
               </select></label>
-              <label className="checkbox"><input type="checkbox" checked={snap} disabled={readOnly} onChange={event => setSnap(event.target.checked)} />그리드 맞춤</label>
-              {!readOnly && <button type="button" className="quiet" disabled={!view.instances.length} aria-label="이름순 그리드 재배치"
-                title="이름순 그리드 재배치"
+              <label className="checkbox"><input type="checkbox" checked={snap} disabled={readOnly} onChange={event => setSnap(event.target.checked)} />격자에 맞춰 이동</label>
+              {!readOnly && <button type="button" className="quiet" disabled={!view.instances.length}
+                title="테이블을 이름순으로 재배치"
                 onClick={() => run(putView(arrangeView(document, view, layoutSizes.current)))}>
-                그리드 정렬
+                이름순 재배치
               </button>}
               {!readOnly && <ActionMenu label="추가" icon="plus">
                 <button type="button" onClick={() => {
@@ -833,7 +836,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
                 screen: tool.at.screen,
                 content: <QuickTableForm key={tool.at.point.x + ':' + tool.at.point.y} document={document} mode={view.nameDisplay}
                   cancel={() => setTool(undefined)} apply={(table, report) => {
-                    if (tool.at && !placeTable(table, tool.at.point, true)) report('현재 뷰에 테이블을 추가하지 못했습니다.');
+                    if (tool.at && !placeTable(table, tool.at.point, true)) report('현재 다이어그램에 테이블을 추가하지 못했습니다.');
                   }} />,
               } : undefined)}
               dropTable={canEdit ? (tableId, point) => {
@@ -860,14 +863,14 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
           <div className="canvas-status">
             <span>테이블 {view.instances.length}개</span>
             {display.relationships && <>
-              <span className="edge-legend"><span aria-hidden="true" />식별 FK</span>
-              <span className="edge-legend non-identifying"><span aria-hidden="true" />비식별 FK</span>
+              <span className="edge-legend"><span aria-hidden="true" />식별 관계</span>
+              <span className="edge-legend non-identifying"><span aria-hidden="true" />비식별 관계</span>
               <span className="edge-legend logical"><span aria-hidden="true" />논리 관계</span>
             </>}
             <button type="button" className="quiet" aria-expanded={showMap} aria-controls={mapId} onClick={() => setShowMap(value => !value)}>
               <Icon name="map" />미니맵</button>
           </div>
-        </> : <p className="empty-view">도면을 그리려면 뷰를 추가하세요.</p>}
+        </> : <p className="empty-view">테이블을 배치하려면 다이어그램을 추가하세요.</p>}
       </section>
       <aside className="inspector" id={`${mobilePanesId}-properties`} aria-label="속성">
         <div className="pane-heading"><h2>속성</h2></div>
@@ -885,11 +888,11 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
         </div>
       </aside>
     </div>
-    {dialog === 'view' && <Modal title="새 뷰" close={() => setDialog(null)}>
-      <Form button="뷰 만들기" cancel={() => setDialog(null)} submit={form => {
+    {dialog === 'view' && <Modal title="새 다이어그램" close={() => setDialog(null)}>
+      <Form button="다이어그램 만들기" cancel={() => setDialog(null)} submit={form => {
         const next = emptyView(field(form, 'name'));
         if (run(putView(next))) { selectView(next.id); setDialog(null); }
-      }}><label>새 뷰 이름<input name="name" required /></label></Form>
+      }}><label>새 다이어그램 이름<input name="name" required /></label></Form>
     </Modal>}
     {dialog === 'title' && <Modal title="문서 제목 변경" close={() => setDialog(null)}>
       <Form button="제목 적용" cancel={() => setDialog(null)} submit={form => {
