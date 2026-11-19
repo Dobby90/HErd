@@ -2,13 +2,12 @@ import { useEffect, useState } from 'react';
 import { Modal } from './editor-fields.js';
 import { Icon } from './editor-controls.js';
 import { ApiFailure, apiRequest } from './project-api.js';
-import type { DirectoryProfile, ProjectMember, ProjectRole } from './project-api.js';
+import type { ProjectAccount, ProjectMember, ProjectRole } from './project-api.js';
 
 const roles = { owner: '소유자', editor: '편집자', viewer: '조회자' };
 const message = (error: unknown) => error instanceof Error ? error.message : '멤버 요청을 처리하지 못했습니다.';
 
-type Candidate = DirectoryProfile & { id: string };
-type CandidateResults = { users: Candidate[]; hasMore: boolean };
+type CandidateResults = { users: ProjectAccount[]; hasMore: boolean };
 type MemberChange = { member: ProjectMember; role?: ProjectRole };
 
 function RoleOptions({ owner = true }: { owner?: boolean }) {
@@ -16,10 +15,10 @@ function RoleOptions({ owner = true }: { owner?: boolean }) {
     <option value="editor">{roles.editor}</option><option value="viewer">{roles.viewer}</option></>;
 }
 
-function AddMember({ path, busy, add }: { path: string; busy: boolean; add(user: Candidate, role: ProjectRole): void }) {
+function AddMember({ path, busy, add }: { path: string; busy: boolean; add(user: ProjectAccount, role: ProjectRole): void }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<CandidateResults>();
-  const [selected, setSelected] = useState<Candidate>();
+  const [selected, setSelected] = useState<ProjectAccount>();
   const [role, setRole] = useState<ProjectRole>('viewer');
   const [searching, setSearching] = useState(false);
   const [problem, setProblem] = useState('');
@@ -40,14 +39,14 @@ function AddMember({ path, busy, add }: { path: string; busy: boolean; add(user:
 
   return <section className="management-section" aria-label="멤버 추가">
     <form className="management-search" onSubmit={event => { event.preventDefault(); void search(); }}>
-      <label>초대할 사용자<input type="search" autoFocus placeholder="공개 이름 또는 별칭 (2자 이상)" value={query} maxLength={100}
+      <label>초대할 사용자<input type="search" autoFocus placeholder="표시 이름 또는 로그인 아이디" value={query} maxLength={100}
         disabled={busy || searching} onChange={event => {
           setQuery(event.target.value);
           setResults(undefined);
           setSelected(undefined);
           setProblem('');
         }} /></label>
-      <button type="submit" disabled={busy || searching || query.trim().length < 2}>사용자 검색</button>
+      <button type="submit" disabled={busy || searching || !query.trim()}>사용자 검색</button>
     </form>
     {searching && <p role="status">사용자 검색 중</p>}
     {problem && <p role="alert">{problem}</p>}
@@ -56,11 +55,11 @@ function AddMember({ path, busy, add }: { path: string; busy: boolean; add(user:
         <legend className="sr-only">검색된 사용자</legend>
         {results.users.map(user => <label key={user.id}>
           <input type="radio" name="candidate" checked={selected?.id === user.id} onChange={() => setSelected(user)} />
-          <span className="management-name"><strong>{user.publicName}</strong><small>@{user.alias}</small></span>
+          <span className="management-name"><strong>{user.displayName}</strong>{user.username && <small>{user.username}</small>}</span>
         </label>)}
       </fieldset>
       {results.hasMore && <p className="muted">처음 20명을 표시합니다. 검색어를 구체적으로 입력해 보세요.</p>}
-    </> : <p role="status">추가할 수 있는 사용자가 없습니다. 상대의 검색 프로필이 공개되어 있는지 확인하세요.</p>)}
+    </> : <p role="status">검색 결과에 추가할 수 있는 사용자가 없습니다.</p>)}
     {selected && <form className="management-search" onSubmit={event => { event.preventDefault(); add(selected, role); }}>
       <label>추가할 역할<select value={role} disabled={busy} onChange={event => setRole(event.target.value as ProjectRole)}>
         <RoleOptions owner={false} />
@@ -160,7 +159,7 @@ function MembersDialog({ path, userId, csrf, close, selfChanged }: {
         const disabled = busy || loading || Boolean(confirmation) || lastOwner;
         return <li key={member.id} className="management-row">
           <span className="management-name"><strong>{member.displayName}{member.id === userId && ' (나)'}</strong>
-            <small>{[member.alias && '@' + member.alias, roles[member.role], member.disabled && '비활성'].filter(Boolean).join(' · ')}</small>
+            <small>{[member.username, roles[member.role], member.disabled && '비활성'].filter(Boolean).join(' · ')}</small>
             {lastOwner && <small>마지막 활성 소유자</small>}
           </span>
           <div className="management-row-actions">

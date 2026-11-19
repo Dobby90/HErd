@@ -4,7 +4,7 @@ import { lockMembershipChanges, requireActiveAccount } from './account-access.js
 import { ApiError, objectBody, uuid } from './api-error.js';
 import type { Authenticate } from './auth.js';
 import { transaction } from './database.js';
-import { userSearch } from './user-directory.js';
+import { userSearch } from './user-search.js';
 
 const pageSize = 25;
 
@@ -23,13 +23,12 @@ export function registerAdminUsers(api: FastifyInstance, pool: Pool, authenticat
       throw new ApiError(400, 'INVALID_PAGE', '페이지 번호를 확인하세요.');
     }
     const { rows } = await pool.query(`SELECT u.id, u.display_name AS "displayName", p.username,
-      u.directory_alias AS alias, u.is_admin AS "isAdmin", u.disabled_at IS NOT NULL AS disabled,
+      u.is_admin AS "isAdmin", u.disabled_at IS NOT NULL AS disabled,
       CASE WHEN p.user_id IS NOT NULL THEN 'password'
         WHEN u.issuer = 'urn:herd:development' THEN 'development' ELSE 'oidc' END AS "authMethod"
       FROM users u LEFT JOIN password_credentials p ON p.user_id = u.id
       WHERE $1 = '' OR strpos(lower(u.display_name), lower($1)) > 0
-        OR strpos(p.username, lower($1)) > 0 OR strpos(u.directory_alias, lower($1)) > 0
-        OR strpos(lower(u.directory_name), lower($1)) > 0
+        OR strpos(p.username, lower($1)) > 0
       ORDER BY lower(u.display_name), u.id LIMIT $3 OFFSET $2`, [query, (Number(page) - 1) * pageSize, pageSize + 1]);
     return { users: rows.slice(0, pageSize), hasMore: rows.length > pageSize };
   });

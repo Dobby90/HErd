@@ -24,7 +24,7 @@ async function openEditor(page: Page, origin: string, document = sampleDocument,
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (path === '/api/me') return route.fulfill({ json: {
-      user: { id: 'browser-user', displayName: '편집기 사용자', isAdmin: false, directory: null },
+      user: { id: 'browser-user', displayName: '편집기 사용자', isAdmin: false },
       csrfToken: 'browser-csrf', auth: { oidc: false, development: false, local: true },
     } });
     if (path === base) return route.fulfill({ json: { ...project, documentCount: documents.size } });

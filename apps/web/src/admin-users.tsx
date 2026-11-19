@@ -7,7 +7,6 @@ type Account = {
   id: string;
   displayName: string;
   username: string | null;
-  alias: string | null;
   disabled: boolean;
   isAdmin: boolean;
   authMethod: 'password' | 'oidc' | 'development';
@@ -65,7 +64,7 @@ function UserManagement({ csrf, close }: { csrf?: string | null; close(): void }
 
   return <Modal title="사용자 관리" className="management-dialog" close={() => { if (!busy) close(); }}>
     <form className="management-search" onSubmit={event => { event.preventDefault(); load(input.trim(), 1); }}>
-      <label>사용자 검색<input type="search" placeholder="이름, 아이디 또는 별칭" maxLength={100} value={input}
+      <label>사용자 검색<input type="search" placeholder="표시 이름 또는 로그인 아이디" maxLength={100} value={input}
         disabled={busy || Boolean(confirmation)} onChange={event => setInput(event.target.value)} /></label>
       <button type="submit" disabled={busy || Boolean(confirmation)}>검색</button>
     </form>
@@ -75,7 +74,7 @@ function UserManagement({ csrf, close }: { csrf?: string | null; close(): void }
     {results && (results.users.length ? <ul className="management-list" aria-label="사용자 목록">
       {results.users.map(account => <li key={account.id} className="management-row">
         <span className="management-name"><strong>{account.displayName}</strong>
-          <small>{[authNames[account.authMethod], account.username, account.alias && '@' + account.alias, account.isAdmin && '관리자']
+          <small>{[authNames[account.authMethod], account.username, account.isAdmin && '관리자']
             .filter(Boolean).join(' · ')}</small>
         </span>
         <div className="management-row-actions">

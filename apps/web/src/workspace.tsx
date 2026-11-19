@@ -3,12 +3,11 @@ import type { ReactNode } from 'react';
 import type { ImportApplied } from '@erd/sql-contract';
 import { duplicateDocument } from '@erd/model';
 import { AdminUsers } from './admin-users.js';
-import { DirectorySettings } from './directory-profile.js';
 import { createEditorDocument, DocumentEditor, editorTargets } from './editor.js';
 import { ActionMenu, AppVersion, Icon } from './editor-controls.js';
 import { field, Form, Modal } from './editor-fields.js';
 import { ApiFailure, apiRequest } from './project-api.js';
-import type { DirectoryProfile, DocumentSummary, Identity, Project, SavedRevision, ServerDocument, SnapshotDetail } from './project-api.js';
+import type { DocumentSummary, Identity, Project, SavedRevision, ServerDocument, SnapshotDetail } from './project-api.js';
 import { ProjectMembers } from './project-members.js';
 import { countDrafts, readDraft, readDrafts, restoreDraft } from './recovery.js';
 import { removeServerDraft, serverDrafts } from './server-drafts.js';
@@ -215,14 +214,6 @@ export function Workspace() {
     currentIdentity.current = identity;
     setIdentity(identity);
     return identity;
-  }
-
-  function updateDirectory(profile: DirectoryProfile | null) {
-    const current = currentIdentity.current;
-    if (current?.user?.id !== owner || !current?.user) return;
-    const next = { ...current, user: { ...current.user, directory: profile } };
-    currentIdentity.current = next;
-    setIdentity(next);
   }
 
   async function act(action: () => Promise<void>) {
@@ -550,7 +541,6 @@ export function Workspace() {
       <div className="actions project-account">
         <ThemeToggle />
         {identity?.user && <>
-          <DirectorySettings key={identity.user.id} profile={identity.user.directory} csrf={csrf} onSave={updateDirectory} />
           {identity.user.isAdmin && <AdminUsers key={identity.user.id + ':admin'} csrf={csrf} />}
           <span className="account-name" title={identity.user.displayName}>{identity.user.displayName}</span>
           <button type="button" className="quiet" disabled={busy} onClick={logOut}>로그아웃</button>
@@ -600,35 +590,35 @@ export function Workspace() {
             <span className="collection-glyph"><Icon name="folder" /></span>
             <div><h1>{project.name}</h1><p>{roles[project.role]}</p></div>
           </div>
-          <div className="actions workspace-heading-actions">
-            {project.role === 'owner' && owner && <>
-              <ProjectMembers key={project.id} projectId={project.id} userId={owner} csrf={csrf}
-                selfChanged={() => window.dispatchEvent(new Event('herd:check-project-access'))} />
-              <ActionMenu label="프로젝트 설정" icon="settings" iconOnly>
-                <button type="button" disabled={busy} onClick={() => setDialog('rename')}><Icon name="edit" />프로젝트 이름 변경</button>
-                <button type="button" className="danger" disabled={busy} onClick={() => {
-                  if (!window.confirm(`프로젝트 '${project.name}'와 포함된 ERD ${project.documentCount}개를 모두 삭제하시겠습니까?`)) return;
-                  void act(async () => {
-                    await apiRequest('/projects/' + project.id, { method: 'DELETE', csrf, body: { documentCount: project.documentCount } });
-                    for (const document of projectView?.documents ?? []) {
-                      editors.current.get(document.id)?.stop();
-                      editors.current.delete(document.id);
-                    }
-                    go({});
-                  });
-                }}><Icon name="trash" />프로젝트 삭제</button>
-              </ActionMenu>
-            </>}
-            {writable && <button type="button" className="primary" disabled={busy} onClick={() => setDialog('new')}><Icon name="plus" />새 ERD</button>}
-          </div>
+          {project.role === 'owner' && owner && <div className="actions workspace-heading-actions" role="group" aria-label="프로젝트 관리">
+            <ProjectMembers key={project.id} projectId={project.id} userId={owner} csrf={csrf}
+              selfChanged={() => window.dispatchEvent(new Event('herd:check-project-access'))} />
+            <ActionMenu label="프로젝트 설정" icon="settings" iconOnly>
+              <button type="button" disabled={busy} onClick={() => setDialog('rename')}><Icon name="edit" />프로젝트 이름 변경</button>
+              <button type="button" className="danger" disabled={busy} onClick={() => {
+                if (!window.confirm(`프로젝트 '${project.name}'와 포함된 ERD ${project.documentCount}개를 모두 삭제하시겠습니까?`)) return;
+                void act(async () => {
+                  await apiRequest('/projects/' + project.id, { method: 'DELETE', csrf, body: { documentCount: project.documentCount } });
+                  for (const document of projectView?.documents ?? []) {
+                    editors.current.get(document.id)?.stop();
+                    editors.current.delete(document.id);
+                  }
+                  go({});
+                });
+              }}><Icon name="trash" />프로젝트 삭제</button>
+            </ActionMenu>
+          </div>}
         </div>
         <div className="collection-toolbar">
           {search('ERD 검색')}
-          {writable && <ActionMenu label="가져오기" icon="import">
-            <SqlImport key={project.id} projectId={project.id} csrf={csrf} disabled={busy}
-              onApplied={result => go({ projectId: project.id, documentId: result.erdId })} />
-            <button type="button" disabled={busy} onClick={openLocal}>로컬 복구본 가져오기</button>
-          </ActionMenu>}
+          {writable && <div className="actions project-erd-actions" role="group" aria-label="ERD 작업">
+            <ActionMenu label="가져오기" icon="import">
+              <SqlImport key={project.id} projectId={project.id} csrf={csrf} disabled={busy}
+                onApplied={result => go({ projectId: project.id, documentId: result.erdId })} />
+              <button type="button" disabled={busy} onClick={openLocal}>로컬 복구본 가져오기</button>
+            </ActionMenu>
+            <button type="button" className="primary" disabled={busy} onClick={() => setDialog('new')}><Icon name="plus" />새 ERD</button>
+          </div>}
         </div>
         <section className="collection" aria-label="ERD 목록">
           <div className="collection-heading"><h2>ERD 목록</h2><span>{project.documentCount}</span></div>

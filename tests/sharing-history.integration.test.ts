@@ -21,11 +21,15 @@ async function setup(connectionString: string) {
     } else done();
   });
 
-  async function account(name: string, admin = false) {
+  async function account(name: string, { admin = false, username, subject }: { admin?: boolean; username?: string; subject?: string } = {}) {
     const id = randomUUID();
     const token = randomBytes(32).toString('base64url');
-    await db.query('INSERT INTO users (id, issuer, subject, display_name, is_admin) VALUES ($1,$2,$3,$3,$4)',
-      [id, 'urn:fixture:accounts', name, admin]);
+    await db.query('INSERT INTO users (id, issuer, subject, display_name, is_admin) VALUES ($1,$2,$3,$4,$5)',
+      [id, username ? 'urn:herd:password' : 'urn:fixture:accounts', subject ?? id, name, admin]);
+    if (username) {
+      await db.query('INSERT INTO password_credentials (user_id, username, password_salt, password_hash) VALUES ($1,$2,$3,$4)',
+        [id, username, randomBytes(16), randomBytes(64)]);
+    }
     await db.query("INSERT INTO sessions VALUES ($1,$2,now() + interval '1 hour')", [createHash('sha256').update(token).digest('hex'), id]);
     const headers = { cookie: 'herd-session=' + token, origin, 'x-csrf-token': createHash('sha256').update('herd:csrf:' + token).digest('hex') };
     const request = (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, payload?: Record<string, unknown>) =>
@@ -53,6 +57,46 @@ async function fixture(run: (context: Fixture) => Promise<void>) {
   });
 }
 
+it('searches and adds active registered accounts without separate search profiles', async () => {
+  await fixture(async ({ db, account, project }) => {
+    const [owner, first, second, disabled, oidc, nameless, admin] = await Promise.all([
+      account('소유자'), account('김', { username: 'team-first' }), account('김', { username: 'team-second' }),
+      account('김', { username: 'team-inactive' }), account('OIDC 이름', { subject: 'provider-subject' }),
+      account('provider-fallback', { subject: 'provider-fallback' }), account('운영자', { admin: true }),
+    ]);
+    await db.query('UPDATE users SET disabled_at = now() WHERE id = $1', [disabled.id]);
+    await db.query('UPDATE users SET directory_name = $2, directory_alias = $3 WHERE id = $1', [second.id, '이전 프로필', 'legacy-alias']);
+    const members = (await project(owner, '가입 계정 검색')) + '/members';
+    const search = (query: string) => owner.get(members + '/candidates?q=' + encodeURIComponent(query));
+    const firstAccount = { id: first.id, displayName: '김', username: 'team-first' };
+    const secondAccount = { id: second.id, displayName: '김', username: 'team-second' };
+    expect((await search(' TEAM-FIRST ')).json()).toEqual({ users: [firstAccount], hasMore: false });
+    expect((await search('김')).json()).toEqual({ users: [firstAccount, secondAccount], hasMore: false });
+    for (const query of ['legacy-alias', 'provider-subject', 'provider-fallback', '%_']) {
+      expect((await search(query)).json()).toEqual({ users: [], hasMore: false });
+    }
+    expect((await search('OIDC 이름')).json()).toEqual({
+      users: [{ id: oidc.id, displayName: 'OIDC 이름', username: null }], hasMore: false,
+    });
+    expect((await search(nameless.id.slice(0, 8))).json()).toEqual({
+      users: [{ id: nameless.id, displayName: 'OIDC 사용자 ' + nameless.id.slice(0, 8), username: null }], hasMore: false,
+    });
+    expect((await search('')).statusCode).toBe(400);
+    expect((await first.get(members + '/candidates?q=team')).statusCode).toBe(404);
+    expect((await owner.request('POST', members, { userId: disabled.id, role: 'viewer' })).statusCode).toBe(404);
+    const added = await owner.request('POST', members, { userId: first.id, role: 'viewer' });
+    expect(added.statusCode).toBe(201);
+    expect(added.json()).toEqual({ ...firstAccount, disabled: false, role: 'viewer' });
+    expect((await search('team')).json()).toEqual({ users: [secondAccount], hasMore: false });
+    expect((await first.get(members + '/candidates?q=team')).statusCode).toBe(403);
+    expect((await owner.get('/api/me')).json().user).not.toHaveProperty('directory');
+    expect((await owner.request('PATCH', '/api/me/directory', { publicName: '이전 프로필', alias: 'legacy-alias' })).statusCode).toBe(404);
+    const adminSearch = await admin.get('/api/admin/users?q=TEAM-SECOND');
+    expect(adminSearch.json().users).toMatchObject([secondAccount]);
+    expect(adminSearch.json().users[0]).not.toHaveProperty('alias');
+  });
+});
+
 it('enforces member and document scope, checks live access for old SQL jobs, and serializes last-owner removal', async () => {
   await fixture(async ({ db, account, project }) => {
     const [owner, editor, outsider] = await Promise.all([account('owner'), account('editor'), account('outsider')]);
@@ -61,12 +105,7 @@ it('enforces member and document scope, checks live access for old SQL jobs, and
     const members = path + '/members';
     const lookup = members + '/candidates?q=ed';
     const invite = (userId: string, role: string) => owner.request('POST', members, { userId, role });
-    expect((await owner.get(lookup)).json()).toEqual({ users: [], hasMore: false });
-    expect((await invite(editor.id, 'editor')).statusCode).toBe(404);
-    expect((await editor.request('PATCH', '/api/me/directory', { publicName: '공개 사용자', alias: 'editor' })).statusCode).toBe(200);
-    expect((await outsider.request('PATCH', '/api/me/directory', { publicName: '다른 사용자', alias: 'EDITOR' })).statusCode).toBe(409);
-    expect((await owner.get(lookup)).json()).toEqual({ users: [{ id: editor.id, publicName: '공개 사용자', alias: 'editor' }], hasMore: false });
-    expect((await owner.get(members + '/candidates?q=%25_')).json()).toEqual({ users: [], hasMore: false });
+    expect((await owner.get(lookup)).json()).toEqual({ users: [{ id: editor.id, displayName: 'editor', username: null }], hasMore: false });
     expect((await outsider.get(lookup)).statusCode).toBe(404);
     expect((await invite(editor.id, 'editor')).statusCode).toBe(201);
     expect((await invite(editor.id, 'viewer')).json()).toMatchObject({ code: 'ALREADY_A_MEMBER' });
@@ -117,7 +156,7 @@ it('enforces member and document scope, checks live access for old SQL jobs, and
     await expect.poll(async () => (await editor.get(exportPath)).json().state, { timeout: 10_000 }).toBe('succeeded');
 
     expect((await owner.request('DELETE', members + '/' + editor.id)).statusCode).toBe(204);
-    expect((await editor.get('/api/me')).json().user).toMatchObject({ id: editor.id, directory: { alias: 'editor' } });
+    expect((await editor.get('/api/me')).json().user).toMatchObject({ id: editor.id });
     for (const protectedPath of [path, erd, erd + '/revisions', version, exportPath, parsePath]) {
       expect((await editor.get(protectedPath)).statusCode).toBe(404);
     }
@@ -134,7 +173,7 @@ it('enforces member and document scope, checks live access for old SQL jobs, and
 
 it('limits administration to service admins and preserves an active project owner across concurrent changes', async () => {
   await fixture(async ({ db, api, account, project }) => {
-    const [admin, owner, other] = await Promise.all([account('admin', true), account('owner'), account('co-owner')]);
+    const [admin, owner, other] = await Promise.all([account('admin', { admin: true }), account('owner'), account('co-owner')]);
     const path = await project(owner, '활성 소유자');
     const adminPath = '/api/admin/users';
     const status = adminPath + '/' + owner.id;
@@ -147,7 +186,6 @@ it('limits administration to service admins and preserves an active project owne
       payload: { disabled: true } })).statusCode).toBe(403);
     expect((await setDisabled(true)).json()).toMatchObject({ code: 'LAST_OWNER' });
 
-    expect((await other.request('PATCH', '/api/me/directory', { publicName: '공동 소유자', alias: 'co-owner' })).statusCode).toBe(200);
     const members = path + '/members';
     expect((await owner.request('POST', members, { userId: other.id, role: 'owner' })).statusCode).toBe(201);
     const attempts = await Promise.all([

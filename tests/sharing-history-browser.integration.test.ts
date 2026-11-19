@@ -9,6 +9,70 @@ import { mockIdentityProvider } from './support/oidc.js';
 import { withPostgres } from './support/postgres.js';
 import { freePort } from './support/tcp.js';
 
+it('aligns project and ERD actions and adds an account directly by login ID', async () => {
+  await withPostgres(async cluster => {
+    const pool = createDatabase(cluster.connectionString);
+    await migrate(pool);
+    const web = await freePort();
+    const origin = 'http://127.0.0.1:' + web;
+    const { api } = createApi({ pool, auth: { origin, devLogin: true, localAuth: true } });
+    try {
+      const address = await api.listen({ host: '127.0.0.1', port: 0 });
+      await withBrowser(async context => {
+        const page = context.pages()[0] ?? await context.newPage();
+        page.setDefaultTimeout(8_000);
+        const registered = await api.inject({ method: 'POST', url: '/api/auth/register', headers: { origin },
+          payload: { displayName: '설계 팀원', username: 'design-user', password: 'fixture-password' } });
+        expect(registered.statusCode).toBe(204);
+        await page.goto(origin);
+        await page.getByRole('button', { name: '개발 계정으로 로그인' }).click();
+        await page.getByRole('button', { name: '새 프로젝트', exact: true }).click();
+        await page.getByLabel('새 프로젝트 이름').fill('팀 프로젝트');
+        await page.getByRole('button', { name: '프로젝트 생성' }).click();
+        const project = page.getByRole('group', { name: '프로젝트 관리' });
+        const erds = page.getByRole('group', { name: 'ERD 작업' });
+        const members = project.getByRole('button', { name: '멤버 관리' });
+        const settings = project.getByRole('button', { name: '프로젝트 설정' });
+        const importErd = erds.getByRole('button', { name: '가져오기' });
+        const newErd = erds.getByRole('button', { name: '새 ERD' });
+        await newErd.waitFor();
+        for (const width of [1280, 390]) {
+          await page.setViewportSize({ width, height: 844 });
+          const [left, right, before, after] = await Promise.all([members.boundingBox(), settings.boundingBox(),
+            importErd.boundingBox(), newErd.boundingBox()]);
+          if (!left || !right || !before || !after) throw new Error('Project or ERD actions could not be measured.');
+          expect(left.y).toBeCloseTo(right.y, 0);
+          expect(left.x + left.width).toBeLessThan(right.x);
+          expect(before.y).toBeCloseTo(after.y, 0);
+          expect(before.x + before.width).toBeLessThan(after.x);
+          expect(after.y).toBeGreaterThan(right.y);
+          expect(Math.max(right.x + right.width, after.x + after.width)).toBeLessThanOrEqual(width);
+        }
+        expect(await page.getByRole('button', { name: '검색 프로필' }).count()).toBe(0);
+        await settings.click();
+        await page.getByRole('button', { name: '프로젝트 이름 변경' }).waitFor();
+        await page.keyboard.press('Escape');
+        await newErd.click();
+        await page.getByRole('dialog', { name: '새 서버 ERD' }).waitFor();
+        await page.keyboard.press('Escape');
+
+        await members.click();
+        const dialog = page.getByRole('dialog', { name: '프로젝트 멤버 관리' });
+        await dialog.getByRole('button', { name: '멤버 추가', exact: true }).click();
+        await dialog.getByLabel('초대할 사용자').fill('DESIGN-USER');
+        await dialog.getByRole('button', { name: '사용자 검색' }).click();
+        await dialog.getByRole('radio', { name: /설계 팀원.*design-user/ }).check();
+        expect(await dialog.getByLabel('추가할 역할').inputValue()).toBe('viewer');
+        await dialog.getByRole('button', { name: '프로젝트에 추가' }).click();
+        const added = dialog.getByRole('listitem').filter({ hasText: '설계 팀원' });
+        await added.getByText('design-user · 조회자').waitFor();
+      }, { web, api: Number(new URL(address).port) });
+    } finally {
+      await api.close();
+    }
+  });
+});
+
 it('manages members, opens historical diagrams, safely retries restore, and locks a downgraded viewer', async () => {
   await withPostgres(async cluster => {
     const pool = createDatabase(cluster.connectionString);
@@ -30,15 +94,8 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         await page.goto(origin + '/?workspace=1');
         await button('OIDC 로그인').click();
         await heading('내가 만든 프로젝트');
-        await button('검색 프로필').click();
-        const profile = dialog('검색 프로필');
-        await profile.getByLabel('공개 이름').fill('Alice');
-        await profile.getByLabel('별칭').fill('alice-fixture');
-        await button('검색에 공개').click();
-        await profile.getByRole('status').waitFor();
         const alice = (await me()).user;
-        expect(alice.directory).toEqual({ publicName: 'Alice', alias: 'alice-fixture' });
-        await profile.getByRole('button', { name: '닫기' }).click();
+        const aliceInProject = 'OIDC 사용자 ' + alice.id.slice(0, 8);
         await button('로그아웃').click();
         await button('개발 계정으로 로그인').click();
         await page.getByRole('button', { name: '새 프로젝트', exact: true }).click();
@@ -52,23 +109,25 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         await share.getByText('마지막 활성 소유자', { exact: true }).waitFor();
         expect(await share.getByRole('button', { name: '권한 회수' }).isDisabled()).toBe(true);
         await share.getByRole('button', { name: '멤버 추가', exact: true }).click();
-        await share.getByLabel('초대할 사용자').fill('alice-fixture');
+        await share.getByLabel('초대할 사용자').fill(aliceInProject);
         await button('사용자 검색').click();
-        await share.getByRole('radio', { name: /alice-fixture/ }).check();
+        await share.getByRole('radio', { name: aliceInProject }).check();
         expect(await share.getByLabel('추가할 역할').inputValue()).toBe('viewer');
         await share.getByLabel('추가할 역할').selectOption('editor');
         await button('프로젝트에 추가').click();
-        await share.getByLabel('Alice 역할').waitFor();
-        expect(await share.getByLabel('Alice 역할').inputValue()).toBe('editor');
-        await share.getByLabel('Alice 역할').selectOption('viewer');
-        await share.locator('li').filter({ hasText: 'alice-fixture' }).getByRole('button', { name: '역할 저장' }).click();
+        const aliceRole = share.getByLabel(aliceInProject + ' 역할');
+        const saveAliceRole = share.getByRole('listitem').filter({ hasText: aliceInProject }).getByRole('button', { name: '역할 저장' });
+        await aliceRole.waitFor();
+        expect(await aliceRole.inputValue()).toBe('editor');
+        await aliceRole.selectOption('viewer');
+        await saveAliceRole.click();
         await expect.poll(async () => (await page.request.get(members).then(response => response.json()))
           .find((member: { id: string }) => member.id === alice.id)?.role).toBe('viewer');
-        await share.getByLabel('Alice 역할').selectOption('editor');
-        await share.locator('li').filter({ hasText: 'alice-fixture' }).getByRole('button', { name: '역할 저장' }).click();
+        await aliceRole.selectOption('editor');
+        await saveAliceRole.click();
         await expect.poll(async () => (await page.request.get(members).then(response => response.json()))
           .find((member: { id: string }) => member.id === alice.id)?.role).toBe('editor');
-        await share.getByText('Alice 님의 새 역할은 편집자입니다.', { exact: true }).waitFor();
+        await share.getByText(aliceInProject + ' 님의 새 역할은 편집자입니다.', { exact: true }).waitFor();
         await page.keyboard.press('Escape');
         await share.waitFor({ state: 'hidden' });
         await expect.poll(() => button('멤버 관리').evaluate(element => element === element.ownerDocument.activeElement)).toBe(true);

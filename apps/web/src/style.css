@@ -486,13 +486,15 @@ dialog:has(.deletion-preview) { width: min(32rem, calc(100% - 2rem)); }
 .account-access > button { justify-self: start; }
 .workspace-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .9rem 1.1rem; margin-bottom: .2rem; }
 .workspace-heading h1 { font-size: clamp(1.7rem, 4vw, 2.5rem); line-height: 1.15; font-weight: 730; letter-spacing: -.055em; }
-.workspace-heading-actions { gap: .45rem; }
+.workspace-heading-actions { gap: .45rem; margin-inline-start: auto; }
 .workspace-heading button { min-height: 38px; padding-inline: .8rem; border-radius: 9px; }
-.workspace-heading .icon-button { padding-inline: 0; width: 38px; }
+.workspace-heading-actions .icon-button { padding-inline: 0; width: 38px; border-color: var(--border); }
 .workspace-project-title > .collection-glyph { width: 50px; height: 50px; }
 .workspace-project-title p { color: var(--muted); font-size: .84rem; margin-top: .32rem; }
 .workspace-back { justify-self: start; margin-left: -.6rem; color: var(--muted); }
-.collection-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .42rem; }
+.collection-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; }
+.project-erd-actions { gap: .45rem; margin-inline-start: auto; }
+.project-erd-actions > button, .project-erd-actions > .action-menu > button { min-height: 39px; padding-inline: .8rem; border-radius: 9px; }
 .collection-search { position: relative; width: min(100%, 22rem); color: var(--muted); }
 .collection-search .ui-icon { position: absolute; inset-inline-start: .72rem; top: 50%; transform: translateY(-50%); pointer-events: none; }
 .collection-search input { min-height: 39px; padding-inline-start: 2.18rem; border-radius: 9px; color: var(--ink); }
@@ -597,7 +599,7 @@ dialog:has(.sql-export, .sql-import, .image-options, .version-list) { width: min
   .account-name { display: none; }
   .collection-open time, .row-arrow { display: none; }
   .erd-thumbnail { width: 68px; height: 43px; }
-  .collection-toolbar .collection-search { flex: 1; }
+  .collection-toolbar .collection-search { flex: 1 1 100%; }
   .workspace-project-title { gap: .55rem; }
   .workspace-project-title > .collection-glyph { width: 41px; height: 41px; }
   .document-title { flex: 1; }

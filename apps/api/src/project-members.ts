@@ -6,11 +6,20 @@ import type { Authenticate } from './auth.js';
 import { transaction } from './database.js';
 import { findProject, requireRole } from './projects.js';
 import type { Role } from './projects.js';
-import { userSearch } from './user-directory.js';
-import type { DirectoryProfile } from './user-directory.js';
+import { userSearch } from './user-search.js';
 
 type ProjectParams = { projectId: string };
 type MemberParams = ProjectParams & { userId: string };
+type AccountSummary = { id: string; displayName: string; username: string | null };
+
+// Older OIDC accounts may have the provider subject stored as their display name.
+const memberName = `CASE
+  WHEN u.issuer NOT IN ('urn:herd:password', 'urn:herd:development') AND u.display_name = left(u.subject, 200)
+    THEN 'OIDC 사용자 ' || left(u.id::text, 8)
+  ELSE u.display_name
+END`;
+const memberIdentity = `u.id, ${memberName} AS "displayName", p.username`;
+const credentials = 'LEFT JOIN password_credentials p ON p.user_id = u.id';
 
 function roleOf(value: unknown): Role {
   if (value === 'owner' || value === 'editor' || value === 'viewer') return value;
@@ -24,10 +33,9 @@ export function registerProjectMembers(api: FastifyInstance, pool: Pool, authent
     const projectId = uuid(request.params.projectId);
     return transaction(pool, async client => {
       requireRole((await findProject(client, user.id, projectId, 'share')).role, 'owner');
-      const { rows } = await client.query(`SELECT u.id, COALESCE(u.directory_name, u.display_name) AS "displayName",
-        u.directory_alias AS alias, u.disabled_at IS NOT NULL AS disabled, m.role
-        FROM project_members m JOIN users u ON u.id = m.user_id WHERE m.project_id = $1
-        ORDER BY CASE m.role WHEN 'owner' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, u.display_name, u.id`, [projectId]);
+      const { rows } = await client.query(`SELECT ${memberIdentity}, u.disabled_at IS NOT NULL AS disabled, m.role
+        FROM project_members m JOIN users u ON u.id = m.user_id ${credentials} WHERE m.project_id = $1
+        ORDER BY CASE m.role WHEN 'owner' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, "displayName", u.id`, [projectId]);
       return rows;
     });
   });
@@ -37,12 +45,12 @@ export function registerProjectMembers(api: FastifyInstance, pool: Pool, authent
     const projectId = uuid(request.params.projectId);
     return transaction(pool, async client => {
       requireRole((await findProject(client, user.id, projectId, 'share')).role, 'owner');
-      const query = userSearch(request.query.q, 2);
-      const { rows } = await client.query<DirectoryProfile & { id: string }>(`SELECT u.id, u.directory_name AS "publicName",
-        u.directory_alias AS alias FROM users u WHERE u.directory_alias IS NOT NULL AND u.disabled_at IS NULL
-        AND (strpos(lower(u.directory_name), lower($2)) > 0 OR strpos(u.directory_alias, lower($2)) > 0)
+      const query = userSearch(request.query.q, 1);
+      const { rows } = await client.query<AccountSummary>(`SELECT ${memberIdentity}
+        FROM users u ${credentials} WHERE u.disabled_at IS NULL
+        AND (strpos(lower(${memberName}), lower($2)) > 0 OR strpos(p.username, lower($2)) > 0)
         AND NOT EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = $1 AND m.user_id = u.id)
-        ORDER BY lower(u.directory_name), u.directory_alias LIMIT 21`, [projectId, query]);
+        ORDER BY lower(${memberName}), p.username, u.id LIMIT 21`, [projectId, query]);
       return { users: rows.slice(0, 20), hasMore: rows.length > 20 };
     });
   });
@@ -57,9 +65,8 @@ export function registerProjectMembers(api: FastifyInstance, pool: Pool, authent
       await lockMembershipChanges(client);
       await requireActiveAccount(client, user.id);
       requireRole((await findProject(client, user.id, projectId, 'update')).role, 'owner');
-      const { rows: [target] } = await client.query<{ id: string; displayName: string; alias: string }>(`
-        SELECT id, directory_name AS "displayName", directory_alias AS alias FROM users
-        WHERE id = $1 AND directory_alias IS NOT NULL AND disabled_at IS NULL FOR SHARE`, [targetId]);
+      const { rows: [target] } = await client.query<AccountSummary>(`SELECT ${memberIdentity}
+        FROM users u ${credentials} WHERE u.id = $1 AND u.disabled_at IS NULL FOR SHARE OF u`, [targetId]);
       if (!target) throw new ApiError(404, 'ACCOUNT_NOT_FOUND', '추가할 수 있는 사용자를 찾을 수 없습니다.');
       const { rowCount } = await client.query(`INSERT INTO project_members (project_id, user_id, role)
         VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [projectId, target.id, role]);

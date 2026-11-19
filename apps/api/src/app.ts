@@ -15,7 +15,6 @@ import { registerSqlImportApply } from './sql-import-apply.js';
 import { registerSqlJobs } from './sql-jobs.js';
 import { SqlQueue } from './sql-queue.js';
 import { createSqlRegistry } from './sql-registry.js';
-import { registerUserDirectory } from './user-directory.js';
 
 function configuredPersistence() {
   const config = readConfig(process.env);
@@ -78,7 +77,6 @@ export function createApi(persistence: {
     api.addHook('onClose', async () => { await queue.close(); await pool.end(); });
     void api.register(async routes => {
       const authenticate = await registerAuth(routes, pool, auth);
-      registerUserDirectory(routes, pool, authenticate);
       registerAdminUsers(routes, pool, authenticate);
       registerProjects(routes, pool, authenticate, sql, limits, persistence.checkpoints ?? defaultCheckpointSettings);
       registerProjectMembers(routes, pool, authenticate);

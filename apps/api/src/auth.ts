@@ -9,12 +9,10 @@ import { ApiError } from './api-error.js';
 import type { AuthSettings } from './config.js';
 import { transaction } from './database.js';
 import { registerLocalAuth } from './local-auth.js';
-import type { DirectoryProfile } from './user-directory.js';
 
 interface User {
   id: string;
   displayName: string;
-  directory: DirectoryProfile | null;
   isAdmin: boolean;
 }
 
@@ -63,9 +61,7 @@ export async function registerAuth(api: FastifyInstance, pool: Pool, settings: A
   async function session(request: FastifyRequest): Promise<Session | undefined> {
     const raw = request.cookies[sessionCookie];
     if (!raw) return;
-    const { rows } = await pool.query<User>(`SELECT u.id, u.display_name AS "displayName", u.is_admin AS "isAdmin",
-      CASE WHEN u.directory_alias IS NOT NULL THEN
-        json_build_object('publicName', u.directory_name, 'alias', u.directory_alias) END AS directory
+    const { rows } = await pool.query<User>(`SELECT u.id, u.display_name AS "displayName", u.is_admin AS "isAdmin"
       FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = $1 AND s.expires_at > now() AND u.disabled_at IS NULL`, [hash(raw)]);
     if (rows[0]) return { user: rows[0], token: raw, csrfToken: hash('herd:csrf:' + raw) };
