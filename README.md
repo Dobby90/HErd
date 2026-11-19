@@ -9,6 +9,8 @@ pnpm dev
 
 브라우저에서 <http://127.0.0.1:5173>을 열면 주문 관리 샘플이 편집기로 열립니다. 새 문서에서 PostgreSQL 17을 선택하고 스키마와 뷰를 설계할 수 있습니다. API의 liveness는 `GET /api/health`로 확인합니다. 웹 개발 서버는 `/api`를 3001 포트로 프록시합니다. 포트를 바꾸려면 `.env.example`을 `.env`에 복사하고 값을 수정하세요.
 
+의존성을 설치한 뒤 `./start.sh`로 웹과 API를 백그라운드에서 실행하고 `./stop.sh`로 종료할 수 있습니다. 로그는 `build/run/dev.log`에 기록됩니다.
+
 | 명령 | 내용 |
 | --- | --- |
 | `pnpm build` | 웹과 API의 운영 빌드를 `dist/web`과 `dist/api`에 생성 |

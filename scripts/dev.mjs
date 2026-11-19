@@ -1,6 +1,6 @@
 import { createServer } from 'vite';
 
-const apiModules = await createServer({ configFile: 'vite.api.config.ts', server: { middlewareMode: true, hmr: false } });
+const apiModules = await createServer({ configFile: 'vite.api.config.ts', server: { middlewareMode: true, hmr: false, ws: false } });
 let web;
 let api;
 let closing;
@@ -27,6 +27,9 @@ try {
   web.printUrls();
   process.once('SIGINT', close);
   process.once('SIGTERM', close);
+  if (process.argv[2] === '--herd-managed') {
+    console.log(`HERD_WEB_URL=${web.resolvedUrls.local[0]}`);
+  }
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
