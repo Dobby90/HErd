@@ -13,7 +13,7 @@ const stopped = (code: string, message: string): SqlJobOutput => ({
 type Completion = { state: 'succeeded' | 'failed'; output: SqlJobOutput | ParseJobOutput };
 type JobLog = { jobId: string; kind: Claimed['kind']; status: Completion['state']; durationMs: number; code?: string };
 type Claimed = (Pick<GenerateSqlJob, 'id' | 'options' | 'target' | 'kind'> & { snapshot: ErdDocument }) |
-  (Pick<ParseSqlJob, 'id' | 'options' | 'target' | 'kind'> & { snapshot: { sql: string } });
+  (Pick<ParseSqlJob, 'id' | 'options' | 'target' | 'kind'> & { snapshot: Pick<ParseRequest, 'sql' | 'baseCatalog'> });
 const workerFailure: Completion = { state: 'failed', output: stopped('SQL_WORKER_ERROR', 'SQL 작업이 완료되지 않았습니다.') };
 const workerTimeout: Completion = { state: 'failed', output: stopped('SQL_JOB_TIMEOUT', 'SQL 작업의 실행 제한 시간을 초과했습니다.') };
 
@@ -30,7 +30,7 @@ async function executeSql(job: Claimed, settings: SqlJobSettings, signal: AbortS
   const closed = new Promise<void>(resolve => worker.once('close', () => resolve()));
   const task = job.kind === 'parse' ? {
     kind: 'parse', jobId: job.id,
-    request: { sql: job.snapshot.sql, target: job.target, defaultNamespace: job.options.defaultNamespace,
+    request: { ...job.snapshot, target: job.target, defaultNamespace: job.options.defaultNamespace,
       limits: { maxBytes: settings.maxInputBytes ?? defaultSqlInputBytes } } satisfies ParseRequest,
   } : {
     kind: 'generate',

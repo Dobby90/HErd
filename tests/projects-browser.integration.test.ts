@@ -51,9 +51,11 @@ it('creates and restores server ERDs, preserves later edits across delayed respo
         await status(page, '브라우저 저장 완료');
         await page.getByRole('link', { name: '프로젝트', exact: true }).click();
         await action(page, '개발 계정으로 로그인').click();
+        await page.getByRole('button', { name: '새 프로젝트', exact: true }).click();
         await page.getByLabel('새 프로젝트 이름').fill('주문 프로젝트');
         await action(page, '프로젝트 생성').click();
         await heading(page, '주문 프로젝트');
+        await page.getByRole('button', { name: '가져오기', exact: true }).click();
         await action(page, '로컬 복구본 가져오기').click();
         const importDialog = page.getByRole('dialog', { name: '로컬 복구본을 새 ERD로 저장' });
         await importDialog.getByLabel('로컬 복구본').waitFor();

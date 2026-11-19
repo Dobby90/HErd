@@ -8,6 +8,7 @@ import { postgresqlEditor } from '@erd/dialect-postgresql/ui';
 import { EditorCanvas } from './editor-canvas.js';
 import type { CanvasFocus, LayoutSizes } from './editor-canvas.js';
 import { ActionMenu, ColumnBadges, Icon } from './editor-controls.js';
+import { ThemeToggle } from './theme.js';
 import { columnsOf, duplicateView, EditorReadOnly, emptyView, field, Form, id, label, Modal, named, NameFields, placement, putView } from './editor-fields.js';
 import type { View } from './editor-fields.js';
 import { useEditorSession } from './editor-session.js';
@@ -305,17 +306,19 @@ export function Editor({ topActions }: { topActions?: ReactNode } = {}) {
   return <DocumentEditor session={local} local={local} topActions={topActions} />;
 }
 
-export function DocumentEditor({ session, local, readOnly = false, topActions, saveActions, exportAction, verifyImage }: {
+export function DocumentEditor({ session, local, readOnly = false, topActions, saveActions, exportAction, importAction, initialPlacement, verifyImage }: {
   session: EditingSession; local?: LocalSession; readOnly?: boolean; topActions?: ReactNode; saveActions?: ReactNode; exportAction?(viewId: string | undefined): ReactNode;
+  importAction?(viewId: string | undefined): ReactNode;
+  initialPlacement?: CanvasFocus & { viewId: string };
   verifyImage?(): Promise<void>;
 }) {
   const { document } = session;
-  const [chosenView, chooseView] = useState('');
+  const [chosenView, chooseView] = useState(initialPlacement?.viewId ?? '');
   const [selection, inspect] = useState<Inspector | null>(null);
   const [mobilePane, setMobilePane] = useState<MobilePane>('canvas');
   const mobilePanesId = useId();
   const [query, setQuery] = useState('');
-  const [searchFocus, setSearchFocus] = useState<CanvasFocus>();
+  const [searchFocus, setSearchFocus] = useState<CanvasFocus | undefined>(initialPlacement);
   const [selectedInstances, setSelectedInstances] = useState<string[]>([]);
   const layoutSizes = useRef<LayoutSizes>(new Map());
   const [snap, setSnap] = useState(true);
@@ -446,10 +449,12 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
         </div>}
         {local && <button type="button" className="quiet" disabled={local.loading || local.unsaved} onClick={() => setDialog('document')}>새 문서</button>}
         <div className="actions secondary-actions">{topActions}</div>
+        {importAction && <ActionMenu label="가져오기" icon="import">{importAction(view?.id)}</ActionMenu>}
         {(exportAction || view) && <ActionMenu label="내보내기" icon="export" primary>
           {exportAction?.(view?.id)}
           {view && <ImageExport document={document} view={view} selection={selectedInstances} verify={verifyImage} />}
         </ActionMenu>}
+        <ThemeToggle />
       </div>
     </header>
     <div className="editor-feedback">

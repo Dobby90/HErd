@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Modal } from './editor-fields.js';
+import { Icon } from './editor-controls.js';
 import { apiRequest } from './project-api.js';
 import type { ProjectMember, ProjectRole } from './project-api.js';
 
@@ -69,7 +70,7 @@ export function ProjectMembers({ projectId, userId, csrf, selfChanged }: {
   }
 
   return <>
-    <button type="button" onClick={() => { setOpen(true); void act(reload); }}>멤버 관리</button>
+    <button type="button" onClick={() => { setOpen(true); void act(reload); }}><Icon name="users" />멤버 관리</button>
     {open && <Modal title="프로젝트 멤버 관리" close={close}>
       <form onSubmit={event => {
         event.preventDefault();

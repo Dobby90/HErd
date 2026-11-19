@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import type { ImportApplied } from '@erd/sql-contract';
 import { duplicateDocument } from '@erd/model';
 import { createEditorDocument, DocumentEditor, editorTargets } from './editor.js';
-import { Icon } from './editor-controls.js';
+import { ActionMenu, Icon } from './editor-controls.js';
 import { field, Form, Modal } from './editor-fields.js';
 import { ApiFailure, apiRequest } from './project-api.js';
 import type { DocumentSummary, Identity, Project, SavedRevision, ServerDocument, SnapshotDetail } from './project-api.js';
@@ -14,6 +14,8 @@ import type { ServerDraft } from './server-drafts.js';
 import { SqlExport } from './sql-export.js';
 import { SqlImport } from './sql-import.js';
 import { ServerEditor } from './server-editor.js';
+import { ThemeToggle } from './theme.js';
+import { ErdThumbnail } from './erd-thumbnail.js';
 import { VersionHistory } from './version-history.js';
 
 type Location = { projectId?: string; documentId?: string };
@@ -26,7 +28,9 @@ const readLocation = (): Location => {
 };
 const message = (error: unknown) => error instanceof Error ? error.message : '요청을 처리하지 못했습니다.';
 const date = (value: string) => new Date(value).toLocaleString();
+const listDate = (value: string) => new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium' }).format(new Date(value));
 const textMatch = (text: string, query: string) => text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+const roles = { owner: '소유자', editor: '편집 가능', viewer: '읽기 전용' };
 
 function PasswordAccess({ busy, signIn, reauthenticate = false }: {
   busy: boolean; signIn(registration: boolean, values: FormData): void; reauthenticate?: boolean;
@@ -46,8 +50,9 @@ function PasswordAccess({ busy, signIn, reauthenticate = false }: {
   </div>;
 }
 
-function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActions, onImported, openVersion, onRestored, preview, fork, discard, logIn }: {
+function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActions, initialPlacement, onImported, openVersion, onRestored, preview, fork, discard, logIn }: {
   entry: OpenDocument; projectId: string; csrf: string | null | undefined; readOnly: boolean; suspended: boolean; topActions: ReactNode;
+  initialPlacement?: ImportApplied['placement'];
   onImported(result: ImportApplied): void; openVersion(snapshot: SnapshotDetail): void; onRestored(result: SavedRevision, synchronize?: boolean): void;
   preview(): void; fork(): void;
   discard(draft?: ServerDraft): void; logIn(): void;
@@ -73,12 +78,19 @@ function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActio
     }
   }
 
-  return <DocumentEditor readOnly={readOnly || suspended} topActions={<>{topActions}
+  const document = state.history.present;
+  const destination = { id: entry.id, target: document.target };
+  return <DocumentEditor readOnly={readOnly || suspended} initialPlacement={initialPlacement} topActions={<>{topActions}
     <VersionHistory erdId={entry.id} csrf={csrf} readOnly={readOnly} disabled={suspended} openVersion={openVersion} restored={onRestored}
       save={async action => (await editor.savedForExport(action)).revision} />
-    {!readOnly && <SqlImport projectId={projectId} csrf={csrf} disabled={suspended} onApplied={onImported}
-      replacement={{ id: entry.id, target: state.history.present.target, savedRevision: async () => (await editor.savedForExport('모델을 교체하기')).revision }} />}
   </>}
+    importAction={readOnly ? undefined : viewId => <>
+      <SqlImport projectId={projectId} csrf={csrf} disabled={suspended} onApplied={onImported}
+        destination={{ ...destination, mode: 'append', viewId, viewName: document.views.find(view => view.id === viewId)?.name,
+          namespaces: document.catalog.namespaces, savedRevision: async () => (await editor.savedForExport('테이블을 추가하기')).revision }} />
+      <SqlImport projectId={projectId} csrf={csrf} disabled={suspended} onApplied={onImported}
+        destination={{ ...destination, mode: 'replace', savedRevision: async () => (await editor.savedForExport('모델을 교체하기')).revision }} />
+    </>}
     verifyImage={() => apiRequest<void>('/erds/' + entry.id, { method: 'HEAD' })}
     exportAction={viewId => <SqlExport document={state.history.present} revision={state.revision} dirty={editor.hasChanges()}
       projectId={projectId} csrf={csrf} viewId={viewId} disabled={suspended} viewer={readOnly}
@@ -145,7 +157,8 @@ export function Workspace() {
   const [busy, setBusy] = useState(false);
   const running = useRef(false);
   const [loginPrompt, setLoginPrompt] = useState(false);
-  const [dialog, setDialog] = useState<'new' | 'local'>();
+  const [dialog, setDialog] = useState<'new' | 'local' | 'new-project' | 'rename'>();
+  const [applied, setApplied] = useState<ImportApplied>();
   const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
   const editors = useRef(new Map<string, ServerEditor>());
   const projectId = location.projectId;
@@ -161,6 +174,8 @@ export function Workspace() {
     currentLocation.current = next;
     setLocation(next);
     setPreview(undefined);
+    setApplied(undefined);
+    setDialog(undefined);
     setNotice('');
     setQuery('');
     setProblem('');
@@ -205,6 +220,8 @@ export function Workspace() {
       currentLocation.current = readLocation();
       setLocation(currentLocation.current);
       setPreview(undefined);
+      setApplied(undefined);
+      setDialog(undefined);
       setProblem('');
       setDenied(undefined);
       setQuery('');
@@ -387,11 +404,12 @@ export function Workspace() {
   if (owner && project && open && open.id === documentId) {
     const editorIsCurrent = () => currentIdentity.current?.user?.id === owner &&
       currentLocation.current.documentId === open.id && editors.current.get(open.id) === open.editor;
-    const reloadAfterReplacement = (status: string) => {
+    const reloadAfterReplacement = (status: string, result?: ImportApplied) => {
       if (!editorIsCurrent()) return;
       editors.current.delete(open.id);
       setOpen(undefined);
       setPreview(undefined);
+      setApplied(result);
       setNotice(status);
       const reopen = (cleaned: boolean) => {
         if (currentIdentity.current?.user?.id !== owner || currentLocation.current.documentId !== open.id) return;
@@ -415,9 +433,11 @@ export function Workspace() {
     return <>
       {preview?.envelope.document.id === documentId ? <ServerPreview key={preview.snapshotId ?? preview.envelope.revision} preview={preview} close={() => setPreview(undefined)} /> :
         <WorkspaceEditor key={open.id + ':' + open.editor.instanceKey} entry={open} projectId={project.id} csrf={csrf} readOnly={project.role === 'viewer'} suspended={busy}
+          initialPlacement={applied?.erdId === open.id && applied.revision === open.editor.snapshot().revision ? applied.placement : undefined}
           topActions={<><button type="button" onClick={backToProject}>ERD 목록</button>
             <button type="button" disabled={busy} onClick={logOut}>로그아웃</button></>}
-          onImported={result => reloadAfterReplacement(`리비전 ${result.revision}에 가져오기를 적용했습니다. 교체 전 버전은 서버 이력에 저장되었습니다.`)}
+          onImported={result => reloadAfterReplacement(result.placement ? `추가한 테이블을 리비전 ${result.revision}에 저장했습니다.`
+            : `리비전 ${result.revision}에 가져오기를 적용했습니다. 교체 전 버전은 서버 이력에 저장되었습니다.`, result)}
           onRestored={(result, synchronized) => reloadAfterReplacement(synchronized ? `서버 리비전 ${result.revision}을 열었습니다.`
             : `복원 결과를 리비전 ${result.revision}으로 저장했습니다. 복원 전 버전은 서버 이력에 저장되었습니다.`)}
           openVersion={snapshot => {
@@ -459,89 +479,130 @@ export function Workspace() {
     setDialog('local');
   });
 
-  function projectList(items: Project[], empty: string) {
-    if (!items.length) return <p className="muted">{empty}</p>;
+  function projectList(items: Project[], shared = false) {
     const matching = items.filter(item => textMatch(item.name, query));
-    return matching.length ? <ul className="project-list">{matching.map(item =>
-      <li key={item.id}><button type="button" onClick={() => go({ projectId: item.id })}>{item.name}</button>
-        <span>{item.role} · ERD {item.documentCount}개</span><time dateTime={item.updatedAt}>{date(item.updatedAt)}</time></li>)}</ul>
-      : <p className="muted">검색 결과가 없습니다.</p>;
+    if (!matching.length) return <div className="list-empty">
+      <span className="collection-glyph"><Icon name={shared ? 'users' : 'folder'} /></span>
+      <p>{query.trim() ? '검색 결과가 없습니다.' : '만든 프로젝트가 없습니다.'}</p>
+    </div>;
+    return <ul className="project-list">{matching.map(item =>
+      <li key={item.id}>
+        <button type="button" className="collection-open" aria-label={item.name} onClick={() => go({ projectId: item.id })}>
+          <span className={'collection-glyph' + (shared ? ' shared-glyph' : '')}><Icon name={shared ? 'users' : 'folder'} /></span>
+          <span className="collection-info"><strong>{item.name}</strong><span>ERD {item.documentCount}개{shared && ' · ' + roles[item.role]}</span></span>
+          <time dateTime={item.updatedAt}>{listDate(item.updatedAt)}</time><span className="row-arrow"><Icon name="right" /></span>
+        </button>
+      </li>)}</ul>;
   }
 
+  function search(label: string) {
+    return <label className="collection-search"><span className="sr-only">{label}</span><Icon name="search" />
+      <input type="search" placeholder={label} value={query} onChange={event => setQuery(event.target.value)} />
+    </label>;
+  }
+
+  const ownProjects = projects?.filter(item => item.createdBy === owner);
+  const sharedProjects = projects?.filter(item => item.createdBy !== owner);
+  const documents = projectView?.documents.filter(item => textMatch(item.title, query));
   return <main className="project-page">
     <header className="topbar">
-      <span className="brand-mark"><Icon name="brand" /></span>
-      <h1>ERD 프로젝트</h1>
-      {owner && projectId && <button type="button" onClick={() => go({})}>프로젝트 목록</button>}
-      <a href="/?local=1" className="workspace-link">로컬 편집기</a>
-      {identity?.user && <div className="actions project-account"><span>{identity.user.displayName}</span>
-        <ShareCode key={identity.user.id} code={identity.user.shareCode} />
-        <button type="button" disabled={busy} onClick={logOut}>로그아웃</button></div>}
+      <div className="workspace-navigation">
+        <button type="button" className="brand-home quiet" aria-label="HERD 프로젝트 홈" onClick={() => go({})}>
+          <span className="brand-mark"><Icon name="brand" /></span><strong>HERD</strong>
+        </button>
+        <span className="workspace-nav-divider" />
+        <a href="/?local=1" className="workspace-link">로컬 편집기</a>
+      </div>
+      <div className="actions project-account">
+        <ThemeToggle />
+        {identity?.user && <>
+          <ShareCode key={identity.user.id} code={identity.user.shareCode} />
+          <span className="account-name" title={identity.user.displayName}>{identity.user.displayName}</span>
+          <button type="button" className="quiet" disabled={busy} onClick={logOut}>로그아웃</button>
+        </>}
+      </div>
     </header>
     <div className="project-content">
       {problem && <p role="alert">{problem}</p>}
       {!identity && <><p role="status">{busy ? '로그인 상태 확인 중' : '로그인 상태를 확인하지 못했습니다.'}</p>
         {!busy && <button type="button" onClick={() => void act(async () => { await refreshIdentity(); })}>다시 시도</button>}</>}
-      {identity && !identity.user && <section className="project-panel">
-        <h2>프로젝트에 로그인</h2>
+      {identity && !identity.user && <section className="project-panel login-panel">
+        <span className="collection-glyph"><Icon name="brand" /></span>
+        <h1>프로젝트에 로그인</h1>
         {identity.auth.local && <PasswordAccess busy={busy} signIn={logInWithPassword} />}
         {loginButtons}
         {!identity.auth.local && !identity.auth.oidc && !identity.auth.development && <p>프로젝트 저장을 사용하려면 서비스 DB와 로그인을 설정하세요.</p>}
       </section>}
-      {owner && !projectId && <section className="project-panel" aria-label="프로젝트 목록">
-        <h2>내가 만든 프로젝트</h2>
-        <Form disabled={busy} button="프로젝트 생성" submit={form => void act(async () => {
-          const created = await apiRequest<Project>('/projects', { method: 'POST', csrf, body: { name: field(form, 'name') } });
-          go({ projectId: created.id });
-        })}><label>새 프로젝트 이름<input name="name" required maxLength={200} /></label></Form>
-        <label>프로젝트 검색<input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>
-        {projects ? projectList(projects.filter(item => item.createdBy === owner), '만든 프로젝트가 없습니다.')
-          : <p role="status">프로젝트 불러오는 중</p>}
-      </section>}
-      {owner && !projectId && projects?.some(item => item.createdBy !== owner) && <section className="project-panel" aria-label="공유받은 프로젝트">
-        <h2>공유받은 프로젝트</h2>
-        {projectList(projects.filter(item => item.createdBy !== owner), '')}
-      </section>}
+      {owner && !projectId && <>
+        <div className="workspace-heading">
+          <h1>프로젝트</h1>
+          <button type="button" className="primary" disabled={busy} onClick={() => setDialog('new-project')}>
+            <Icon name="plus" />새 프로젝트
+          </button>
+        </div>
+        {search('프로젝트 검색')}
+        <section className="collection" aria-label="프로젝트 목록">
+          <div className="collection-heading"><h2>내가 만든 프로젝트</h2>{ownProjects && <span>{ownProjects.length}</span>}</div>
+          {ownProjects ? projectList(ownProjects) : <p role="status">프로젝트 불러오는 중</p>}
+        </section>
+        {Boolean(sharedProjects?.length) && <section className="collection" aria-label="공유받은 프로젝트">
+          <div className="collection-heading"><h2>공유받은 프로젝트</h2><span>{sharedProjects!.length}</span></div>
+          {projectList(sharedProjects!, true)}
+        </section>}
+      </>}
+      {owner && projectId && <button type="button" className="quiet workspace-back" onClick={() => go({})}><Icon name="back" />프로젝트 목록</button>}
       {owner && projectId && !project && !problem && <p role="status">프로젝트 불러오는 중</p>}
-      {project && <section className="project-panel" aria-label="ERD 목록">
-        <div className="section-heading"><h2>{project.name}</h2><p>{project.role} · ERD {project.documentCount}개</p></div>
-        {project.role === 'owner' && owner && <div className="project-tools">
-          <ProjectMembers key={project.id} projectId={project.id} userId={owner} csrf={csrf}
-            selfChanged={() => window.dispatchEvent(new Event('herd:check-project-access'))} />
-          <Form disabled={busy} key={project.id + project.name} button="프로젝트 이름 변경" submit={form => void act(async () => {
-            await apiRequest('/projects/' + project.id, { method: 'PATCH', csrf, body: { name: field(form, 'name') } });
-            refresh();
-          })}><label>프로젝트 이름<input name="name" required maxLength={200} defaultValue={project.name} /></label></Form>
-          <button type="button" className="danger" disabled={busy} onClick={() => {
-            if (!window.confirm(`프로젝트 '${project.name}'와 포함된 ERD ${project.documentCount}개를 모두 삭제하시겠습니까?`)) return;
-            void act(async () => {
-              await apiRequest('/projects/' + project.id, { method: 'DELETE', csrf, body: { documentCount: project.documentCount } });
-              for (const document of projectView?.documents ?? []) {
-                editors.current.get(document.id)?.stop();
-                editors.current.delete(document.id);
-              }
-              go({});
-            });
-          }}>프로젝트 삭제</button>
-        </div>}
-        {writable && <div className="actions">
-          <button type="button" disabled={busy} onClick={() => setDialog('new')}>새 ERD</button>
-          <SqlImport key={project.id} projectId={project.id} csrf={csrf} disabled={busy}
-            onApplied={result => go({ projectId: project.id, documentId: result.erdId })} />
-          <button type="button" disabled={busy} onClick={openLocal}>로컬 복구본 가져오기</button>
-        </div>}
-        <label>ERD 검색<input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>
-        {documentId && !problem && <p role="status">ERD 불러오는 중</p>}
-        {projectView?.documents.length === 0 ? <p>저장된 ERD가 없습니다.</p> :
-          <ul className="project-list">{projectView?.documents.filter(item => textMatch(item.title, query)).map(item =>
+      {project && <>
+        <div className="workspace-heading">
+          <div className="workspace-project-title">
+            <span className="collection-glyph"><Icon name="folder" /></span>
+            <div><h1>{project.name}</h1><p>{roles[project.role]}</p></div>
+          </div>
+          <div className="actions workspace-heading-actions">
+            {project.role === 'owner' && owner && <>
+              <ProjectMembers key={project.id} projectId={project.id} userId={owner} csrf={csrf}
+                selfChanged={() => window.dispatchEvent(new Event('herd:check-project-access'))} />
+              <ActionMenu label="프로젝트 설정" icon="settings" iconOnly>
+                <button type="button" disabled={busy} onClick={() => setDialog('rename')}><Icon name="edit" />프로젝트 이름 변경</button>
+                <button type="button" className="danger" disabled={busy} onClick={() => {
+                  if (!window.confirm(`프로젝트 '${project.name}'와 포함된 ERD ${project.documentCount}개를 모두 삭제하시겠습니까?`)) return;
+                  void act(async () => {
+                    await apiRequest('/projects/' + project.id, { method: 'DELETE', csrf, body: { documentCount: project.documentCount } });
+                    for (const document of projectView?.documents ?? []) {
+                      editors.current.get(document.id)?.stop();
+                      editors.current.delete(document.id);
+                    }
+                    go({});
+                  });
+                }}><Icon name="trash" />프로젝트 삭제</button>
+              </ActionMenu>
+            </>}
+            {writable && <button type="button" className="primary" disabled={busy} onClick={() => setDialog('new')}><Icon name="plus" />새 ERD</button>}
+          </div>
+        </div>
+        <div className="collection-toolbar">
+          {search('ERD 검색')}
+          {writable && <ActionMenu label="가져오기" icon="import">
+            <SqlImport key={project.id} projectId={project.id} csrf={csrf} disabled={busy}
+              onApplied={result => go({ projectId: project.id, documentId: result.erdId })} />
+            <button type="button" disabled={busy} onClick={openLocal}>로컬 복구본 가져오기</button>
+          </ActionMenu>}
+        </div>
+        <section className="collection" aria-label="ERD 목록">
+          <div className="collection-heading"><h2>ERD 목록</h2><span>{project.documentCount}</span></div>
+          {documentId && !problem && <p role="status">ERD 불러오는 중</p>}
+          {documents?.length ? <ul className="project-list erd-list">{documents.map(item =>
             <li key={item.id}>
-              <button type="button" onClick={() => go({ projectId, documentId: item.id })}>{item.title}</button>
-              <span>리비전 {item.revision}</span><time dateTime={item.updatedAt}>{date(item.updatedAt)}</time>
-              {writable && <div className="actions">
+              <button type="button" className="collection-open" aria-label={item.title} onClick={() => go({ projectId, documentId: item.id })}>
+                <ErdThumbnail id={item.id} revision={item.revision} />
+                <span className="collection-info"><strong>{item.title}</strong><span>리비전 {item.revision}</span></span>
+                <time dateTime={item.updatedAt}>{listDate(item.updatedAt)}</time><span className="row-arrow"><Icon name="right" /></span>
+              </button>
+              {writable && <ActionMenu label={item.title + ' 관리'} icon="more" iconOnly>
                 <button type="button" disabled={busy} aria-label={item.title + ' 복제'} onClick={() => void act(async () => {
                   const copy = await apiRequest<ServerDocument>('/erds/' + item.id + '/duplicate', { method: 'POST', csrf });
                   go({ projectId, documentId: copy.document.id });
-                })}>복제</button>
+                })}><Icon name="copy" />복제</button>
                 {project.role === 'owner' && <button type="button" className="danger" disabled={busy} aria-label={item.title + ' 삭제'} onClick={() => {
                   if (!window.confirm(`ERD '${item.title}'을 삭제하시겠습니까?`)) return;
                   void act(async () => {
@@ -550,12 +611,35 @@ export function Workspace() {
                     editors.current.delete(item.id);
                     refresh();
                   });
-                }}>삭제</button>}
-              </div>}
-            </li>)}</ul>}
-      </section>}
+                }}><Icon name="trash" />삭제</button>}
+              </ActionMenu>}
+            </li>)}</ul> : <div className="list-empty">
+              <span className="collection-glyph"><Icon name="brand" /></span>
+              <p>{query.trim() ? '검색 결과가 없습니다.' : '저장된 ERD가 없습니다.'}</p>
+            </div>}
+        </section>
+      </>}
     </div>
     {loginPrompt && owner && <Modal title="다시 로그인" close={() => setLoginPrompt(false)}>{reauth}</Modal>}
+    {dialog === 'new-project' && owner && <Modal title="새 프로젝트" close={() => setDialog(undefined)}>
+      <Form disabled={busy} button="프로젝트 생성" cancel={() => setDialog(undefined)} submit={form => void act(async () => {
+        const created = await apiRequest<Project>('/projects', { method: 'POST', csrf, body: { name: field(form, 'name') } });
+        go({ projectId: created.id });
+      })}>
+        <label>새 프로젝트 이름<input name="name" required maxLength={200} /></label>
+        {problem && <p role="alert">{problem}</p>}
+      </Form>
+    </Modal>}
+    {dialog === 'rename' && project?.role === 'owner' && <Modal title="프로젝트 이름 변경" close={() => setDialog(undefined)}>
+      <Form disabled={busy} button="프로젝트 이름 변경" cancel={() => setDialog(undefined)} submit={form => void act(async () => {
+        await apiRequest('/projects/' + project.id, { method: 'PATCH', csrf, body: { name: field(form, 'name') } });
+        setDialog(undefined);
+        refresh();
+      })}>
+        <label>프로젝트 이름<input name="name" required maxLength={200} defaultValue={project.name} /></label>
+        {problem && <p role="alert">{problem}</p>}
+      </Form>
+    </Modal>}
     {dialog === 'new' && writable && <Modal title="새 서버 ERD" close={() => setDialog(undefined)}>
       <Form button="ERD 생성" disabled={busy} cancel={() => setDialog(undefined)} submit={form => void act(async () => {
         const choice = editorTargets[Number(field(form, 'target'))];

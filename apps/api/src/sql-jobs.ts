@@ -4,7 +4,7 @@ import type { DialectRegistry } from '@erd/sql-service';
 import type { GenerateJobOptions, SqlJob } from '@erd/sql-contract';
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
-import { ApiError, objectBody, uuid } from './api-error.js';
+import { ApiError, objectBody, revisionNumber, uuid } from './api-error.js';
 import type { Authenticate } from './auth.js';
 import { defaultSqlActive, defaultSqlInputBytes } from './config.js';
 import type { DocumentLimits } from './config.js';
@@ -47,7 +47,13 @@ function parseInput(body: Record<string, unknown>, maxBytes: number) {
   if (Buffer.byteLength(sql) > maxBytes) {
     throw new ApiError(413, 'SQL_INPUT_TOO_LARGE', 'SQL 입력 크기 한도를 초과했습니다.', { limitBytes: maxBytes });
   }
-  return { kind: 'parse' as const, target: target.data, sql, options: { defaultNamespace } };
+  const destination = body.append === undefined ? undefined : objectBody(body.append);
+  const viewId = destination?.viewId;
+  if (viewId !== undefined && (typeof viewId !== 'string' || !viewId || viewId.length > 1024)) {
+    throw new ApiError(400, 'INVALID_SQL_REQUEST', '테이블을 추가할 뷰를 확인하세요.');
+  }
+  const append = destination && { erdId: uuid(destination.erdId), baseRevision: revisionNumber(destination.baseRevision), viewId };
+  return { kind: 'parse' as const, target: target.data, sql, options: { defaultNamespace, append } };
 }
 
 async function jobFor(db: Pool | PoolClient, userId: string, id: string, lock = false) {
@@ -95,6 +101,24 @@ export function registerSqlJobs(api: FastifyInstance, pool: Pool, authenticate: 
       if (active >= queue.settings.userLimit) throw new ApiError(429, 'SQL_JOB_LIMIT', '진행 중인 SQL 작업을 완료하거나 취소한 뒤 다시 시도하세요.');
       const document = row && storedDocument(row, limits);
       const target = input.kind === 'parse' ? input.target : document!.target;
+      const append = input.kind === 'parse' && input.options.append;
+      let baseCatalog;
+      if (append) {
+        const destination = await findDocument(client, user.id, append.erdId, 'share');
+        if (destination.projectId !== projectId) throw missing();
+        requireRole(destination.role, 'editor');
+        if (destination.revision !== append.baseRevision) {
+          throw new ApiError(409, 'REVISION_CONFLICT', '최신 서버 리비전으로 다시 분석하세요.', { revision: destination.revision });
+        }
+        const base = storedDocument(destination, limits);
+        if (base.target.dialectId !== target.dialectId || base.target.engineVersion !== target.engineVersion) {
+          throw new ApiError(409, 'DOCUMENT_TARGET_MISMATCH', '분석과 대상 문서의 SQL 대상이 다릅니다.');
+        }
+        if (append.viewId && !base.views.some(view => view.id === append.viewId)) {
+          throw new ApiError(409, 'VIEW_NOT_FOUND', '테이블을 추가할 뷰를 찾을 수 없습니다.');
+        }
+        baseCatalog = base.catalog;
+      }
       const adapter = registry.get(target.dialectId);
       const certified = adapter?.metadata.profiles.some(profile => profile.status === 'certified' && profile.version === target.engineVersion);
       if (!adapter || !certified || (input.kind === 'parse' && adapter.capabilities(target).table?.import !== 'supported')) {
@@ -106,7 +130,7 @@ export function registerSqlJobs(api: FastifyInstance, pool: Pool, authenticate: 
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING ${fields}`,
       [id, projectId, row?.id ?? null, user.id, mutationId, digest, row?.revision ?? null, JSON.stringify(target),
         adapter.metadata.adapterVersion, JSON.stringify(input.options),
-        JSON.stringify(input.kind === 'parse' ? { sql: input.sql } : document), input.kind]);
+        JSON.stringify(input.kind === 'parse' ? { sql: input.sql, baseCatalog } : document), input.kind]);
       return created;
     });
     queue.wake();

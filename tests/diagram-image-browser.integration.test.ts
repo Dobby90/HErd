@@ -36,6 +36,7 @@ it('exports and opens pinned SVG and PNG with off-screen Korean nodes, and rejec
         const createImage = () => button('출력 미리보기').click();
         await page.goto(origin + '/?workspace=1');
         await button('개발 계정으로 로그인').click();
+        await page.getByRole('button', { name: '새 프로젝트', exact: true }).click();
         await page.getByLabel('새 프로젝트 이름').fill('이미지 검증');
         await button('프로젝트 생성').click();
         await page.getByRole('heading', { name: '이미지 검증' }).waitFor();
@@ -81,7 +82,8 @@ it('exports and opens pinned SVG and PNG with off-screen Korean nodes, and rejec
         });
         expect(outside).toBe(true);
         await openExport(page, '이미지');
-        expect(await image.evaluate(node => getComputedStyle(node).color)).toBe('rgb(23, 32, 51)');
+        expect(await image.evaluate(node => getComputedStyle(node).color))
+          .toBe(await page.locator('html').evaluate(node => getComputedStyle(node).color));
         await image.getByLabel('배경 포함').uncheck();
         await image.getByLabel('PNG 배율').selectOption('4');
 

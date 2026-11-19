@@ -11,10 +11,9 @@ import { transaction } from './database.js';
 import { findDocument, findProject, inputDocument, insertDocument, requireRole, storedDocument, title } from './projects.js';
 import { insertSnapshot } from './revision-storage.js';
 
-function draft(catalog: Catalog, target: SqlTarget, id: string, name: string): ErdDocument {
+function placements(catalog: Catalog, y = 0): ErdDocument['views'][number]['instances'] {
   const columns = new Map(catalog.columns.map(column => [column.id, column]));
   const instances: ErdDocument['views'][number]['instances'] = [];
-  let y = 0;
   const perRow = 4;
   for (let i = 0; i < catalog.tables.length; i += perRow) {
     const row = catalog.tables.slice(i, i + perRow);
@@ -26,11 +25,38 @@ function draft(catalog: Catalog, target: SqlTarget, id: string, name: string): E
     }
     y += rowHeight + 64;
   }
+  return instances;
+}
+
+function draft(catalog: Catalog, target: SqlTarget, id: string, name: string): ErdDocument {
   const candidate: ErdDocument = {
     id: 'import-candidate', name, target, formatVersion: 1, catalog, relationships: [], extensions: [],
-    views: [{ id: 'import-view', name: '기본 뷰', instances, notes: [], groups: [] }],
+    views: [{ id: 'import-view', name: '기본 뷰', instances: placements(catalog), notes: [], groups: [] }],
   };
   return duplicateDocument(candidate, id, name);
+}
+
+function appendTables(document: ErdDocument, added: Catalog, viewId?: string) {
+  const { namespaces, tables, columns, constraints, indexes, enums, sequences } = document.catalog;
+  document.catalog = {
+    namespaces: [...namespaces, ...added.namespaces], tables: [...tables, ...added.tables], columns: [...columns, ...added.columns],
+    constraints: [...constraints, ...added.constraints], indexes: [...indexes, ...added.indexes], enums: [...enums, ...added.enums],
+    sequences: [...sequences, ...added.sequences],
+  };
+  if (!document.views.length && !viewId) {
+    document.views.push({ id: randomUUID(), name: '기본 뷰', instances: [], groups: [], notes: [] });
+  }
+  const view = viewId ? document.views.find(value => value.id === viewId) : document.views[0];
+  if (!view || !added.tables.length) throw new ApiError(409, 'SQL_IMPORT_NOT_READY', '테이블을 추가할 분석 결과와 뷰가 필요합니다.');
+  const tableSizes = new Map(tables.map(table => [table.id, table.columnIds.length]));
+  const bottom = [
+    ...view.instances.map(instance => instance.y + Math.max(instance.size?.height ?? 0, 84 + (tableSizes.get(instance.tableId) ?? 0) * 50)),
+    ...view.groups.map(group => group.y + (group.size?.height ?? 240)),
+    ...view.notes.map(note => note.y + (note.size?.height ?? 160)),
+  ].reduce((max, y) => Math.max(max, y), -80);
+  const instances = placements(added, Math.max(0, bottom + 80));
+  view.instances.push(...instances);
+  return { viewId: view.id, instanceId: instances[0].id };
 }
 
 function applyOptions(body: Record<string, unknown>) {
@@ -40,7 +66,7 @@ function applyOptions(body: Record<string, unknown>) {
   }
   if (mode === 'create') return { mode, name: title(body.name), lossFingerprint } as const;
   const baseRevision = body.baseRevision;
-  if (mode !== 'replace' || typeof baseRevision !== 'number' || !Number.isSafeInteger(baseRevision) || baseRevision < 1 || baseRevision > 2147483647) {
+  if ((mode !== 'replace' && mode !== 'append') || typeof baseRevision !== 'number' || !Number.isSafeInteger(baseRevision) || baseRevision < 1 || baseRevision > 2147483647) {
     throw new ApiError(400, 'INVALID_IMPORT_APPLY', '적용 방식과 기준 리비전을 확인하세요.');
   }
   return { mode, erdId: uuid(body.erdId), baseRevision, lossFingerprint } as const;
@@ -70,11 +96,17 @@ export function registerSqlImportApply(api: FastifyInstance, pool: Pool, authent
       const { rows: [jobScope] } = await client.query<{ projectId: string }>(scope, [jobId, user.id]);
       if (!jobScope) throw new ApiError(404, 'SQL_JOB_NOT_FOUND', '가져오기 분석을 찾을 수 없거나 만료되었습니다.');
       requireRole((await findProject(client, user.id, jobScope.projectId, 'share')).role, 'editor');
-      const { rows: [job] } = await client.query<Pick<ParseSqlJob, 'state' | 'target' | 'output'>>(
-        `SELECT state, target, output FROM sql_jobs WHERE id = $1 AND (expires_at IS NULL OR expires_at > clock_timestamp()) FOR UPDATE`, [jobId]);
+      const { rows: [job] } = await client.query<Pick<ParseSqlJob, 'state' | 'target' | 'options' | 'output'>>(
+        `SELECT state, target, options, output FROM sql_jobs WHERE id = $1 AND (expires_at IS NULL OR expires_at > clock_timestamp()) FOR UPDATE`, [jobId]);
       if (!job) throw new ApiError(404, 'SQL_JOB_NOT_FOUND', '가져오기 분석을 찾을 수 없거나 만료되었습니다.');
       if (job.state !== 'succeeded' || !job.output?.catalog || !job.output.lossFingerprint) {
         throw new ApiError(409, 'SQL_IMPORT_NOT_READY', '적용할 수 있는 분석 결과가 필요합니다.');
+      }
+      const append = job.options.append;
+      if (options.mode === 'append'
+        ? !append || append.erdId !== options.erdId || append.baseRevision !== options.baseRevision
+        : Boolean(append)) {
+        throw new ApiError(409, 'SQL_IMPORT_DESTINATION_MISMATCH', '분석한 ERD와 적용 대상 및 방식을 확인하세요.');
       }
       if ((job.output.losses?.length || options.lossFingerprint) && options.lossFingerprint !== job.output.lossFingerprint) {
         throw new ApiError(409, 'SQL_LOSS_CONFIRMATION_REQUIRED', '이 분석의 제외 항목을 확인해 주세요.');
@@ -94,12 +126,13 @@ export function registerSqlImportApply(api: FastifyInstance, pool: Pool, authent
         if (original.target.dialectId !== job.target.dialectId || original.target.engineVersion !== job.target.engineVersion) {
           throw new ApiError(409, 'DOCUMENT_TARGET_MISMATCH', '분석과 대상 문서의 SQL 대상이 다릅니다.');
         }
-        const document = inputDocument(draft(catalog, original.target, row.id, original.name), limits);
-        await insertSnapshot(client, user.id, row, 'before-import', 'DDL 모델 교체 전');
+        const placement = append && appendTables(original, catalog, append.viewId);
+        const document = inputDocument(append ? original : draft(catalog, original.target, row.id, original.name), limits);
+        await insertSnapshot(client, user.id, row, 'before-import', append ? 'DDL 테이블 추가 전' : 'DDL 모델 교체 전');
         const { rows: [saved] } = await client.query<{ revision: number; updatedAt: Date }>(`UPDATE erds
           SET title = $2, payload = $3, revision = revision + 1, updated_by = $4, updated_at = clock_timestamp()
           WHERE id = $1 RETURNING revision, updated_at AS "updatedAt"`, [row.id, document.name, JSON.stringify(document), user.id]);
-        result = { erdId: row.id, revision: saved.revision, updatedAt: saved.updatedAt.toISOString() };
+        result = { erdId: row.id, revision: saved.revision, updatedAt: saved.updatedAt.toISOString(), placement };
       }
       await client.query(`INSERT INTO sql_import_mutations (user_id, mutation_id, project_id, erd_id, request_hash, result)
         VALUES ($1,$2,$3,$4,$5,$6)`, [user.id, mutationId, jobScope.projectId, result.erdId, digest, JSON.stringify(result)]);

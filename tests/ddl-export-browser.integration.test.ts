@@ -23,6 +23,7 @@ it('flushes editor saves, previews dependencies, and downloads UTF-8 DDL for a s
         page.setDefaultTimeout(10_000);
         await page.goto(origin + '/?workspace=1');
         await page.getByRole('button', { name: '개발 계정으로 로그인', exact: true }).click();
+        await page.getByRole('button', { name: '새 프로젝트', exact: true }).click();
         await page.getByLabel('새 프로젝트 이름').fill('DDL 프로젝트');
         await page.getByRole('button', { name: '프로젝트 생성', exact: true }).click();
         await page.getByRole('heading', { name: 'DDL 프로젝트', exact: true }).waitFor();

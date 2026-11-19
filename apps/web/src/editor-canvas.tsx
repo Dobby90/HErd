@@ -78,9 +78,9 @@ function NoteNode({ data }: NodeProps<CanvasNode>) {
 }
 
 const nodeTypes = { table: TableNode, groupBox: GroupNode, note: NoteNode };
-const mapColors = { groupBox: '#e7e8f6', note: '#e8d5a4', table: '#9aa9c3' };
+const mapColors = { groupBox: 'var(--accent-soft)', note: 'var(--warning-line)', table: 'var(--edge)' };
 const mapNodeColor = (node: CanvasNode) => node.selected || node.className === 'active-table'
-  ? '#8179db' : node.type ? mapColors[node.type] : mapColors.table;
+  ? 'var(--accent)' : node.type ? mapColors[node.type] : mapColors.table;
 
 function edgeRoute(source: CanvasNode, target: CanvasNode, fromColumn?: string, toColumn?: string) {
   const sourceHandle = source.data.columns?.some(column => column.id === fromColumn) ? 'out:' + fromColumn : 'table-out';
@@ -242,13 +242,13 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
         proOptions={{ hideAttribution: true }}
       >
         <CanvasViewport focus={focus} viewportOnly={viewportOnly} />
-        <Background gap={22} size={1} color="#c9d0dc" />
+        <Background gap={22} size={1} color="var(--dot)" />
         <Controls showInteractive={false} orientation="horizontal" fitViewOptions={fitOptions} />
       </ReactFlow>
     </div>
     <div id={mapId} className="canvas-map" hidden={!showMap}>
-      {showMap && <MiniMap<CanvasNode> ariaLabel="뷰 미니맵" pannable zoomable nodeColor={mapNodeColor} maskColor="#e8eaf5b3"
-        maskStrokeColor="#7774cd" maskStrokeWidth={1.5} style={{ width: 178, height: 98 }} />}
+      {showMap && <MiniMap<CanvasNode> ariaLabel="뷰 미니맵" pannable zoomable nodeColor={mapNodeColor} maskColor="var(--map-mask)"
+        maskStrokeColor="var(--accent)" maskStrokeWidth={1.5} style={{ width: 178, height: 98 }} />}
     </div>
   </ReactFlowProvider>;
 }

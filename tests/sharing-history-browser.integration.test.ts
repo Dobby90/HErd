@@ -36,6 +36,7 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         expect(code).toBe(alice.shareCode);
         await button('로그아웃').click();
         await button('개발 계정으로 로그인').click();
+        await page.getByRole('button', { name: '새 프로젝트', exact: true }).click();
         await page.getByLabel('새 프로젝트 이름').fill('팀 ERD');
         await button('프로젝트 생성').click();
         await heading('팀 ERD');
@@ -152,6 +153,7 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         await button('로그아웃').click();
         await button('OIDC 로그인').click();
         await heading('기준 모델');
+        await page.getByRole('button', { name: '가져오기', exact: true }).click();
         await button('DDL로 모델 교체').waitFor();
         expect((await api.inject({ method: 'PATCH', url: members + '/' + alice.id, headers, payload: { role: 'viewer' } })).statusCode).toBe(204);
         await page.evaluate(() => window.dispatchEvent(new Event('focus')));

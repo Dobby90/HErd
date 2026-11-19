@@ -8,6 +8,7 @@ import { ApiError, objectBody, revisionNumber, uuid } from './api-error.js';
 import type { Authenticate } from './auth.js';
 import type { CheckpointSettings, DocumentLimits } from './config.js';
 import { transaction } from './database.js';
+import { erdThumbnail } from './erd-thumbnail.js';
 import { checkpoint } from './revision-storage.js';
 
 export type Role = 'owner' | 'editor' | 'viewer';
@@ -293,6 +294,12 @@ export function registerProjects(api: FastifyInstance, pool: Pool, authenticate:
     const { user } = await authenticate(request);
     const row = await findDocument(pool, user.id, uuid(request.params.erdId));
     return { document: storedDocument(row, limits), revision: row.revision, updatedAt: row.updatedAt };
+  });
+
+  api.get<{ Params: DocumentParams }>('/api/erds/:erdId/thumbnail', async request => {
+    const { user } = await authenticate(request);
+    const row = await findDocument(pool, user.id, uuid(request.params.erdId));
+    return erdThumbnail(storedDocument(row, limits));
   });
 
   api.put<{ Params: DocumentParams }>('/api/erds/:erdId', async request => {

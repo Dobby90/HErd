@@ -35,13 +35,33 @@ it('uses DB-backed accounts and starts at the current user’s projects', async 
         }
         async function create(name: string) {
           const created = page.waitForResponse(response => response.url().endsWith('/api/projects') && response.status() === 201);
+          await page.getByRole('button', { name: '새 프로젝트', exact: true }).click();
           await page.getByLabel('새 프로젝트 이름').fill(name);
           await button('프로젝트 생성').click();
           return (await (await created).json()).id as string;
         }
 
         const firstId = await signup('First.User', '첫 번째 사용자');
+        await page.emulateMedia({ colorScheme: 'light' });
+        await button('다크 모드로 전환').click();
+        await page.reload();
+        await button('라이트 모드로 전환').waitFor();
+        expect(await page.locator('html').getAttribute('data-theme')).toBe('dark');
         await create('내 설계');
+        await page.getByRole('heading', { name: '내 설계', exact: true }).waitFor();
+        await button('새 ERD').click();
+        await page.getByLabel('ERD 이름').fill('테마 테스트');
+        await button('ERD 생성').click();
+        await page.getByRole('heading', { name: '테마 테스트', exact: true }).waitFor();
+        expect(await page.locator('html').getAttribute('data-theme')).toBe('dark');
+        await button('라이트 모드로 전환').click();
+        await button('다크 모드로 전환').waitFor();
+        expect(await page.locator('html').getAttribute('data-theme')).toBe('light');
+        await page.setViewportSize({ width: 390, height: 844 });
+        await button('가져오기').click();
+        const importButton = await button('DDL로 테이블 추가').boundingBox();
+        expect(importButton && importButton.x >= 0 && importButton.x + importButton.width <= 390).toBe(true);
+        await page.keyboard.press('Escape');
         await button('로그아웃').click();
         await signup('shared-owner', '두 번째 사용자');
         const sharedId = await create('공유 설계');

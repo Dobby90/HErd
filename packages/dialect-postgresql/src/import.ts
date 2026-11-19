@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { erdDocumentSchema, validateDocumentStructure } from '@erd/model';
 import type { Catalog, ErdDocument, ForeignKey, SqlExpression, SqlTarget } from '@erd/model';
 import type { Diagnostic, ParseRequest, ParseResult, StatementResult } from '@erd/sql-contract';
@@ -96,7 +97,7 @@ function importIndex(entry: Entry) {
 }
 
 class ImportCatalog {
-  readonly catalog = blankCatalog();
+  readonly catalog: Catalog;
   readonly schemas = new Map<string, Catalog['namespaces'][number]>();
   readonly schemaNames = new Map<string, string>();
   readonly tables = new Map<string, Table>();
@@ -112,18 +113,67 @@ class ImportCatalog {
   private number = 0;
   private readonly omitted = new Set<string>();
   private readonly extensionScopes = new Set<string>();
+  private readonly originalIds: Set<string>;
+  private readonly ambiguous = new WeakMap<object, Set<string>>();
 
-  constructor(readonly target: SqlTarget, readonly defaultNamespace: string) {}
+  constructor(readonly target: SqlTarget, readonly defaultNamespace: string, private readonly base?: Catalog) {
+    this.catalog = base ? structuredClone(base) : blankCatalog();
+    this.originalIds = new Set(Object.values(this.catalog).flat().map(item => item.id));
+    for (const schema of this.catalog.namespaces) {
+      this.registerBase(this.schemas, schema.physicalName, schema);
+      this.schemaNames.set(schema.id, schema.physicalName);
+    }
+    const schemaByTable = new Map<string, string>();
+    for (const table of this.catalog.tables) {
+      const schema = this.schemaNames.get(table.namespaceId)!;
+      schemaByTable.set(table.id, schema);
+      this.registerBase(this.tables, relationKey(schema, table.physicalName), table);
+      this.columns.set(table.id, new Map());
+    }
+    for (const column of this.catalog.columns) this.registerBase(this.columns.get(column.tableId)!, column.physicalName, column);
+    for (const item of this.catalog.enums) this.registerBase(this.enums, relationKey(this.schemaNames.get(item.namespaceId)!, item.physicalName), item);
+    for (const item of this.catalog.sequences) this.registerBase(this.sequences, relationKey(this.schemaNames.get(item.namespaceId)!, item.physicalName), item);
+    for (const item of this.catalog.indexes) this.registerBase(this.indexes, relationKey(schemaByTable.get(item.tableId)!, item.physicalName), item);
+  }
+
+  private registerBase<T>(items: Map<string, T>, key: string, item: T) {
+    if (items.has(key)) {
+      const duplicates = this.ambiguous.get(items) ?? new Set<string>();
+      duplicates.add(key);
+      this.ambiguous.set(items, duplicates);
+    }
+    items.set(key, item);
+  }
+
+  private unique<T>(items: Map<string, T>, key: string, label: string) {
+    if (this.ambiguous.get(items)?.has(key)) throw new Error('기존 모델에서 참조 이름이 중복됩니다 (' + label + ').');
+    return items.get(key);
+  }
+
+  isNew(id: string) {
+    return !this.originalIds.has(id);
+  }
+
+  additions(): Catalog {
+    const added = <T extends { id: string }>(items: T[]) => items.filter(item => this.isNew(item.id));
+    const { namespaces, tables, columns, constraints, indexes, enums, sequences } = this.catalog;
+    return { namespaces: added(namespaces), tables: added(tables), columns: added(columns), constraints: added(constraints),
+      indexes: added(indexes), enums: added(enums), sequences: added(sequences) };
+  }
+
+  requireNew(item: { id: string; physicalName: string }) {
+    if (!this.isNew(item.id)) throw new Error('테이블 추가에서는 기존 객체를 변경할 수 없습니다 (' + item.physicalName + ').');
+  }
 
   id(entry: Entry) {
-    const id = 'import-' + ++this.number;
+    const id = this.base ? randomUUID() : 'import-' + ++this.number;
     this.entries.set(id, entry);
     return id;
   }
 
   schema(name: string, entry: Entry) {
     if (systemSchemas.has(name) || name.startsWith('pg_')) throw new Error('시스템 스키마에는 모델 객체를 만들 수 없습니다 (' + name + ').');
-    let item = this.schemas.get(name);
+    let item = this.unique(this.schemas, name, name);
     if (!item) {
       if (name !== this.defaultNamespace && name !== 'public' && entry.kind !== 'CreateSchemaStmt') {
         throw new Error('선언된 스키마를 찾을 수 없습니다 (' + name + ').');
@@ -138,9 +188,9 @@ class ImportCatalog {
 
   find<T>(objects: Map<string, T>, path: string[], entry: Entry) {
     if (!path.length || path.length > 2 || !path.at(-1)) return;
-    if (path.length === 2) return objects.get(relationKey(path[0], path[1]));
-    for (const namespace of entry.path) {
-      const found = objects.get(relationKey(namespace, path[0]));
+    const name = path.at(-1)!;
+    for (const namespace of path.length === 2 ? [path[0]] : entry.path) {
+      const found = this.unique(objects, relationKey(namespace, name), namespace + '.' + name);
       if (found !== undefined) return found;
     }
   }
@@ -156,7 +206,8 @@ class ImportCatalog {
   }
 
   column(table: Table, name: string) {
-    return need(this.columns.get(table.id)?.get(name), '컬럼을 찾을 수 없습니다 (' + table.physicalName + '.' + name + ').');
+    return need(this.unique(this.columns.get(table.id)!, name, table.physicalName + '.' + name),
+      '컬럼을 찾을 수 없습니다 (' + table.physicalName + '.' + name + ').');
   }
 
   enumType(path: string[], entry: Entry) {
@@ -333,6 +384,7 @@ class ImportCatalog {
   defineIndex(entry: Entry) {
     const columns = importIndex(entry);
     const table = this.table(rangeName(entry.body.relation), entry);
+    this.requireNew(table);
     const ids = columns.map(name => this.column(table, name).id);
     const schema = this.schemaNames.get(table.namespaceId)!;
     const unique = Boolean(entry.body.unique);
@@ -363,6 +415,7 @@ class ImportCatalog {
       }
     }
     const table = this.table(rangeName(node.relation), entry);
+    this.requireNew(table);
     for (const command of commands) {
       if (command.subtype === 'AT_AddConstraint') {
         this.keys.push({ table, ast: ast(ast(command.def).Constraint), entry });
@@ -389,6 +442,7 @@ class ImportCatalog {
       'ALTER SEQUENCE는 OWNED BY 설정을 지원합니다.');
     const path = rangeName(node.sequence);
     const sequence = need(this.find(this.sequences, path, entry), '소유권을 설정할 시퀀스를 찾을 수 없습니다 (' + path.join('.') + ').');
+    this.requireNew(sequence);
     this.owners.push({ sequence, names: names(ast(options.get('owned_by')?.List).items), entry });
     return sequence.id;
   }
@@ -397,6 +451,7 @@ class ImportCatalog {
     const { names, sequence, entry } = owner;
     if (names.length === 1 && names[0] === 'none') { sequence.ownedByColumnId = undefined; return; }
     const table = this.table(names.slice(0, -1), entry);
+    this.requireNew(table);
     const column = this.column(table, names.at(-1) ?? '');
     if (table.namespaceId !== sequence.namespaceId || column.identity) throw new Error('OWNED BY에는 같은 스키마의 IDENTITY가 아닌 컬럼을 지정하세요.');
     if (sequence.ownedByColumnId && sequence.ownedByColumnId !== column.id) throw new Error('시퀀스 소유권 정의가 충돌합니다.');
@@ -483,6 +538,7 @@ class ImportCatalog {
             key.physicalName === tail && scopes.includes(this.schemaNames.get(this.catalog.tables.find(table => table.id === key.tableId)!.namespaceId)!));
           if (match?.kind === 'pk' || match?.kind === 'unique') {
             const table = this.catalog.tables.find(table => table.id === match.tableId)!;
+            this.requireNew(table);
             const index: Catalog['indexes'][number] = { id: this.id(entry), tableId: table.id, physicalName: tail, unique: true,
               keys: match.columnIds.map(columnId => ({ kind: 'column' as const, columnId })) };
             this.catalog.indexes.push(index);
@@ -500,6 +556,7 @@ class ImportCatalog {
       default: throw new UnsupportedDdl('이 종류의 COMMENT 대상은 모델에서 지원하지 않습니다.');
     }
     if (!item) throw new Error('COMMENT의 대상 객체를 찾을 수 없습니다.');
+    this.requireNew(item);
     item.description = value;
     return item.id;
   }
@@ -516,7 +573,7 @@ class ImportCatalog {
 }
 
 export async function importPostgresql(request: ParseRequest): Promise<ParseResult> {
-  const { sql, target, defaultNamespace, signal } = request;
+  const { sql, target, defaultNamespace, signal, baseCatalog } = request;
   const issue = (code: string, message: string, location?: Location): Diagnostic => ({ code, message, severity: 'error', location });
   if (target.dialectId !== 'postgresql' || target.engineVersion !== profile.version) {
     return { status: 'blocked', diagnostics: [issue('uncertified-engine-version', '인증된 PostgreSQL 17을 선택하세요.')] };
@@ -564,7 +621,7 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
     const { offset, length } = range(raw.stmt_location ?? 0, raw.stmt_len ?? 0);
     return { kind, body: ast(ast(raw.stmt)[kind]), location: locate(offset, length), path: [defaultNamespace], creation: defaultNamespace };
   });
-  const model = new ImportCatalog(target, defaultNamespace);
+  const model = new ImportCatalog(target, defaultNamespace, baseCatalog);
   const losses: Diagnostic[] = [];
   function record(entry: Entry, status: StatementResult['status'], message?: string, objectId?: string) {
     entry.result = { kind: entry.kind, location: entry.location, status, message, objectId };
@@ -608,7 +665,7 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
   function assignPath(values: string[], local: boolean) {
     if (local && !transaction) throw new Error('SET LOCAL search_path를 사용하려면 BEGIN이 필요합니다.');
     if (values.some(value => value === '$user' || (!systemSchemas.has(value) && value !== 'public' &&
-        value !== defaultNamespace && !declared.has(value)))) throw new Error(settingsError);
+        value !== defaultNamespace && !declared.has(value) && !model.schemas.has(value)))) throw new Error(settingsError);
     path = values;
     if (!local) persistent = values;
   }
@@ -712,7 +769,10 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
       ? '권한 문은 ERD에 적용되지 않습니다.' : '지원하는 테이블 중심 DDL 범위 밖의 객체 또는 변경입니다 (' + entry.kind + ').');
   }
   const catalog = model.catalog;
-  if (!catalog.tables.length && !catalog.sequences.length && !catalog.enums.length && !catalog.namespaces.length) {
+  const output = baseCatalog ? model.additions() : catalog;
+  if (baseCatalog && !output.tables.length && !diagnostics.length) {
+    diagnostics.push(issue('no-new-tables', '현재 뷰에 추가할 CREATE TABLE 정의가 필요합니다.'));
+  } else if (!baseCatalog && !catalog.tables.length && !catalog.sequences.length && !catalog.enums.length && !catalog.namespaces.length) {
     diagnostics.push(issue('no-importable-objects', '변환할 스키마 또는 테이블 관련 객체가 없습니다.'));
   }
   if (!diagnostics.length) {
@@ -722,9 +782,12 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
     else {
       const structure = validateDocumentStructure(validation.data);
       const issues: Diagnostic[] = structure.length ? structure : [
-        ...postgresqlEditor.validate(validation.data, { target }), ...(await preparePostgresqlExport({ document: validation.data, target })).diagnostics,
+        ...postgresqlEditor.validate(validation.data, { target }),
+        ...(await preparePostgresqlExport({ document: validation.data, target,
+          tableIds: baseCatalog ? output.tables.map(table => table.id) : undefined })).diagnostics,
       ];
       for (const problem of issues) {
+        if (baseCatalog && !structure.length && problem.objectId && !model.isNew(problem.objectId)) continue;
         const entry = problem.objectId && model.entries.get(problem.objectId);
         if (entry && problem.severity === 'error') record(entry, 'error', problem.message, problem.objectId);
         diagnostics.push({ ...problem, location: entry ? entry.location : undefined });
@@ -734,5 +797,5 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
   const statements = withOrdinals([...controls, ...entries.flatMap(entry => entry.result ? [entry.result] : [])]);
   losses.sort((a, b) => (a.location?.offset ?? 0) - (b.location?.offset ?? 0));
   if (diagnostics.some(item => item.severity === 'error')) return { status: 'blocked', profile, statements, diagnostics, losses };
-  return { status: 'parsed', profile, catalog, statements, diagnostics, losses };
+  return { status: 'parsed', profile, catalog: output, statements, diagnostics, losses };
 }

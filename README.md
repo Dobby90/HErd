@@ -51,7 +51,7 @@ SQL 작업 결과는 기본 10분 동안 보관됩니다. 생성 스크립트의
 
 프로젝트에서 **DDL로 새 ERD 만들기**를 열거나 서버 편집기에서 **DDL로 모델 교체**를 엽니다. PostgreSQL 17 DDL을 붙여 넣거나 UTF-8 `.sql` 또는 텍스트 형식의 `pg_dump --schema-only` 파일을 선택합니다. 기본 입력 한도는 5 MiB입니다. 분석에서 이름 해석 결과와 문장별 판정을 확인하고, 제외 항목이 있을 때는 해당 분석의 손실 목록을 확인한 뒤 적용합니다.
 
-모델 교체는 현재 서버 리비전을 기준으로 적용하며 기존 모델과 뷰는 교체 직전 스냅샷에 저장합니다. 편집기의 **버전 이력**에서 교체 전 상태를 열거나 복원할 수 있습니다. [가져오기 API와 설정](docs/05-postgresql-ddl-import.md#실행과-적용-설정), [PostgreSQL 지원 범위](docs/sql-support/postgresql.md#postgresql-17-ddl-import)
+편집기의 **가져오기 → DDL로 테이블 추가**는 현재 뷰에 새 테이블을 배치합니다. **DDL로 모델 교체**로 모델과 뷰를 함께 교체할 수 있습니다. 두 방식 모두 현재 서버 리비전을 확인하며 적용 직전 상태를 **버전 이력**에서 열거나 복원할 수 있습니다. [가져오기 API와 설정](docs/05-postgresql-ddl-import.md#실행과-적용-설정), [PostgreSQL 지원 범위](docs/sql-support/postgresql.md#postgresql-17-ddl-import)
 
 ## 프로젝트 공유·버전 이력·이미지 출력
 
@@ -79,6 +79,7 @@ docker compose up -d --build --wait
 
 ## 진행 상태
 
+- [x] **v0.3.0 프로젝트·편집기 개선.** 프로젝트 목록·상세, ERD 미리보기, 라이트·다크 모드, 편집 중인 뷰에 PostgreSQL DDL로 테이블 추가를 지원합니다. [사용 가이드](docs/user-guide.md)
 - [x] **1단계 개발 기반과 도메인 모델 완료.** 웹·API 실행, ERD v1 직렬화와 참조 무결성, PostgreSQL 17 파서·실제 스키마 덤프를 검증했습니다. [1단계 검증 결과](docs/01-foundation-and-domain.md#검증-결과)
 - [x] **2단계 로컬 ERD 편집기 완료.** 복합·자기 참조 FK 편집, 여러 뷰의 테이블 재사용, 삭제와 실행 취소·다시 실행, IndexedDB 복구와 탭 충돌 처리를 검증했습니다. [2단계 검증 결과](docs/02-erd-editor.md#검증-결과)
 - [x] **3단계 프로젝트·인증·서버 저장 완료.** OIDC와 역할별 권한, 실제 DB의 프로젝트·ERD CRUD, 자동 저장·충돌·복구를 검증했습니다. [3단계 검증 결과](docs/03-projects-and-persistence.md#검증-결과)

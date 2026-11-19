@@ -29,9 +29,11 @@ it('imports with warnings, edits and downloads SQL, restores a replacement, and 
         const status = (revision: number) => page.getByText('서버 저장됨 · 리비전 ' + revision, { exact: true }).waitFor();
         await page.goto(origin + '/?workspace=1');
         await button('OIDC 로그인').click();
+        await page.getByRole('button', { name: '새 프로젝트', exact: true }).click();
         await page.getByLabel('새 프로젝트 이름').fill('물류 모델 프로젝트');
         await button('프로젝트 생성').click();
         await heading('물류 모델 프로젝트');
+        await page.getByRole('button', { name: '가져오기', exact: true }).click();
         await button('DDL로 새 ERD 만들기').click();
         const analysis = page.getByRole('dialog', { name: 'DDL로 새 ERD 만들기' });
         await analysis.getByLabel('DDL 입력').fill('CREATE TABLE warehouse (id integer PRIMARY KEY);\n' +
@@ -64,6 +66,7 @@ it('imports with warnings, edits and downloads SQL, restores a replacement, and 
         expect(sql).toContain('FOREIGN KEY');
         await page.getByRole('dialog', { name: 'DDL 내보내기' }).getByRole('button', { name: '닫기' }).click();
 
+        await page.getByRole('button', { name: '가져오기', exact: true }).click();
         await button('DDL로 모델 교체').click();
         await page.getByRole('dialog', { name: 'DDL로 모델 교체' }).getByLabel('DDL 입력')
           .fill('CREATE TABLE replacement (id integer PRIMARY KEY);');

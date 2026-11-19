@@ -32,6 +32,7 @@ export interface ParseRequest {
   sql: string;
   target: SqlTarget;
   defaultNamespace: string;
+  baseCatalog?: Catalog;
   limits?: ParseLimits;
   signal?: AbortSignal;
 }
@@ -151,7 +152,7 @@ export interface ParseSqlJob extends JobStatus {
   kind: 'parse';
   erdId: null;
   revision: null;
-  options: { defaultNamespace: string };
+  options: { defaultNamespace: string; append?: { erdId: string; baseRevision: number; viewId?: string } };
   output: ParseJobOutput | null;
 }
 
@@ -160,4 +161,5 @@ export interface ImportApplied {
   erdId: string;
   revision: number;
   updatedAt: string;
+  placement?: { viewId: string; instanceId: string };
 }

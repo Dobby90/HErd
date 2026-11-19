@@ -19,6 +19,14 @@ const icons = {
   map: 'm4 7 5-3 6 3 5-3v13l-5 3-6-3-5 3z M9 4v13 M15 7v13',
   settings: 'M4 7h16 M4 17h16 M9 4v6 M15 14v6',
   check: 'm5 12 4 4L19 6',
+  import: 'M12 4v11 m-4-4 4 4 4-4 M4 15v5h16v-5',
+  folder: 'M3 7V5h7l2 2h9v12H3z M3 10h18',
+  users: 'M15 19v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2 M12 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z M17 4a3 3 0 0 1 0 6 M21 19v-2a4 4 0 0 0-3-3.9',
+  more: 'M5 12h.01 M12 12h.01 M19 12h.01',
+  copy: 'M9 9h12v12H9z M15 5V3H3v12h2',
+  trash: 'M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13 M10 10v7 M14 10v7',
+  sun: 'M12 2v2 M12 20v2 M2 12h2 M20 12h2 M5 5l1.5 1.5 m11 11L19 19 M5 19l1.5-1.5 m11-11L19 5 M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',
+  moon: 'M20 15.3A8.5 8.5 0 0 1 8.7 4 8.5 8.5 0 1 0 20 15.3Z',
 };
 
 export function Icon({ name }: { name: keyof typeof icons }) {
@@ -31,8 +39,8 @@ export function ColumnBadges({ values }: { values: string[] }) {
     <small key={value} className={'badge-' + value}>{value.toUpperCase()}</small>)}</span>;
 }
 
-export function ActionMenu({ label, icon, primary, children }: {
-  label: string; icon: 'export' | 'plus'; primary?: boolean; children: ReactNode;
+export function ActionMenu({ label, icon, primary, iconOnly, children }: {
+  label: string; icon: keyof typeof icons; primary?: boolean; iconOnly?: boolean; children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
@@ -60,8 +68,9 @@ export function ActionMenu({ label, icon, primary, children }: {
       close();
     }
   }}>
-    <button ref={trigger} type="button" className={primary ? 'primary' : 'quiet'} aria-expanded={open} aria-controls={panelId}
-      onClick={() => setOpen(value => !value)}><Icon name={icon} />{label}<Icon name="chevron" /></button>
+    <button ref={trigger} type="button" className={primary ? 'primary' : iconOnly ? 'quiet icon-button' : 'quiet'}
+      aria-label={iconOnly ? label : undefined} title={iconOnly ? label : undefined} aria-expanded={open} aria-controls={panelId}
+      onClick={() => setOpen(value => !value)}><Icon name={icon} />{!iconOnly && <>{label}<span className="menu-chevron"><Icon name="chevron" /></span></>}</button>
     <div className="action-menu-panel" id={panelId} hidden={!open} onClick={event => {
       const button = (event.target as Element).closest('button');
       if (button && event.currentTarget.contains(button)) close();
