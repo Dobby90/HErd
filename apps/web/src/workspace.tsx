@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import type { ImportApplied } from '@erd/sql-contract';
 import { duplicateDocument } from '@erd/model';
 import { createEditorDocument, DocumentEditor, editorTargets } from './editor.js';
-import { ActionMenu, Icon } from './editor-controls.js';
+import { ActionMenu, AppVersion, Icon } from './editor-controls.js';
 import { field, Form, Modal } from './editor-fields.js';
 import { ApiFailure, apiRequest } from './project-api.js';
 import type { DocumentSummary, Identity, Project, SavedRevision, ServerDocument, SnapshotDetail } from './project-api.js';
@@ -518,9 +518,12 @@ export function Workspace() {
   return <main className="project-page">
     <header className="topbar">
       <div className="workspace-navigation">
-        <button type="button" className="brand-home quiet" aria-label="HERD 프로젝트 홈" onClick={() => go({})}>
-          <span className="brand-mark"><Icon name="brand" /></span><strong>HERD</strong>
-        </button>
+        <div className="brand-lockup">
+          <button type="button" className="brand-home quiet" aria-label="HERD 프로젝트 홈" onClick={() => go({})}>
+            <span className="brand-mark"><Icon name="brand" /></span><strong>HERD</strong>
+          </button>
+          <AppVersion />
+        </div>
         <span className="workspace-nav-divider" />
         <a href="/?local=1" className="workspace-link">로컬 편집기</a>
       </div>

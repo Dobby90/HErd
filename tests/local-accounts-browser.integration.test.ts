@@ -22,6 +22,8 @@ it('uses DB-backed accounts and starts at the current user’s projects', async 
       await withBrowser(async (context, base) => {
         const page = context.pages()[0] ?? await context.newPage();
         await page.goto(base);
+        const version = page.locator('.app-version').getByText(process.env.VITE_HERD_VERSION || 'dev', { exact: true });
+        await version.waitFor();
         const button = (name: string) => page.getByRole('button', { name, exact: true });
         const password = 'a';
         async function signup(username: string, displayName: string) {
@@ -53,11 +55,13 @@ it('uses DB-backed accounts and starts at the current user’s projects', async 
         await page.getByLabel('ERD 이름').fill('테마 테스트');
         await button('ERD 생성').click();
         await page.getByRole('heading', { name: '테마 테스트', exact: true }).waitFor();
+        await version.waitFor();
         expect(await page.locator('html').getAttribute('data-theme')).toBe('dark');
         await button('라이트 모드로 전환').click();
         await button('다크 모드로 전환').waitFor();
         expect(await page.locator('html').getAttribute('data-theme')).toBe('light');
         await page.setViewportSize({ width: 390, height: 844 });
+        await version.waitFor();
         await button('가져오기').click();
         const importButton = await button('DDL로 테이블 추가').boundingBox();
         expect(importButton && importButton.x >= 0 && importButton.x + importButton.width <= 390).toBe(true);

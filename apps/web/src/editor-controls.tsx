@@ -1,6 +1,14 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
+const appVersion = import.meta.env.VITE_HERD_VERSION || 'dev';
+
+export function AppVersion() {
+  return <small className="app-version" title={`HERD 버전 ${appVersion}`}>
+    <span className="sr-only">HERD 버전 </span><span>{appVersion}</span>
+  </small>;
+}
+
 const icons = {
   brand: 'M4 4h6v5H4z M14 15h6v5h-6z M10 6.5h7V15 M4 15h6v5H4z M7 9v6',
   search: 'M15.5 15.5 20 20 M17 11a6 6 0 1 1-12 0 6 6 0 0 1 12 0Z',

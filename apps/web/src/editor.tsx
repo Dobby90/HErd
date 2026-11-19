@@ -9,7 +9,7 @@ import { EditorCanvas } from './editor-canvas.js';
 import type { CanvasFocus, CanvasPosition, LayoutSizes } from './editor-canvas.js';
 import { CanvasEditing, dragType, QuickColumnForm, QuickTableForm } from './canvas-edit.js';
 import type { QuickEdit, QuickRun } from './canvas-edit.js';
-import { ActionMenu, ColumnBadges, Icon } from './editor-controls.js';
+import { ActionMenu, AppVersion, ColumnBadges, Icon } from './editor-controls.js';
 import { ThemeToggle } from './theme.js';
 import { columnsOf, duplicateView, EditorReadOnly, emptyView, field, Form, id, label, Modal, named, NameFields, placement, putView, ViewNameOptions } from './editor-fields.js';
 import type { Table, View } from './editor-fields.js';
@@ -552,7 +552,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
 
   return <EditorReadOnly.Provider value={readOnly}><main className="editor" onKeyDown={keyboard}>
     <header className="topbar">
-      <span className="brand-mark"><Icon name="brand" /></span>
+      <div className="brand-lockup"><span className="brand-mark"><Icon name="brand" /></span><AppVersion /></div>
       <div className="document-title">
         <h1 title={document.name}>{document.name}</h1>
         {!readOnly && <button className="icon-button quiet" type="button" aria-label="문서 제목 변경" title="문서 제목 변경"

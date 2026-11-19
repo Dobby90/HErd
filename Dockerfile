@@ -5,9 +5,10 @@ RUN npm install --global pnpm@10.11.0
 WORKDIR /app
 COPY . .
 RUN pnpm install --frozen-lockfile
+ARG HERD_VERSION=dev
 ARG VITE_ERD_PNG_MAX_SIDE
 ARG VITE_ERD_PNG_MAX_PIXELS
-RUN pnpm build && pnpm --filter @erd/api --prod deploy --legacy /runtime
+RUN VITE_HERD_VERSION="$HERD_VERSION" pnpm build && pnpm --filter @erd/api --prod deploy --legacy /runtime
 
 FROM node-runtime AS api
 ARG HERD_VERSION=dev
