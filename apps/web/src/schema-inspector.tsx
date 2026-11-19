@@ -261,9 +261,19 @@ export function ForeignKeyForm({ document, dialect, seed, run, close }: {
   const existingKeyNames = new Set(document.catalog.constraints.filter(item => item.tableId === seed.tableId).map(item => item.physicalName));
   const suggestedName = availableName([table?.physicalName, parent?.physicalName, 'fk'].filter(Boolean).join('_'), existingKeyNames);
   if (!table) return null;
+  const namespaces = new Map(document.catalog.namespaces.map(namespace => [namespace.id, label(namespace)]));
+  const seenNames = new Set<string>();
+  const duplicateNames = new Set<string>();
+  for (const item of document.catalog.tables) {
+    const name = label(item);
+    if (seenNames.has(name)) duplicateNames.add(name);
+    seenNames.add(name);
+  }
+  const tableLabel = (item: Table) => duplicateNames.has(label(item))
+    ? [namespaces.get(item.namespaceId), label(item)].filter(Boolean).join('.') : label(item);
 
   return <Modal title="외래 키 설정" close={close}>
-    {seed.mode && parent && <p className="fk-summary"><strong>{label(parent)}</strong><Icon name="right" /><strong>{label(table)}</strong>
+    {seed.mode && parent && <p className="fk-summary"><strong>{tableLabel(parent)}</strong><Icon name="right" /><strong>{tableLabel(table)}</strong>
       <span className="muted">부모 → 자식</span></p>}
     <Form cancel={close} button="외래 키 적용" submit={form => {
       if (!key || validation.length || modeProblem || sameMapping) {
@@ -337,7 +347,7 @@ export function ForeignKeyForm({ document, dialect, seed, run, close }: {
         setError('');
       }} disabled={Boolean(seed.targetColumnId || seed.mode)}>
         <option value="">테이블 선택</option>
-        {document.catalog.tables.map(table => <option key={table.id} value={table.id}>{label(table)}</option>)}
+        {document.catalog.tables.map(table => <option key={table.id} value={table.id}>{tableLabel(table)}</option>)}
       </select></label>
       <label>참조 후보키<select value={chosen} onChange={event => { setChosen(event.target.value); setError(''); }} required>
         <option value="">후보키 선택</option>

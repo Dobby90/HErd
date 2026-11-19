@@ -9,7 +9,7 @@ import { EditorCanvas } from './editor-canvas.js';
 import type { CanvasFocus, CanvasPosition, LayoutSizes } from './editor-canvas.js';
 import { CanvasEditing, dragType, QuickAnnotationForm, QuickColumnForm, QuickTableForm } from './canvas-edit.js';
 import type { QuickAnnotationEdit, QuickEdit, QuickRun } from './canvas-edit.js';
-import { canvasDisplay } from './canvas-display.js';
+import { canvasDisplay, displayFields, logicalCardinalities } from './canvas-display.js';
 import { ActionMenu, AppVersion, ColumnBadges, Icon } from './editor-controls.js';
 import { ThemeToggle } from './theme.js';
 import {
@@ -94,21 +94,6 @@ function ViewSettings({ view, run, choose, close }: { view: View; run: Run; choo
   </Modal>;
 }
 
-const displayFields = [
-  ['tableComments', '테이블 코멘트'],
-  ['columns', '컬럼 목록'],
-  ['columnTypes', '컬럼 자료형'],
-  ['columnBadges', 'PK·FK·UNIQUE 배지'],
-  ['columnNullability', 'NULL 허용 여부'],
-  ['columnDefaults', '컬럼 기본값'],
-  ['columnComments', '컬럼 코멘트'],
-  ['relationships', '관계선'],
-  ['relationshipLabels', '관계선 라벨'],
-  ['notes', '메모'],
-  ['groups', '그룹'],
-  ['grid', '배경 격자'],
-] as const satisfies ReadonlyArray<readonly [keyof CanvasDisplay, string]>;
-
 function CanvasDisplaySettings({ settings, apply, close }: {
   settings: CanvasDisplay; apply(value: CanvasDisplay): void; close(): void;
 }) {
@@ -164,7 +149,8 @@ function RelationshipForm({ document, relation, seed, run, close }: {
   const defaultName = seed && [seed.sourceTableId, seed.targetTableId].map(id =>
     label(document.catalog.tables.find(table => table.id === id) ?? { physicalName: '' })).join(' → ');
   return <Form button="논리 관계 적용" cancel={close} submit={form => {
-    const cardinality = (['one-to-one', 'one-to-many', 'many-to-many'] as const).find(item => item === field(form, 'cardinality'));
+    const cardinality = (Object.keys(logicalCardinalities) as Array<keyof typeof logicalCardinalities>)
+      .find(item => item === field(form, 'cardinality'));
     if (!cardinality) return;
     if (run({ kind: 'put-relationship', value: {
       id: relation?.id ?? id(), name: field(form, 'name'), description: field(form, 'description') || undefined,
@@ -179,7 +165,7 @@ function RelationshipForm({ document, relation, seed, run, close }: {
       </select>
     </label>)}
     <label>관계 차수<select name="cardinality" defaultValue={relation?.cardinality ?? 'one-to-many'}>
-      <option value="one-to-one">1:1</option><option value="one-to-many">1:N</option><option value="many-to-many">N:M</option>
+      {Object.entries(logicalCardinalities).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
     </select></label>
     {relation && <button type="button" onClick={() => {
       if (run({ kind: 'remove-relationship', id: relation.id })) close();
@@ -667,7 +653,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
         {importAction && <ActionMenu label="가져오기" icon="import">{importAction(view?.id)}</ActionMenu>}
         {(exportAction || view) && <ActionMenu label="내보내기" icon="export" primary>
           {exportAction?.(view?.id)}
-          {view && <ImageExport document={document} view={view} selection={selectedInstances} verify={verifyImage} />}
+          {view && <ImageExport document={document} view={view} dialect={dialect} selection={selectedInstances} verify={verifyImage} />}
         </ActionMenu>}
         <ThemeToggle />
       </div>

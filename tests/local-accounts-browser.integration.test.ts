@@ -69,6 +69,11 @@ it('uses DB-backed accounts and starts at the current user’s projects', async 
         await button('로그아웃').click();
         const secondId = await signup('shared-owner', '두 번째 사용자');
         const sharedId = await create('공유 설계');
+        await button('새 ERD').click();
+        await page.getByLabel('ERD 이름').fill('공유 ERD');
+        await button('ERD 생성').click();
+        await page.getByRole('heading', { name: '공유 ERD', exact: true }).waitFor();
+        const sharedLink = page.url();
         await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)', [sharedId, firstId, 'viewer']);
         await button('로그아웃').click();
 
@@ -83,9 +88,14 @@ it('uses DB-backed accounts and starts at the current user’s projects', async 
         expect(unknown.status()).toBe(401);
         expect((await wrong.json()).code).toBe((await unknown.json()).code);
 
+        await page.goto(sharedLink);
         await page.getByLabel('아이디').fill('FIRST.USER');
         await page.getByLabel('비밀번호').fill(password);
         await button('로그인').click();
+        await page.getByRole('heading', { name: '공유 ERD', exact: true }).waitFor();
+        await page.getByText('읽기 전용 · 리비전 1', { exact: true }).waitFor();
+        expect(page.url()).toBe(sharedLink);
+        await page.goto(base);
         const owned = page.getByRole('region', { name: '프로젝트 목록', exact: true });
         await owned.getByRole('button', { name: '내 설계' }).waitFor();
         expect(await owned.getByRole('button', { name: '공유 설계' }).count()).toBe(0);

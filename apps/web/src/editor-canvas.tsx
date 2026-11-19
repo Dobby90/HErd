@@ -8,7 +8,7 @@ import type { EditorDialect } from '@erd/sql-contract';
 import { ColumnBadges, Icon } from './editor-controls.js';
 import { defaultGroupSize, minGroupSize, secondaryName, viewColumnIds, viewLabel } from './editor-fields.js';
 import { CanvasEditing, canvasFormPosition, dragType } from './canvas-edit.js';
-import { canvasDisplay } from './canvas-display.js';
+import { canvasDisplay, foreignKeyLabel, logicalRelationshipLabel } from './canvas-display.js';
 import { measureTableLayout } from './canvas-width.js';
 import { columnTypeLabel } from './schema-edits.js';
 import { arrangeOverlappingTables, overlappingTables } from './view-overlap.js';
@@ -294,12 +294,10 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   if (!display.relationships) return { nodes, edges };
   const foreignKeys = display.relationshipLabels ? dialect?.inspectForeignKeys?.(document) : undefined;
   for (const key of physicalRelationships(document)) {
-    const meaning = display.relationshipLabels && (foreignKeys ? foreignKeys.cardinality(key) : dialect?.cardinality(document, key));
     const pair = key.pairs[0];
     const identifying = isIdentifyingForeignKey(key, primary);
-    const label = meaning
-      ? `${identifying ? '식별' : '비식별'} · 자식 0..${meaning.childMax === 1 ? '1' : 'N'} · 부모 ${meaning.parentOptional ? '0..1' : '1'}`
-      : 'FK · 검토 필요';
+    const label = display.relationshipLabels
+      ? foreignKeyLabel(identifying, foreignKeys ? foreignKeys.cardinality(key) : dialect?.cardinality(document, key)) : undefined;
     for (const source of instances.get(key.tableId) ?? []) {
       const targets = key.tableId === key.targetTableId ? [source] : instances.get(key.targetTableId) ?? [];
       for (const target of targets) {
@@ -307,7 +305,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
           id: JSON.stringify([key.id, source.id, target.id]), data: { objectId: key.id },
           source: source.id, target: target.id,
           ...edgeRoute(source, target, pair.sourceColumnId, pair.targetColumnId),
-          label: display.relationshipLabels ? label : undefined,
+          label,
           className: 'fk-edge ' + (identifying ? 'identifying-edge' : 'non-identifying-edge'),
         });
       }
@@ -319,7 +317,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
       for (const target of targets) edges.push({
         id: JSON.stringify([relation.id, source.id, target.id]), data: { objectId: relation.id },
         source: source.id, target: target.id, ...edgeRoute(source, target),
-        label: display.relationshipLabels ? relation.name + ' · 논리' : undefined, className: 'logical-edge', type: 'smoothstep',
+        label: display.relationshipLabels ? logicalRelationshipLabel(relation) : undefined, className: 'logical-edge', type: 'smoothstep',
       });
     }
   }

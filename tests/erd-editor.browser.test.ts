@@ -4,6 +4,7 @@ import type { ErdDocument } from '@erd/model';
 import { sampleDocument } from '@erd/test-fixtures';
 import type { Mutation, ServerDocument } from '../apps/web/src/project-api.js';
 import { withBrowser } from './support/browser.js';
+import { openExport } from './support/editor-ui.js';
 
 const visible = (page: Page, text: string) => page.getByText(text, { exact: true }).first().waitFor();
 const action = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
@@ -41,6 +42,7 @@ async function openEditor(page: Page, origin: string, document = sampleDocument,
     }
     const saved = documents.get(path.slice('/api/erds/'.length));
     if (!path.startsWith('/api/erds/') || !saved) return route.fulfill({ status: 404, json: { message: 'Fixture resource not found.' } });
+    if (request.method() === 'HEAD') return route.fulfill({ status: 200 });
     if (request.method() !== 'PUT') return route.fulfill({ json: saved });
     const mutation = request.postDataJSON() as Mutation;
     if (mutation.baseRevision !== saved.revision) return route.fulfill({ status: 409, json: { code: 'REVISION_CONFLICT' } });
@@ -158,6 +160,47 @@ it('saves canvas display options across views independently of the name mode', a
       .toMatchObject({ columns: false, relationships: false, tableComments: true });
   });
 }, 60_000);
+
+it('uses canvas visibility for image exports and allows per-export overrides', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    const document = structuredClone(sampleDocument);
+    document.canvasDisplay = { columns: false, groups: false, notes: false, relationships: false };
+    await openEditor(page, origin, document);
+    await openExport(page, '이미지');
+    const dialog = page.getByRole('dialog', { name: '뷰 이미지 내보내기' });
+    const columns = dialog.getByLabel('컬럼 표시');
+    const options = ['메모 포함', '그룹 포함', '관계선 포함'].map(name => dialog.getByLabel(name));
+    expect(await columns.inputValue()).toBe('collapsed');
+    for (const option of options) expect(await option.isChecked()).toBe(false);
+    await dialog.getByLabel('이미지 형식').selectOption('svg');
+    async function previewSvg() {
+      await action(page, '출력 미리보기').click();
+      await action(page, 'SVG 다운로드').waitFor();
+      return dialog.getByRole('img').evaluate(async node => {
+        const markup = await fetch((node as HTMLImageElement).src).then(response => response.text());
+        const svg = new DOMParser().parseFromString(markup, 'image/svg+xml');
+        return { text: Array.from(svg.querySelectorAll('text'), label => label.textContent), edges: svg.querySelectorAll('polyline').length };
+      });
+    }
+    const hidden = await previewSvg();
+    expect(hidden.text).toContain('order_items');
+    expect(hidden.text).not.toContain('quantity');
+    expect(hidden.text).not.toContain(document.views[0].notes[0].text);
+    expect(hidden.text).not.toContain(document.views[0].groups[0].name);
+    expect(hidden.edges).toBe(0);
+
+    await columns.selectOption('view');
+    for (const option of options) await option.check();
+    const visible = await previewSvg();
+    expect(visible.text).toEqual(expect.arrayContaining([
+      'quantity', document.views[0].notes[0].text, document.views[0].groups[0].name, '고객별 상품 집계 · 논리 · N:M',
+    ]));
+    expect(visible.edges).toBe(4);
+    await dialog.getByRole('button', { name: '닫기' }).click();
+    expect(await page.locator('.canvas-column, .note-text, .react-flow__edge').count()).toBe(0);
+  });
+});
 
 it('shows persisted NULL and NOT NULL badges independently of key badges', async () => {
   await withBrowser(async (context, origin) => {
@@ -884,6 +927,25 @@ it('commits schema form values and reloads server documents with object-specific
   });
 }, 90_000);
 
+it('qualifies same-named FK targets so the intended schema can be selected', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    const document = structuredClone(sampleDocument);
+    document.catalog.namespaces.push({ id: 'audit', physicalName: 'audit' });
+    document.catalog.tables.push({ id: 'audit-users', namespaceId: 'audit', physicalName: 'users', columnIds: [] });
+    await openEditor(page, origin, document);
+    await nav(page).getByRole('button', { name: 'orders', exact: true }).click();
+    await tab(page, '제약').click();
+    await action(page, '외래 키 추가').click();
+    const targets = page.getByLabel('참조 테이블');
+    expect(await targets.locator('option').allTextContents()).toEqual([
+      '테이블 선택', 'public.users', 'orders', 'order_items', 'products', 'audit.users',
+    ]);
+    await targets.selectOption({ label: 'audit.users' });
+    expect(await targets.inputValue()).toBe('audit-users');
+  });
+});
+
 it('adds reciprocal and self foreign keys and edits an independent logical relationship', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
@@ -924,7 +986,7 @@ it('adds reciprocal and self foreign keys and edits an independent logical relat
     await action(page, '논리 관계 적용').click();
     await action(page, '상품과 고객').click();
     expect(await inspector(page).getByLabel('관계 차수').inputValue()).toBe('many-to-many');
-    await page.locator('.logical-edge').filter({ hasText: '상품과 고객 · 논리' }).waitFor();
+    await page.locator('.logical-edge').getByText('상품과 고객 · 논리 · N:M', { exact: true }).waitFor();
     await expect.poll(() => page.locator('.fk-edge').count()).toBe(6);
     await page.locator('.fk-edge').filter({ hasText: '자식 0..N · 부모 0..1' }).first().waitFor();
     await waitSaved(page);

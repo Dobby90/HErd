@@ -1,29 +1,34 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ErdDocument } from '@erd/model';
 import { viewNameDisplaySchema } from '@erd/model';
+import type { EditorDialect } from '@erd/sql-contract';
+import { canvasDisplay, displayFields } from './canvas-display.js';
 import type { View } from './editor-fields.js';
 import { Modal, ViewNameOptions, viewLabel } from './editor-fields.js';
 import type { ImageOptions, renderDiagramImage } from './diagram-image.js';
 
 type Result = Awaited<ReturnType<typeof renderDiagramImage>>;
 
-export function ImageExport({ document, view, selection, verify }: {
-  document: ErdDocument; view: View; selection: string[]; verify?(): Promise<void>;
+export function ImageExport({ document, view, dialect, selection, verify }: {
+  document: ErdDocument; view: View; dialect?: EditorDialect; selection: string[]; verify?(): Promise<void>;
 }) {
   const [snapshot, setSnapshot] = useState<{ document: ErdDocument; view: View; selection: string[] }>();
   return <>
     <button type="button" onClick={() => setSnapshot(structuredClone({ document, view, selection }))}>이미지 내보내기</button>
-    {snapshot && <ImageExportDialog {...snapshot} verify={verify}
+    {snapshot && <ImageExportDialog {...snapshot} dialect={dialect} verify={verify}
       close={() => setSnapshot(undefined)} />}
   </>;
 }
 
-function ImageExportDialog({ document, view, selection, verify, close }: {
-  document: ErdDocument; view: View; selection: string[]; verify?(): Promise<void>; close(): void;
+function ImageExportDialog({ document, view, dialect, selection, verify, close }: {
+  document: ErdDocument; view: View; dialect?: EditorDialect; selection: string[]; verify?(): Promise<void>; close(): void;
 }) {
-  const [options, setOptions] = useState<ImageOptions>({
-    names: view.nameDisplay ?? 'physical', columns: 'view', format: 'png', scale: 1,
-    groups: true, notes: true, background: true,
+  const [options, setOptions] = useState<ImageOptions>(() => {
+    const display = canvasDisplay(document);
+    return {
+      ...display, columns: display.columns ? 'view' : 'collapsed',
+      names: view.nameDisplay ?? 'physical', format: 'png', scale: 1, background: true,
+    };
   });
   const [chosen, setChosen] = useState(() => view.instances.filter(instance => selection.includes(instance.id)).map(instance => instance.id));
   const [scope, setScope] = useState<'view' | 'selected'>(chosen.length ? 'selected' : 'view');
@@ -100,11 +105,21 @@ function ImageExportDialog({ document, view, selection, verify, close }: {
       {options.format === 'png' && <label>PNG 배율<select value={options.scale} onChange={event => change({ scale: Number(event.target.value) })}>
         {[0.25, 0.5, 1, 2, 3, 4].map(scale => <option value={scale} key={scale}>{scale}×</option>)}
       </select></label>}
-      {([['notes', '메모 포함'], ['groups', '그룹 포함'], ['background', '배경 포함']] as const).map(([key, label]) =>
+      {([['notes', '메모 포함'], ['groups', '그룹 포함'], ['relationships', '관계선 포함'], ['background', '배경 포함']] as const).map(([key, label]) =>
         <label key={key} className="checkbox"><input type="checkbox" checked={options[key]} onChange={event => change({ [key]: event.target.checked })} />{label}</label>)}
     </div>
+    <details>
+      <summary>세부 표시 옵션</summary>
+      <div className="canvas-display-options">
+        {displayFields.map(([key, label]) => {
+          if (key === 'columns' || key === 'notes' || key === 'groups' || key === 'relationships' || key === 'grid') return null;
+          return <label key={key} className="checkbox"><input type="checkbox" checked={options[key]}
+            onChange={event => change({ [key]: event.target.checked })} />{label}</label>;
+        })}
+      </div>
+    </details>
     {scope === 'selected' && <>
-      <p>양쪽 테이블이 포함된 관계선만 출력합니다. 메모와 그룹은 선택한 테이블의 그룹을 따릅니다. 이 설정은 ERD에 저장되지 않습니다.</p>
+      <p>{options.relationships && '양쪽 테이블이 포함된 관계선만 출력합니다. '}메모와 그룹은 선택한 테이블의 그룹을 따릅니다.</p>
       <fieldset className="image-selection"><legend>출력할 테이블</legend>{list.map(item => {
         const number = (occurrences.get(item.name) ?? 0) + 1;
         occurrences.set(item.name, number);
@@ -123,7 +138,7 @@ function ImageExportDialog({ document, view, selection, verify, close }: {
           await verify?.();
           signal.throwIfAborted();
           const { renderDiagramImage } = await import('./diagram-image.js');
-          const next = await renderDiagramImage(document, view, { ...options, instanceIds: scope === 'selected' ? chosen : undefined }, signal);
+          const next = await renderDiagramImage(document, view, dialect, { ...options, instanceIds: scope === 'selected' ? chosen : undefined }, signal);
           signal.throwIfAborted();
           setResult(next);
         });

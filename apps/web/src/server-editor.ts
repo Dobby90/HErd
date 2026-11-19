@@ -143,7 +143,7 @@ export class ServerEditor {
     }, reconnectDelay * 2 ** this.reconnectAttempts);
   }
 
-  async savedForExport(action = 'DDL을 내보내기') {
+  async ensureSaved(action: string) {
     while (!this.stopped && this.hasChanges() && this.state.phase === 'saving') {
       clearTimeout(this.timer);
       await (this.inFlight ?? this.flush());

@@ -84,19 +84,19 @@ function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActio
   const destination = { id: entry.id, target: document.target };
   return <DocumentEditor readOnly={readOnly || suspended} initialPlacement={initialPlacement} topActions={<>{topActions}
     <VersionHistory erdId={entry.id} csrf={csrf} readOnly={readOnly} disabled={suspended} openVersion={openVersion} restored={onRestored}
-      save={async action => (await editor.savedForExport(action)).revision} />
+      save={async action => (await editor.ensureSaved(action)).revision} />
   </>}
     importAction={readOnly ? undefined : viewId => <>
       <SqlImport projectId={projectId} csrf={csrf} disabled={suspended} onApplied={onImported}
         destination={{ ...destination, mode: 'append', viewId, viewName: document.views.find(view => view.id === viewId)?.name,
-          namespaces: document.catalog.namespaces, savedRevision: async () => (await editor.savedForExport('테이블을 추가하기')).revision }} />
+          namespaces: document.catalog.namespaces, savedRevision: async () => (await editor.ensureSaved('테이블을 추가하기')).revision }} />
       <SqlImport projectId={projectId} csrf={csrf} disabled={suspended} onApplied={onImported}
-        destination={{ ...destination, mode: 'replace', savedRevision: async () => (await editor.savedForExport('모델을 교체하기')).revision }} />
+        destination={{ ...destination, mode: 'replace', savedRevision: async () => (await editor.ensureSaved('모델을 교체하기')).revision }} />
     </>}
     verifyImage={() => apiRequest<void>('/erds/' + entry.id, { method: 'HEAD' })}
     exportAction={viewId => <SqlExport document={state.history.present} revision={state.revision} dirty={editor.hasChanges()}
       projectId={projectId} csrf={csrf} viewId={viewId} disabled={suspended} viewer={readOnly}
-      prepare={() => readOnly ? apiRequest<ServerDocument>('/erds/' + state.history.present.id) : editor.savedForExport()} />}
+      prepare={() => readOnly ? apiRequest<ServerDocument>('/erds/' + state.history.present.id) : editor.ensureSaved('DDL을 내보내기')} />}
     session={{
     document: state.history.present, diagnostics: state.diagnostics,
     canUndo: state.history.past.length > 0, canRedo: state.history.future.length > 0,
@@ -380,19 +380,18 @@ export function Workspace() {
   function logInWithPassword(registration: boolean, values: FormData) {
     void act(async () => {
       await protectWork();
-      const reauthenticate = loginPrompt && Boolean(owner);
       await apiRequest(registration ? '/auth/register' : '/auth/password', { method: 'POST', body: {
         username: field(values, 'username'), password: field(values, 'password'),
         ...(registration && { displayName: field(values, 'displayName') }),
       } });
       const signedIn = await refreshIdentity();
       setLoginPrompt(false);
-      if (!reauthenticate || signedIn.user?.id !== owner) {
+      if (registration || (owner && signedIn.user?.id !== owner)) {
         go({});
         return;
       }
       for (const editor of editors.current.values()) {
-        if (editor.owner === owner && editor.snapshot().phase === 'login') editor.retry();
+        if (editor.owner === signedIn.user?.id && editor.snapshot().phase === 'login') editor.retry();
       }
       refresh();
     });
@@ -632,8 +631,11 @@ export function Workspace() {
               </button>
               {writable && <ActionMenu label={item.title + ' 관리'} icon="more" iconOnly>
                 <button type="button" disabled={busy} aria-label={item.title + ' 복제'} onClick={() => void act(async () => {
+                  await editors.current.get(item.id)?.ensureSaved('ERD를 복제하기');
                   const copy = await apiRequest<ServerDocument>('/erds/' + item.id + '/duplicate', { method: 'POST', csrf });
-                  go({ projectId, documentId: copy.document.id });
+                  if (currentLocation.current.projectId !== projectId) return;
+                  if (currentLocation.current.documentId) refresh();
+                  else go({ projectId, documentId: copy.document.id });
                 })}><Icon name="copy" />복제</button>
                 {project.role === 'owner' && <button type="button" className="danger" disabled={busy} aria-label={item.title + ' 삭제'} onClick={() => {
                   if (!window.confirm(`ERD '${item.title}'을 삭제하시겠습니까?`)) return;

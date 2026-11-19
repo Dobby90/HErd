@@ -1,17 +1,17 @@
-import type { ErdDocument } from '@erd/model';
-import { isIdentifyingForeignKey, physicalRelationships, primaryColumnsByTable } from '@erd/model';
+import type { CanvasDisplay, ErdDocument } from '@erd/model';
+import { columnBadgesById, isIdentifyingForeignKey, physicalRelationships, primaryColumnsByTable } from '@erd/model';
+import type { EditorDialect } from '@erd/sql-contract';
+import { foreignKeyLabel, logicalRelationshipLabel } from './canvas-display.js';
 import type { View } from './editor-fields.js';
 import { viewColumnIds, viewLabel } from './editor-fields.js';
 import { columnTypeLabel } from './schema-edits.js';
 import fontUrl from './fonts/noto-sans-kr.woff2?url';
 import fontLicense from './fonts/noto-sans-kr-OFL.txt?raw';
 
-export type ImageOptions = {
+export type ImageOptions = Omit<CanvasDisplay, 'columns' | 'grid'> & {
   instanceIds?: string[];
   names: NonNullable<View['nameDisplay']>;
   columns: 'view' | 'all' | 'collapsed';
-  notes: boolean;
-  groups: boolean;
   background: boolean;
   format: 'png' | 'svg';
   scale: number;
@@ -86,7 +86,8 @@ function edgeShapes(points: Point[], color: string, dash?: [number, number]): Sh
     { kind: 'line', points: [end, { x: base, y: end.y - 4 }, { x: base, y: end.y + 4 }], color, fill: true }];
 }
 
-function projectScene(document: ErdDocument, view: View, options: ImageOptions, measure: CanvasRenderingContext2D): Scene {
+function projectScene(document: ErdDocument, view: View, dialect: EditorDialect | undefined, options: ImageOptions,
+  measure: CanvasRenderingContext2D): Scene {
   let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
   const bounds = (x: number, y: number) => {
     left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x); bottom = Math.max(bottom, y);
@@ -123,6 +124,9 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
   const tables = new Map(document.catalog.tables.map(table => [table.id, table]));
   const columns = new Map(document.catalog.columns.map(column => [column.id, column]));
   const enums = new Map(document.catalog.enums.map(item => [item.id, item.physicalName]));
+  const badges = options.columnBadges ? columnBadgesById(document) : undefined;
+  const primary = primaryColumnsByTable(document);
+  const details = (lines: (string | undefined)[]) => lines.filter((value): value is string => Boolean(value)).map(singleLine);
   let tableCount = 0;
   for (const instance of view.instances) {
     if (ids && !ids.has(instance.id)) continue;
@@ -131,14 +135,21 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
     if (instance.groupId) groupIds.add(instance.groupId);
     const visible = options.columns === 'all' ? table.columnIds
       : options.columns === 'collapsed' ? [] : viewColumnIds(table, instance);
-    const full = options.names === 'both';
-    const details = (lines: (string | undefined)[]) => lines.filter((value): value is string => Boolean(value)).map(singleLine);
-    const tableDetails = full ? details([table.description]) : [];
+    const tableDetails = options.tableComments ? details([table.description]) : [];
+    const primaryColumns = primary.get(table.id);
     const names = visible.flatMap(id => {
       const column = columns.get(id);
-      return column ? [{ id, name: singleLine(viewLabel(column, options.names)), details: full ? details([
-        columnTypeLabel(column.type, enums), column.default && 'DEFAULT ' + column.default.sql, column.description,
-      ]) : [] }] : [];
+      if (!column) return [];
+      const metadata = details([
+        options.columnTypes ? columnTypeLabel(column.type, enums) : undefined,
+        badges?.get(id)?.join(' ').toUpperCase(),
+        options.columnNullability ? (column.nullable && !primaryColumns?.has(id) ? 'NULL' : 'NOT NULL') : undefined,
+      ]).join(' · ');
+      return [{ id, name: singleLine(viewLabel(column, options.names)), details: details([
+        metadata,
+        options.columnDefaults && column.default ? 'DEFAULT ' + column.default.sql : undefined,
+        options.columnComments ? column.description : undefined,
+      ]) }];
     });
     const title = singleLine(viewLabel(table, options.names));
     const { x, y } = instance;
@@ -189,7 +200,8 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
   }
 
   let omitted = 0;
-  function relate(from: string, to: string, kind: 'identifying' | 'non-identifying' | 'logical', fromColumn?: string, toColumn?: string) {
+  function relate(from: string, to: string, kind: 'identifying' | 'non-identifying' | 'logical',
+    label: string | undefined, fromColumn?: string, toColumn?: string) {
     const sources = instances.get(from) ?? [];
     const targets = instances.get(to) ?? [];
     if (ids && (sources.length === 0) !== (targets.length === 0)) omitted++;
@@ -198,16 +210,32 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
         if (relations.length >= 100_000) throw new Error('관계선이 너무 많습니다. 뷰를 나누어 출력하세요.');
         const line = connection(source, target, fromColumn, toColumn);
         const dash: [number, number] | undefined = kind === 'logical' ? [2, 4] : kind === 'non-identifying' ? [6, 3] : undefined;
-        for (const shape of edgeShapes(line, kind === 'logical' ? '#8e7fa7' : '#7d8aa2', dash)) add(relations, shape);
+        const color = kind === 'logical' ? '#8e7fa7' : '#7d8aa2';
+        for (const shape of edgeShapes(line, color, dash)) add(relations, shape);
+        if (label) {
+          const value = singleLine(label);
+          const width = widthOf(value, detailSize);
+          const x = line[1].x - width / 2;
+          const y = (line[1].y + line[2].y) / 2;
+          add(relations, { kind: 'rect', x: x - 4, y: y - 9, width: width + 8, height: 18, fill: '#ffffff' });
+          text(relations, x, y + 4, value, detailSize, '#5d687d');
+        }
       }
     }
   }
-  const primary = primaryColumnsByTable(document);
-  for (const key of physicalRelationships(document)) {
-    relate(key.tableId, key.targetTableId, isIdentifyingForeignKey(key, primary) ? 'identifying' : 'non-identifying',
-      key.pairs[0]?.sourceColumnId, key.pairs[0]?.targetColumnId);
+  if (options.relationships) {
+    const foreignKeys = options.relationshipLabels ? dialect?.inspectForeignKeys?.(document) : undefined;
+    for (const key of physicalRelationships(document)) {
+      const identifying = isIdentifyingForeignKey(key, primary);
+      const label = options.relationshipLabels
+        ? foreignKeyLabel(identifying, foreignKeys ? foreignKeys.cardinality(key) : dialect?.cardinality(document, key)) : undefined;
+      relate(key.tableId, key.targetTableId, identifying ? 'identifying' : 'non-identifying', label,
+        key.pairs[0]?.sourceColumnId, key.pairs[0]?.targetColumnId);
+    }
+    for (const link of document.relationships) {
+      relate(link.sourceTableId, link.targetTableId, 'logical', options.relationshipLabels ? logicalRelationshipLabel(link) : undefined);
+    }
   }
-  for (const link of document.relationships) relate(link.sourceTableId, link.targetTableId, 'logical');
   const shapes = [...background, ...relations, ...foreground];
   if (!shapes.length) throw new Error('이 뷰에 출력할 객체가 없습니다.');
   const width = Math.ceil(right - left + margin * 2);
@@ -296,13 +324,14 @@ function loadFont(signal: AbortSignal) {
   return fontLoad;
 }
 
-export async function renderDiagramImage(document: ErdDocument, view: View, options: ImageOptions, signal: AbortSignal) {
+export async function renderDiagramImage(document: ErdDocument, view: View, dialect: EditorDialect | undefined,
+  options: ImageOptions, signal: AbortSignal) {
   const bytes = await loadFont(signal);
   signal.throwIfAborted();
   const canvas = window.document.createElement('canvas');
   const measure = canvas.getContext('2d');
   if (!measure) throw new Error('이 브라우저에서 이미지를 준비할 수 없습니다.');
-  const scene = projectScene(document, view, options, measure);
+  const scene = projectScene(document, view, dialect, options, measure);
   const scale = options.format === 'png' ? options.scale : 1;
   const width = Math.ceil(scene.bounds.width * scale);
   const height = Math.ceil(scene.bounds.height * scale);

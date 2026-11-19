@@ -159,6 +159,32 @@ it('creates and restores server ERDs, preserves later edits across delayed respo
         expect((await getErd(page, second)).revision).toBe(1);
         await heading(page, '정산 모델');
 
+        const secondRoute = '**/api/erds/' + second;
+        let markSaveStarted!: () => void;
+        const saveStarted = new Promise<void>(resolve => { markSaveStarted = resolve; });
+        let allowSave!: () => void;
+        const savedCanProceed = new Promise<void>(resolve => { allowSave = resolve; });
+        await page.route(secondRoute, async route => {
+          if (route.request().method() === 'PUT') {
+            markSaveStarted();
+            await savedCanProceed;
+          }
+          await route.continue();
+        });
+        try {
+          await rename(page, '복제 전에 수정한 정산 모델');
+          await saveStarted;
+          await action(page, 'ERD 목록').click();
+          await action(page, '정산 모델 관리').click();
+          await action(page, '정산 모델 복제').click();
+          expect((await getErd(page, second)).revision).toBe(1);
+        } finally {
+          allowSave();
+        }
+        await heading(page, '복제 전에 수정한 정산 모델 복제');
+        expect((await getErd(page, second)).revision).toBe(2);
+        await page.unroute(secondRoute);
+
         // A different client commits to the original document while this editor holds revision 3.
         await action(page, 'ERD 목록').click();
         await action(page, '요청 중 추가 편집').click();
