@@ -108,18 +108,24 @@ export function preprocessSql(source: string) {
   return { sql: result + source.slice(last), entries };
 }
 
-export function statementRanges(sql: string) {
+// The parser reports UTF-8 offsets. Convert positions in source order to avoid rescanning the prefix.
+export function textOffsets(sql: string) {
   const bytes = Buffer.from(sql);
   let byte = 0;
   let text = 0;
-  function offset(position: number) {
+  return (position: number) => {
     text += bytes.subarray(byte, position).toString('utf8').length;
     byte = position;
     return text;
-  }
+  };
+}
+
+export function statementRanges(sql: string) {
+  const offset = textOffsets(sql);
+  const totalBytes = Buffer.byteLength(sql);
   return (startByte: number, lengthByte: number) => {
     const start = offset(startByte);
-    const end = offset(lengthByte ? startByte + lengthByte : bytes.length);
+    const end = offset(lengthByte ? startByte + lengthByte : totalBytes);
     let startToken = start;
     while (startToken < end) {
       if (/\s/.test(sql[startToken])) { startToken += 1; continue; }

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Catalog, SqlTarget } from '@erd/model';
-import type { DialectProfile, ImportApplied, ParseSqlJob, StatementResult } from '@erd/sql-contract';
+import type { Diagnostic, DialectProfile, ImportApplied, ParseSqlJob, StatementResult } from '@erd/sql-contract';
 import { Modal } from './editor-fields.js';
 import { apiRequest } from './project-api.js';
+import { SqlInput } from './sql-input.js';
+import type { SqlInputHandle } from './sql-input.js';
 
 type ApplyMode =
   | { mode: 'create'; name: string }
@@ -24,8 +26,13 @@ const objectLabels: Record<keyof Catalog, string> = {
 const active = (job?: ParseSqlJob) => job?.state === 'queued' || job?.state === 'running';
 const problem = (error: unknown) => error instanceof Error ? error.message : 'DDL 가져오기를 처리하지 못했습니다.';
 const targetKey = ({ dialectId, engineVersion }: SqlTarget) => dialectId + ':' + engineVersion;
-const sourcePosition = (location?: { line?: number; column?: number }) =>
-  location?.line ? location.line + '행 ' + location.column + '열' : '';
+function SourceLink({ location, jump }: { location?: Diagnostic['location']; jump(line: number): void }) {
+  const line = location?.line;
+  if (!line) return null;
+  return <button className="sql-source-link" type="button" onClick={() => jump(line)}>
+    {line}행{location.column ? ' ' + location.column + '열' : ''}
+  </button>;
+}
 
 export function SqlImport({ projectId, csrf, destination, disabled, onApplied }: {
   projectId: string; csrf?: string | null; destination?: Destination; disabled: boolean;
@@ -48,6 +55,7 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
   const [applyRetry, setApplyRetry] = useState(false);
   const epoch = useRef(0);
   const activeJob = useRef<ParseSqlJob | undefined>(undefined);
+  const sqlInput = useRef<SqlInputHandle>(null);
   const submit = useRef<{ signature: string; id: string } | undefined>(undefined);
   const apply = useRef<{ signature: string; jobId: string; body: ApplyMode & { mutationId: string; lossFingerprint?: string } } | undefined>(undefined);
   const jobPath = (id: string) => '/sql/jobs/' + id;
@@ -61,12 +69,17 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
   const maxBytes = profiles?.find(profile => profile.metadata.id === selected?.dialectId)?.maxInputBytes ?? 5 * 1024 * 1024;
   const catalog = job?.output?.catalog;
   const losses = job?.output?.losses ?? [];
+  const missingKey = losses.find(item => item.code === 'missing-foreign-key-table');
+  const missingKeyLine = missingKey?.location?.line;
   const diagnostics = job?.output?.diagnostics ?? [];
   const notices = diagnostics.filter(item => item.severity === 'info');
   const problems = diagnostics.filter(item => item.severity !== 'info');
   const working = pending || applying;
   const canApply = !working && !expired && job?.state === 'succeeded' && catalog && (!losses.length || confirmed) &&
     (destination ? baseRevision !== undefined : Boolean(name.trim()));
+  const jump = (line: number) => sqlInput.current?.jumpToLine(line);
+  const applyLabel = append && catalog && missingKey ? '제외하고 나머지 추가'
+    : append ? '현재 다이어그램에 테이블 추가' : destination ? '확인하고 모델 교체' : '새 ERD에 적용';
 
   useEffect(() => () => {
     epoch.current += 1;
@@ -259,7 +272,7 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
             event.target.value = '';
             void loadFile(file);
           }} /></label>
-          <label>DDL 입력<textarea rows={9} value={sql} spellCheck={false} onChange={event => { invalidate(); setSql(event.target.value); }} /></label>
+          <SqlInput ref={sqlInput} value={sql} onChange={value => { invalidate(); setSql(value); }} />
         </fieldset>
         <div className="actions">
           <button type="button" disabled={!profiles || !selected || !sql.trim() || !namespace.trim() || working || active(job)}
@@ -273,9 +286,9 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
         {error && <p role="alert">{error}</p>}
         {pollError && <p role="alert">{pollError} <button type="button" onClick={() => setPollError('')}>상태 다시 조회</button></p>}
         {!expired && notices.length ? <ul aria-label="분석 안내">{notices.map((item, index) =>
-          <li key={index}>{sourcePosition(item.location)} {item.message}</li>)}</ul> : null}
+          <li key={index}><SourceLink location={item.location} jump={jump} /> {item.message}</li>)}</ul> : null}
         {!expired && problems.length ? <ul aria-label="분석 오류">{problems.map((item, index) =>
-          <li key={index}>{sourcePosition(item.location)} {item.message}</li>)}</ul> : null}
+          <li key={index}><SourceLink location={item.location} jump={jump} /> {item.message}</li>)}</ul> : null}
         {!expired && catalog && <>
           <h3>{append ? '추가할 모델 객체' : '변환 및 이름 해석'}</h3>
           <p>{Object.entries(catalog).map(([kind, items]) => objectLabels[kind as keyof Catalog] + ' ' + items.length).join(' · ')}</p>
@@ -286,14 +299,20 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
         {!expired && job?.output?.statements?.length ? <details>
           <summary>문장별 결과 {job.output.statements.length}개</summary>
           <ol>{job.output.statements.map(item => <li key={item.ordinal}>
-            {sourcePosition(item.location)} · {labels[item.status]} · {item.message ?? item.kind}
+            <SourceLink location={item.location} jump={jump} /> {labels[item.status]} · {item.message ?? item.kind}
           </li>)}</ol>
         </details> : null}
         {!expired && losses.length ? <>
           <h3>제외할 항목</h3>
-          <ul>{losses.map((item, index) => <li key={index}>{sourcePosition(item.location)} · {item.message}</li>)}</ul>
+          <ul aria-label="제외할 항목">{losses.map((item, index) => <li key={index}>
+            <SourceLink location={item.location} jump={jump} /> {item.message}
+          </li>)}</ul>
           {catalog && <label className="checkbox"><input type="checkbox" checked={confirmed} disabled={working}
-            onChange={event => setConfirmed(event.target.checked)} />이 분석의 제외 항목을 확인했습니다.</label>}
+            onChange={event => setConfirmed(event.target.checked)} />{missingKey
+              ? '표시된 항목을 제외하고 가져오겠습니다.' : '이 분석의 제외 항목을 확인했습니다.'}</label>}
+          {catalog && missingKeyLine && <div className="actions">
+            <button type="button" disabled={working} onClick={() => jump(missingKeyLine)}>DDL 수정</button>
+          </div>}
         </> : null}
         {catalog && !expired && <>
           {append
@@ -302,11 +321,12 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
             ? <p>적용하면 기존 모델과 배치를 새 모델과 기본 다이어그램로 교체합니다. 교체 전 버전은 서버 이력에 저장됩니다.</p>
             : <label>새 ERD 이름<input value={name} onChange={event => setName(event.target.value)} maxLength={200} disabled={working} /></label>}
           <button type="button" className="primary" disabled={!canApply} onClick={() => void applyResult()}>
-            {append ? '현재 다이어그램에 테이블 추가' : destination ? '확인하고 모델 교체' : '새 ERD에 적용'}
+            {applyLabel}
           </button>
         </>}
         {applying && <p role="status">가져오기 적용 중</p>}
-        {applyRetry && !applying && <button type="button" onClick={() => void applyResult(true)}>같은 요청 다시 적용</button>}
+        {applyRetry && !applying && <button type="button" disabled={Boolean(losses.length && !confirmed)}
+          onClick={() => void applyResult(true)}>같은 요청 다시 적용</button>}
       </section>
     </Modal>}
   </>;

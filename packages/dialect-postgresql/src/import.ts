@@ -6,7 +6,7 @@ import { preparePostgresqlExport } from './export.js';
 import { compileAstExpression } from './expressions.js';
 import { ast, columnType, names, need, nodes, only, optionList, rangeName, requireOption, sequenceSettings, text, UnsupportedDdl } from './import-ast.js';
 import type { Ast } from './import-ast.js';
-import { characterOffset, preprocessSql, sourceLocations, statementRanges } from './import-source.js';
+import { characterOffset, preprocessSql, sourceLocations, statementRanges, textOffsets } from './import-source.js';
 import type { Location } from './import-source.js';
 import { literal, qualified, validText } from './render-sql.js';
 import { canonicalType, postgresqlEditor, postgresqlMetadata, postgresqlTypes } from './ui.js';
@@ -20,6 +20,7 @@ interface Entry {
   result?: Omit<StatementResult, 'ordinal'>;
 }
 type Conversion = string | { skipped: string } | undefined;
+type OmittedForeignKey = { message: string; byteOffset?: number; fallback: Location };
 type Table = Catalog['tables'][number];
 type Column = Catalog['columns'][number];
 type Sequence = Catalog['sequences'][number];
@@ -91,7 +92,7 @@ function plainConstraint(constraint: Ast) {
 function importIndex(entry: Entry) {
   const node = entry.body;
   const keys = nodes(node.indexParams).map(value => ast(value.IndexElem));
-  requireOption(only(node, 'idxname relation accessMethod indexParams unique') && (!node.accessMethod || node.accessMethod === 'btree') &&
+  requireOption(only(node, 'idxname relation accessMethod indexParams unique if_not_exists') && (!node.accessMethod || node.accessMethod === 'btree') &&
     keys.length > 0 && keys.every(key => only(key, 'name ordering nulls_ordering') && key.name &&
       key.ordering === 'SORTBY_DEFAULT' && key.nulls_ordering === 'SORTBY_NULLS_DEFAULT'), indexKind);
   return keys.map(key => text(key.name));
@@ -113,6 +114,9 @@ class ImportCatalog {
   readonly owners: { sequence: Sequence; names: string[]; entry: Entry }[] = [];
   private number = 0;
   private readonly omitted = new Set<string>();
+  private readonly views = new Set<string>();
+  private readonly omittedForeignKeys = new Set<string>();
+  private readonly baseConstraintIndexes = new Set<string>();
   private readonly extensionScopes = new Set<string>();
   private readonly originalIds: Set<string>;
   private readonly ambiguous = new WeakMap<object, Set<string>>();
@@ -136,6 +140,11 @@ class ImportCatalog {
     for (const item of this.catalog.enums) this.registerBase(this.enums, relationKey(this.schemaNames.get(item.namespaceId)!, item.physicalName), item);
     for (const item of this.catalog.sequences) this.registerBase(this.sequences, relationKey(this.schemaNames.get(item.namespaceId)!, item.physicalName), item);
     for (const item of this.catalog.indexes) this.registerBase(this.indexes, relationKey(schemaByTable.get(item.tableId)!, item.physicalName), item);
+    for (const item of this.catalog.constraints) {
+      if (item.kind === 'pk' || item.kind === 'unique') {
+        this.baseConstraintIndexes.add(relationKey(schemaByTable.get(item.tableId)!, item.physicalName));
+      }
+    }
   }
 
   private registerBase<T>(items: Map<string, T>, key: string, item: T) {
@@ -226,6 +235,11 @@ class ImportCatalog {
     let symbol: 'type' | 'function' | 'operator' = 'type';
     let path: string[];
     switch (kind) {
+      case 'ViewStmt': {
+        const [schema, name] = rangeName(body.view);
+        this.views.add(name === undefined ? relationKey(creation, schema) : relationKey(schema, name));
+        return;
+      }
       case 'CreateFunctionStmt': symbol = 'function'; path = names(body.funcname); break;
       case 'CreateDomainStmt': path = names(body.domainname); break;
       case 'CreateRangeStmt': path = names(body.typeName); break;
@@ -395,13 +409,24 @@ class ImportCatalog {
   defineIndex(entry: Entry) {
     const columns = importIndex(entry);
     const table = this.table(rangeName(entry.body.relation), entry);
-    this.requireNew(table);
-    const ids = columns.map(name => this.column(table, name).id);
     const schema = this.schemaNames.get(table.namespaceId)!;
     const unique = Boolean(entry.body.unique);
     const name = text(entry.body.idxname) || objectName(table.physicalName, columns.join('_'), 'idx',
       test => this.indexes.has(relationKey(schema, test)));
     const lookup = relationKey(schema, name);
+    if (entry.body.if_not_exists && (
+      this.unique(this.indexes, lookup, schema + '.' + name) || this.tables.has(lookup) || this.sequences.has(lookup) ||
+      this.baseConstraintIndexes.has(lookup) || this.keys.some(key => {
+        const primary = key.ast.contype === 'CONSTR_PRIMARY';
+        if ((!primary && key.ast.contype !== 'CONSTR_UNIQUE') || this.schemaNames.get(key.table.namespaceId) !== schema ||
+          key.entry.location.offset! >= entry.location.offset!) return false;
+        const columns = key.inline?.physicalName ?? names(key.ast.keys).join('_');
+        const index = text(key.ast.conname) || objectName(key.table.physicalName, primary ? undefined : columns, primary ? 'pkey' : 'key', () => false);
+        return index === name;
+      })
+    )) return { skipped: schema + '.' + name + ' 이름의 객체가 이미 있어 인덱스 생성을 건너뜁니다.' };
+    this.requireNew(table);
+    const ids = columns.map(name => this.column(table, name).id);
     if (this.indexes.has(lookup)) throw new Error('인덱스 이름이 중복됩니다 (' + name + ').');
     const item: Catalog['indexes'][number] = { id: this.id(entry), tableId: table.id, physicalName: name, unique,
       keys: ids.map(columnId => ({ kind: 'column', columnId })) };
@@ -469,7 +494,7 @@ class ImportCatalog {
     sequence.ownedByColumnId = column.id;
   }
 
-  key(definition: ImportCatalog['keys'][number]) {
+  key(definition: ImportCatalog['keys'][number]): OmittedForeignKey | undefined {
     const { table, ast: node, entry, inline } = definition;
     const kind = text(node.contype);
     const byNames = (list: unknown, inline?: Column) => list ? names(list).map(name => this.column(table, name)) : inline ? [inline] : [];
@@ -491,9 +516,12 @@ class ImportCatalog {
     const suffix = need(implicitKeys.get(kind), '지원할 수 없는 제약 종류입니다.');
     const keyColumns = kind === 'CONSTR_CHECK' ? inline?.physicalName : columns.map(column => column.physicalName).join('_');
     const name = text(node.conname) || adoptedName || objectName(table.physicalName, kind === 'CONSTR_PRIMARY' ? undefined : keyColumns, suffix, candidate =>
+      this.omittedForeignKeys.has(relationKey(table.id, candidate)) ||
       this.catalog.constraints.some(key => key.tableId === table.id && key.physicalName === candidate) ||
       this.indexes.has(relationKey(schema, candidate)));
-    if (this.catalog.constraints.some(key => key.tableId === table.id && key.physicalName === name)) throw new Error('제약 이름이 중복됩니다 (' + name + ').');
+    const constraintKey = relationKey(table.id, name);
+    if (this.omittedForeignKeys.has(constraintKey) ||
+      this.catalog.constraints.some(key => key.tableId === table.id && key.physicalName === name)) throw new Error('제약 이름이 중복됩니다 (' + name + ').');
     const indexWithName = this.indexes.get(relationKey(schema, name));
     if ((kind === 'CONSTR_PRIMARY' || kind === 'CONSTR_UNIQUE') && indexWithName && indexWithName !== adopted) {
       throw new Error('제약의 backing index와 기존 인덱스 이름이 중복됩니다 (' + name + ').');
@@ -512,7 +540,24 @@ class ImportCatalog {
       if (kind === 'CONSTR_PRIMARY') for (const column of columns) column.nullable = false;
       this.catalog.constraints.push({ ...base, kind: kind === 'CONSTR_PRIMARY' ? 'pk' : 'unique', columnIds: columns.map(column => column.id) });
     } else {
-      const referenced = this.table(rangeName(node.pktable), entry);
+      const path = rangeName(node.pktable);
+      const target = path.join('.');
+      const referenced = this.find(this.tables, path, entry);
+      if (!referenced) {
+        if (!columns.length || new Set(columns.map(column => column.id)).size !== columns.length ||
+          (node.pk_attrs && names(node.pk_attrs).length !== columns.length)) {
+          throw new Error('외래 키의 원본·대상 컬럼 대응을 확인하세요.');
+        }
+        const scopes = path.length === 2 ? [path[0]] : entry.path;
+        if (scopes.some(scope => {
+          const key = relationKey(scope, path.at(-1)!);
+          return this.views.has(key) || this.sequences.has(key) || this.indexes.has(key);
+        })) throw new Error('외래 키의 참조 대상이 테이블이 아닙니다 (' + target + ').');
+        this.omittedForeignKeys.add(constraintKey);
+        const offset = ast(node.pktable).location;
+        return { fallback: entry.location, byteOffset: typeof offset === 'number' && offset >= 0 ? offset : undefined,
+          message: `외래 키 ${name} (${schema}.${table.physicalName}) · 참조 테이블 ${target}을 찾을 수 없습니다.` };
+      }
       const pk = this.catalog.constraints.find(key => key.tableId === referenced.id && key.kind === 'pk');
       const targetColumns = node.pk_attrs ? names(node.pk_attrs).map(name => this.column(referenced, name).id) :
         pk?.kind === 'pk' ? pk.columnIds : [];
@@ -524,7 +569,6 @@ class ImportCatalog {
         pairs: columns.map((column, i) => ({ sourceColumnId: column.id, targetColumnId: targetColumns[i] })),
         onDelete: actions.get(text(node.fk_del_action)) ?? 'no-action', onUpdate: actions.get(text(node.fk_upd_action)) ?? 'no-action' });
     }
-    return base.id;
   }
 
   comment(entry: Entry) {
@@ -546,7 +590,12 @@ class ImportCatalog {
         }
         if (node.objtype === 'OBJECT_TABLE') item = table;
         else if (node.objtype === 'OBJECT_COLUMN') item = this.column(table, tail);
-        else item = this.catalog.constraints.find(key => key.tableId === table.id && key.physicalName === tail);
+        else {
+          if (this.omittedForeignKeys.has(relationKey(table.id, tail))) {
+            throw new UnsupportedDdl('제외되는 외래 키 ' + tail + '의 코멘트입니다.');
+          }
+          item = this.catalog.constraints.find(key => key.tableId === table.id && key.physicalName === tail);
+        }
         break;
       }
       case 'OBJECT_TYPE': item = this.find(this.enums, names(ast(object.TypeName).names), entry); break;
@@ -659,8 +708,9 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
       const result = convert();
       if (typeof result === 'object') {
         record(entry, 'skipped-existing', result.skipped);
-        if (entry.kind === 'CreateStmt') diagnostics.push({
-          code: 'existing-table-skipped', severity: 'info', message: result.skipped, location: entry.location,
+        if (entry.kind === 'CreateStmt' || entry.kind === 'IndexStmt') diagnostics.push({
+          code: entry.kind === 'CreateStmt' ? 'existing-table-skipped' : 'existing-index-skipped',
+          severity: 'info', message: result.skipped, location: entry.location,
         });
       } else if (result === 'owner') record(entry, 'ignored-nonstructural', '소유자 설정은 ERD 구조에 영향을 주지 않습니다.');
       else record(entry, 'converted', undefined, result);
@@ -767,11 +817,23 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
   for (const [kind, convert] of Object.entries(phases)) {
     for (const entry of entries) if (entry.kind === kind && !entry.result) run(entry, () => convert(entry));
   }
+  const omittedKeys: OmittedForeignKey[] = [];
   for (const foreign of [false, true]) {
     for (const key of model.keys) {
       if ((key.ast.contype === 'CONSTR_FOREIGN') !== foreign || key.entry.result?.status !== 'converted') continue;
-      try { model.key(key); } catch (error) { reject(key.entry, error); }
+      try {
+        const omitted = model.key(key);
+        if (omitted) omittedKeys.push(omitted);
+      } catch (error) { reject(key.entry, error); }
     }
+  }
+  if (omittedKeys.length) {
+    const offset = textOffsets(prepared.sql);
+    omittedKeys.sort((a, b) => (a.byteOffset ?? Infinity) - (b.byteOffset ?? Infinity));
+    for (const { byteOffset, fallback, message } of omittedKeys) losses.push({
+      code: 'missing-foreign-key-table', severity: 'warning', feature: 'foreign-key', message,
+      location: byteOffset === undefined ? fallback : locate(offset(byteOffset)),
+    });
   }
   for (const owner of model.owners) {
     try { model.setOwner(owner); } catch (error) { reject(owner.entry, error); }

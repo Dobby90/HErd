@@ -7,7 +7,7 @@ import { renameDocument } from './support/editor-ui.js';
 import { withPostgres } from './support/postgres.js';
 import { freePort } from './support/tcp.js';
 
-it('loads UTF-8 SQL, applies a replacement, and appends conditional CREATE TABLE imports', async () => {
+it('loads UTF-8 SQL, applies a replacement, and confirms omissions in DDL table imports', async () => {
   await withPostgres(async cluster => {
     const pool = createDatabase(cluster.connectionString);
     await migrate(pool);
@@ -130,9 +130,18 @@ CREATE VIEW skip_me AS SELECT * FROM "최신 문서";`;
         await addition.getByText('추가할 다이어그램 · ' + destination.name).waitFor();
         const input = addition.getByLabel('DDL 입력');
         const analyze = addition.getByRole('button', { name: 'DDL 분석' });
-        await input.fill('CREATE TABLE public.imported (id integer);');
+        const padding = '-- 가져오기 확인\n'.repeat(20);
+        await input.fill(padding + 'CREATE TABLE public.imported (id integer);');
         await analyze.click();
         await addition.getByText(/테이블 정의가 중복됩니다/).first().waitFor();
+        const errorLine = addition.getByRole('list', { name: '분석 오류' }).getByRole('button', { name: '21행 1열' });
+        await errorLine.click();
+        expect(await input.evaluate(node => {
+          const element = node as HTMLTextAreaElement;
+          return element === element.ownerDocument.activeElement && element.scrollTop > 0 &&
+            element.value.slice(element.selectionStart, element.selectionEnd).startsWith('CREATE TABLE public.imported');
+        })).toBe(true);
+        await addition.locator('.sql-line-numbers [data-active]').getByText('21', { exact: true }).waitFor();
         expect(await addition.getByRole('button', { name: '현재 다이어그램에 테이블 추가' }).count()).toBe(0);
         await input.fill('CREATE TABLE public.shipments (id bigint); COMMENT ON TABLE public.imported IS \'changed\';');
         await analyze.click();
@@ -146,14 +155,36 @@ COMMENT ON COLUMN public.imported.id IS 'changed';`;
         await alreadyExists.waitFor();
         await addition.getByText(/추가할 새 테이블이 없습니다/).waitFor();
         expect(await addition.getByRole('button', { name: '현재 다이어그램에 테이블 추가' }).count()).toBe(0);
-        await input.fill(existingSql + `
-CREATE TABLE IF NOT EXISTS public.shipments (id bigint PRIMARY KEY, order_id integer REFERENCES imported(id));
+        const mixedSql = padding + existingSql + `
+CREATE TABLE IF NOT EXISTS public.shipments (
+  id bigint PRIMARY KEY, order_id integer REFERENCES imported(id), division_id integer,
+  CONSTRAINT shipments_division_fk FOREIGN KEY (division_id)
+    REFERENCES public.divisions(id)
+);
 COMMENT ON TABLE public.shipments IS '배송';
-CREATE TABLE public.packages (shipment_id bigint REFERENCES shipments(id));`);
+CREATE TABLE public.packages (shipment_id bigint REFERENCES shipments(id));
+CREATE INDEX IF NOT EXISTS packages_shipment_idx ON public.packages (shipment_id);`;
+        await input.fill(mixedSql);
         await analyze.click();
         await alreadyExists.waitFor();
         await addition.getByText('public.packages', { exact: true }).waitFor();
-        await addition.getByRole('button', { name: '현재 다이어그램에 테이블 추가' }).click();
+        const refLine = mixedSql.split('\n').findIndex(line => line.includes('REFERENCES public.divisions')) + 1;
+        const omissions = addition.getByRole('list', { name: '제외할 항목' });
+        await omissions.getByText(/shipments_division_fk.*public\.divisions/).waitFor();
+        const addRemaining = addition.getByRole('button', { name: '제외하고 나머지 추가' });
+        expect(await addRemaining.isDisabled()).toBe(true);
+        await omissions.getByRole('button', { name: new RegExp('^' + refLine + '행') }).click();
+        await addition.locator('.sql-line-numbers [data-active]').getByText(String(refLine), { exact: true }).waitFor();
+        expect(await input.evaluate(node => {
+          const element = node as HTMLTextAreaElement;
+          return element.value.slice(element.selectionStart, element.selectionEnd).trim();
+        })).toBe('REFERENCES public.divisions(id)');
+        const accept = addition.getByLabel('표시된 항목을 제외하고 가져오겠습니다.');
+        await accept.check();
+        await accept.uncheck();
+        expect(await addRemaining.isDisabled()).toBe(true);
+        await accept.check();
+        await addRemaining.click();
         await page.getByText('서버 저장됨 · 리비전 6', { exact: true }).waitFor();
         await page.getByRole('heading', { name: destination.name, exact: true }).waitFor();
         const appended = (await document()).document;
@@ -161,6 +192,8 @@ CREATE TABLE public.packages (shipment_id bigint REFERENCES shipments(id));`);
         expect(appended.catalog.tables[0]).toEqual(sourceTable);
         expect(appended.catalog.columns[0]).toEqual(original.catalog.columns[0]);
         expect(appended.catalog.tables[1].description).toBe('배송');
+        expect(appended.catalog.columns).toEqual(expect.arrayContaining([expect.objectContaining({ physicalName: 'division_id' })]));
+        expect(appended.catalog.indexes).toMatchObject([{ physicalName: 'packages_shipment_idx' }]);
         expect(appended.catalog.tables.slice(1).map((table: { physicalName: string }) => table.physicalName)).toEqual(['shipments', 'packages']);
         expect(appended.catalog.constraints.filter((key: { kind: string }) => key.kind === 'fk'))
           .toMatchObject([{ targetTableId: sourceTable.id }, { targetTableId: appended.catalog.tables[1].id }]);

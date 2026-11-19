@@ -6,6 +6,52 @@ import { exportDocument, exportTarget } from '../packages/test-fixtures/src/ddl-
 const service = new SqlService(createSqlRegistry());
 const parse = (sql: string, defaultNamespace = 'public') => service.parse({ sql, defaultNamespace, target: exportTarget });
 
+it('reports only missing-table foreign keys at the exact source line and verifies the remaining model', async () => {
+  const sql = `-- 한글과 😀가 포함된 입력
+CREATE TABLE parent (id integer PRIMARY KEY);
+CREATE TABLE mapping (
+  parent_id integer REFERENCES parent (id),
+  division_id integer,
+  CONSTRAINT mapping_division_fk FOREIGN KEY (division_id)
+    REFERENCES absent (id)
+);
+COMMENT ON CONSTRAINT mapping_division_fk ON mapping IS '미등록 참조';
+ALTER TABLE mapping ADD FOREIGN KEY (parent_id) REFERENCES other_parent (id);`;
+  const result = await parse(sql);
+  if (result.status !== 'parsed') throw new Error(JSON.stringify(result.diagnostics));
+  expect(result.losses).toMatchObject([
+    { code: 'missing-foreign-key-table', message: expect.stringContaining('mapping_division_fk (public.mapping) · 참조 테이블 absent'),
+      location: { line: 7, column: 16, offset: sql.indexOf('absent') } },
+    { code: 'unsupported-statement', location: { line: 9 } },
+    { code: 'missing-foreign-key-table', location: { line: 10, offset: sql.indexOf('other_parent') } },
+  ]);
+  expect(result.catalog.columns.map(item => item.physicalName)).toEqual(['id', 'parent_id', 'division_id']);
+  expect(result.catalog.constraints.filter(item => item.kind === 'fk')).toHaveLength(1);
+  expect(await parse(sql.replace('REFERENCES parent (id)', 'REFERENCES parent (unknown_column)'))).toMatchObject({ status: 'blocked' });
+  expect(await parse(sql.replace('FOREIGN KEY (division_id)', 'FOREIGN KEY (missing_source)'))).toMatchObject({ status: 'blocked' });
+  expect(await parse(sql.replace('division_id integer', 'division_id unsupported_type'))).toMatchObject({ status: 'blocked' });
+});
+
+it('imports conditional B-tree indexes and preserves existing indexes on replay', async () => {
+  const sql = `CREATE TABLE IF NOT EXISTS indexed (id integer CONSTRAINT indexed_pk PRIMARY KEY, another integer);
+CREATE INDEX IF NOT EXISTS indexed_pk ON indexed (id);
+CREATE INDEX IF NOT EXISTS indexed_another ON indexed (another);
+CREATE INDEX IF NOT EXISTS indexed_another ON indexed (id);
+CREATE TABLE IF NOT EXISTS unnamed_key (id integer PRIMARY KEY);
+CREATE INDEX IF NOT EXISTS unnamed_key_pkey ON unnamed_key (id);`;
+  const result = await parse(sql);
+  if (result.status !== 'parsed') throw new Error(JSON.stringify(result.diagnostics));
+  expect(result.losses).toEqual([]);
+  expect(result.diagnostics.map(item => item.code)).toHaveLength(3);
+  expect(result.diagnostics.every(item => item.code === 'existing-index-skipped')).toBe(true);
+  expect(result.catalog.indexes).toMatchObject([
+    { physicalName: 'indexed_another', keys: [{ kind: 'column', columnId: result.catalog.columns[1].id }] },
+  ]);
+  const replay = await service.parse({ sql: sql + '\nCREATE TABLE new_table (id integer);',
+    target: exportTarget, defaultNamespace: 'public', baseCatalog: result.catalog });
+  expect(replay).toMatchObject({ status: 'parsed', losses: [], catalog: { tables: [{ physicalName: 'new_table' }], indexes: [] } });
+});
+
 it('imports conditional CREATE TABLE DDL and skips existing tables and their comments on append', async () => {
   const sql = `
 CREATE TABLE IF NOT EXISTS xaiops.xaiops_config_network (
