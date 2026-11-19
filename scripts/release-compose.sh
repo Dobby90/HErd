@@ -4,8 +4,10 @@ set -eu
 # The validation stack always uses its own network, database volume and ports.
 project="herd-release-$$"
 temp=$(mktemp -d)
+export HERD_IMAGE_PREFIX="$project" HERD_VERSION=${HERD_VERSION:-dev} HERD_REVISION=${HERD_REVISION:-unknown}
 cleanup() {
-  docker compose --project-name "$project" --env-file "$temp/env" down --volumes --remove-orphans --rmi local >/dev/null 2>&1 || true
+  docker compose --project-name "$project" --env-file "$temp/env" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  docker image rm "$project-api:$HERD_VERSION" "$project-web:$HERD_VERSION" >/dev/null 2>&1 || true
   rm -r "$temp"
 }
 trap cleanup EXIT
@@ -21,6 +23,9 @@ touch "$temp/env"
 compose() { docker compose --project-name "$project" --env-file "$temp/env" "$@"; }
 
 compose up -d --build --wait --wait-timeout 120
+for image in "$project-api:$HERD_VERSION" "$project-web:$HERD_VERSION"; do
+  test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}} {{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$HERD_VERSION $HERD_REVISION"
+done
 address=$(compose port web 8080)
 node scripts/release-smoke.mjs "http://$address"
 compose exec -T db psql -X -U herd -d herd -Atc 'SHOW server_version_num' | grep -x 170012

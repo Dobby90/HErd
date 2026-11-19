@@ -10,6 +10,10 @@ ARG VITE_ERD_PNG_MAX_PIXELS
 RUN pnpm build && pnpm --filter @erd/api --prod deploy --legacy /runtime
 
 FROM node-runtime AS api
+ARG HERD_VERSION=dev
+ARG HERD_REVISION=unknown
+LABEL org.opencontainers.image.version=$HERD_VERSION \
+      org.opencontainers.image.revision=$HERD_REVISION
 ENV NODE_ENV=production API_HOST=0.0.0.0 API_PORT=3001
 WORKDIR /app
 COPY --from=build /runtime/package.json ./
@@ -21,6 +25,10 @@ EXPOSE 3001
 CMD ["node", "dist/api/main.js"]
 
 FROM nginx:stable-alpine@sha256:3bc3836dc0be3b811f238210360bf8e7ca8a2d0effdae46160bf1f3578710051 AS web
+ARG HERD_VERSION=dev
+ARG HERD_REVISION=unknown
+LABEL org.opencontainers.image.version=$HERD_VERSION \
+      org.opencontainers.image.revision=$HERD_REVISION
 COPY deploy/nginx.conf /etc/nginx/nginx.conf
 COPY --from=build /app/dist/web /usr/share/nginx/html
 RUN chown -R nginx:nginx /var/cache/nginx

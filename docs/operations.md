@@ -32,6 +32,28 @@ curl -fsS http://127.0.0.1:8080/api/ready
 
 운영 쿠키는 `__Host-` 접두어, `Secure`, `HttpOnly`, `SameSite=Lax`를 사용합니다. OIDC와 서비스 DB는 앱의 인증·저장 인프라입니다. 편집기의 PostgreSQL 17 target은 설계 모델과 DDL에 적용됩니다. [환경 예시](../.env.example), [Compose 구성](../compose.yaml)
 
+## 버전별 릴리스
+
+Git 태그를 릴리스 버전으로 사용합니다. `v0.1.0`부터 시작하며, 다음 릴리스에서는 검증한 커밋에 원하는 버전의 태그를 붙이고 같은 버전으로 패키지를 만듭니다.
+
+```sh
+git tag -a v0.1.1 -m v0.1.1
+sh scripts/release.sh v0.1.1 linux/amd64
+```
+
+서버가 ARM64이면 `linux/arm64`를 지정합니다. 플랫폼을 생략하면 Docker 데몬의 기본 플랫폼으로 빌드합니다. 태그가 가리키는 커밋에서 웹과 API를 빌드하고, 두 이미지에 버전과 커밋 SHA를 기록합니다. API와 마이그레이션은 같은 이미지를 사용합니다.
+
+`build/releases/v0.1.1-linux-amd64/`에 `images.tar.gz`, `compose.yaml`, `release.env`, `release.txt`가 생성됩니다. 패키지 디렉터리와 운영 환경 파일을 서버에 복사한 뒤 다음 명령을 실행합니다.
+
+```sh
+docker image load -i images.tar.gz
+docker compose --env-file /path/to/production.env --env-file release.env pull db
+docker compose --env-file /path/to/production.env --env-file release.env up -d --no-build --pull never --wait
+curl -fsS http://127.0.0.1:8080/api/ready
+```
+
+`release.env`는 앱 이미지 버전과 기본 Compose 프로젝트 이름 `herd`를 지정합니다. 다음 버전에서도 같은 프로젝트 이름을 사용하면 기존 DB 볼륨을 이어서 사용합니다. 기존 배포를 교체할 때는 아래 마이그레이션 순서에 따라 이전 API를 중지하고 백업한 뒤 새 버전을 시작합니다.
+
 ## 준비 상태와 마이그레이션
 
 - `GET /api/health`는 HTTP 프로세스의 생존을 확인합니다. `GET /api/ready`는 DB와 해당 빌드의 마이그레이션 이름·체크섬, SQL 작업 초기화를 확인합니다. DB가 비어 있거나 접속이 실패하거나 적용 이력이 다르면 503입니다. 트래픽 투입 기준은 readiness입니다.

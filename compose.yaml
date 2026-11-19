@@ -20,6 +20,18 @@ x-app-environment: &app-environment
   SQL_JOB_WORKERS: ${SQL_JOB_WORKERS:-2}
   SQL_WORKER_HEAP_MB: ${SQL_WORKER_HEAP_MB:-256}
 
+x-release-args: &release-args
+  HERD_VERSION: ${HERD_VERSION:-dev}
+  HERD_REVISION: ${HERD_REVISION:-unknown}
+
+x-api-image: &api-image
+  image: ${HERD_IMAGE_PREFIX:-herd}-api:${HERD_VERSION:-dev}
+  pull_policy: build
+  build:
+    context: .
+    target: api
+    args: *release-args
+
 services:
   db:
     image: postgres:17.12-bookworm@sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b
@@ -37,9 +49,7 @@ services:
       timeout: 2s
       retries: 15
   migrate:
-    build:
-      context: .
-      target: api
+    <<: *api-image
     command: ["node", "dist/api/migrate.js"]
     environment:
       DATABASE_URL: ${HERD_MIGRATION_DATABASE_URL:-${DATABASE_URL:-postgresql://herd:herd-local-only@db:5432/herd}}
@@ -47,9 +57,7 @@ services:
       db:
         condition: service_healthy
   api:
-    build:
-      context: .
-      target: api
+    <<: *api-image
     environment: *app-environment
     mem_limit: ${HERD_API_MEMORY_LIMIT:-1536m}
     depends_on:
@@ -61,10 +69,13 @@ services:
       timeout: 4s
       retries: 12
   web:
+    image: ${HERD_IMAGE_PREFIX:-herd}-web:${HERD_VERSION:-dev}
+    pull_policy: build
     build:
       context: .
       target: web
       args:
+        <<: *release-args
         VITE_ERD_PNG_MAX_SIDE: ${VITE_ERD_PNG_MAX_SIDE:-4096}
         VITE_ERD_PNG_MAX_PIXELS: ${VITE_ERD_PNG_MAX_PIXELS:-16000000}
     ports:
