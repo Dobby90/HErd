@@ -93,10 +93,11 @@ CREATE VIEW skip_me AS SELECT * FROM "최신 문서";`;
         let dialog = await prepareReplacement();
         await dialog.getByText(/기준 리비전 2/).waitFor();
         const saved = await document();
+        const canvasDisplay = { columnComments: true, grid: false };
         const me = await page.request.get('/api/me').then(response => response.json());
         expect((await page.request.put('/api/erds/' + erdId, {
           headers: { origin, 'x-csrf-token': me.csrfToken },
-          data: { baseRevision: 2, mutationId: randomUUID(), document: { ...saved.document, name: '다른 탭에서 저장한 문서' } },
+          data: { baseRevision: 2, mutationId: randomUUID(), document: { ...saved.document, name: '다른 탭에서 저장한 문서', canvasDisplay } },
         })).ok()).toBe(true);
         await dialog.getByRole('button', { name: '확인하고 모델 교체' }).click();
         await dialog.getByRole('alert').getByText('대상 문서가 변경되었습니다.', { exact: true }).waitFor();
@@ -112,6 +113,7 @@ CREATE VIEW skip_me AS SELECT * FROM "최신 문서";`;
         expect(await button('실행 취소').isDisabled()).toBe(true);
         const updated = await document();
         expect(updated.document.catalog.tables[0].physicalName).toBe('imported');
+        expect(updated.document.canvasDisplay).toEqual(canvasDisplay);
         expect((await pool.query("SELECT source_revision, payload FROM erd_revisions WHERE erd_id = $1 AND kind = 'before-import'", [erdId])).rows)
           .toMatchObject([{ source_revision: 3, payload: { catalog: { tables: [{ physicalName: '확정 모델' }] } } }]);
         await page.reload();
@@ -142,6 +144,7 @@ CREATE VIEW skip_me AS SELECT * FROM "최신 문서";`;
         await page.getByText('서버 저장됨 · 리비전 6', { exact: true }).waitFor();
         await page.getByRole('heading', { name: destination.name, exact: true }).waitFor();
         const appended = (await document()).document;
+        expect(appended.canvasDisplay).toEqual(canvasDisplay);
         expect(appended.catalog.tables[0]).toEqual(sourceTable);
         expect(appended.catalog.tables.slice(1).map((table: { physicalName: string }) => table.physicalName)).toEqual(['shipments', 'packages']);
         expect(appended.catalog.constraints.filter((key: { kind: string }) => key.kind === 'fk'))

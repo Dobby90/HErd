@@ -127,7 +127,8 @@ export function registerSqlImportApply(api: FastifyInstance, pool: Pool, authent
           throw new ApiError(409, 'DOCUMENT_TARGET_MISMATCH', '분석과 대상 문서의 SQL 대상이 다릅니다.');
         }
         const placement = append && appendTables(original, catalog, append.viewId);
-        const document = inputDocument(append ? original : draft(catalog, original.target, row.id, original.name), limits);
+        const next = append ? original : { ...draft(catalog, original.target, row.id, original.name), canvasDisplay: original.canvasDisplay };
+        const document = inputDocument(next, limits);
         await insertSnapshot(client, user.id, row, 'before-import', append ? 'DDL 테이블 추가 전' : 'DDL 모델 교체 전');
         const { rows: [saved] } = await client.query<{ revision: number; updatedAt: Date }>(`UPDATE erds
           SET title = $2, payload = $3, revision = revision + 1, updated_by = $4, updated_at = clock_timestamp()

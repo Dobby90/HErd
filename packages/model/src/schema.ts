@@ -71,6 +71,19 @@ const index = tableMember.extend({
 const position = z.object({ x: z.number(), y: z.number() });
 const size = z.object({ width: z.number().positive(), height: z.number().positive() });
 export const viewNameDisplaySchema = z.enum(['physical', 'logical', 'both']);
+const canvasDisplay = z.object({
+  tableComments: z.boolean(),
+  columns: z.boolean(),
+  columnTypes: z.boolean(),
+  columnBadges: z.boolean(),
+  columnDefaults: z.boolean(),
+  columnComments: z.boolean(),
+  relationships: z.boolean(),
+  relationshipLabels: z.boolean(),
+  notes: z.boolean(),
+  groups: z.boolean(),
+  grid: z.boolean(),
+});
 const view = z.object({
   id,
   name: id,
@@ -87,6 +100,7 @@ export const erdDocumentSchema = z.object({
   id,
   name: id,
   target: sqlTargetSchema,
+  canvasDisplay: canvasDisplay.partial().optional(),
   catalog: z.object({
     namespaces: z.array(named),
     tables: z.array(table),
@@ -110,6 +124,7 @@ export const erdDocumentSchema = z.object({
 });
 
 export type ErdDocument = z.infer<typeof erdDocumentSchema>;
+export type CanvasDisplay = z.infer<typeof canvasDisplay>;
 export type SqlTarget = z.infer<typeof sqlTargetSchema>;
 export type SqlExpression = z.infer<typeof sqlExpressionSchema>;
 export type Catalog = ErdDocument['catalog'];

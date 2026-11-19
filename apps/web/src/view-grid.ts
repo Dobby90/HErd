@@ -1,11 +1,13 @@
 import type { ErdDocument } from '@erd/model';
 import type { LayoutSizes } from './editor-canvas.js';
+import { canvasDisplay } from './canvas-display.js';
 import { viewColumnIds, viewLabel } from './editor-fields.js';
 import type { View } from './editor-fields.js';
 
 export function arrangeView(document: ErdDocument, view: View, measured: Readonly<LayoutSizes>): View {
   const tables = new Map(document.catalog.tables.map(table => [table.id, table]));
   const columnsById = new Map(document.catalog.columns.map(column => [column.id, column]));
+  const display = canvasDisplay(document);
   const full = view.nameDisplay === 'both';
   const names = full ? 'physical' : view.nameDisplay;
   const instances = new Map<string, View['instances']>();
@@ -30,11 +32,12 @@ export function arrangeView(document: ErdDocument, view: View, measured: Readonl
       ordered.slice(row, row + 4).forEach((item, column) => {
         positions.set(item.id, { x: left + column * (width + 60), y });
         const table = tables.get(item.tableId);
-        const visible = table ? viewColumnIds(table, item) : [];
-        const extra = full ? visible.reduce((height, id) => {
+        const visible = display.columns && table ? viewColumnIds(table, item) : [];
+        const extra = visible.reduce((height, id) => {
           const column = columnsById.get(id);
-          return height + (column?.logicalName ? 15 : 0) + (column?.description ? 16 : 0) + (column?.default ? 16 : 0);
-        }, table?.logicalName ? 15 : 0) : 0;
+          return height + (full && column?.logicalName ? 15 : 0) + (display.columnComments && column?.description ? 16 : 0)
+            + (display.columnDefaults && column?.default ? 16 : 0);
+        }, (full && table?.logicalName ? 15 : 0) + (display.tableComments && table?.description ? 20 : 0));
         height = Math.max(height, measured.get(item.id)?.height ?? 0, item.size?.height ?? 0,
           42 + 28 * visible.length + extra);
       });

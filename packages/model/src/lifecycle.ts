@@ -65,6 +65,7 @@ export type DocumentCommand =
   | CatalogEdit
   | { kind: 'batch'; commands: DocumentCommand[] }
   | { kind: 'title'; name: string }
+  | { kind: 'set-canvas-display'; value: NonNullable<ErdDocument['canvasDisplay']> }
   | { kind: 'put-view'; view: ErdDocument['views'][number] }
   | { kind: 'remove-view'; viewId: string }
   | { kind: 'put-relationship'; value: ErdDocument['relationships'][number] }
@@ -146,6 +147,9 @@ export function applyCommand(previous: ErdDocument, command: DocumentCommand): C
         break;
       case 'title':
         document.name = edit.name;
+        break;
+      case 'set-canvas-display':
+        document.canvasDisplay = { ...edit.value };
         break;
       case 'put-view':
         put(document.views, edit.view);

@@ -379,6 +379,7 @@ summary { cursor: pointer; }
 .canvas-names { min-width: 0; flex: 1; display: grid; }
 .canvas-logical-name, .canvas-metadata-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: .69rem/1.35 system-ui, sans-serif; color: var(--muted); }
 .canvas-logical-name { color: var(--accent-ink); font-size: .69rem; }
+.canvas-table-comment { padding: .27rem .57rem; }
 .canvas-column-meta { display: grid; gap: .12rem; padding: 0 .57rem .28rem; }
 .canvas-default { font: .62rem/1.4 var(--mono); }
 .canvas-default span { color: var(--accent-ink); }
@@ -460,6 +461,7 @@ dialog header button { color: var(--muted); font-size: 1rem; }
 dialog form + .actions { margin-top: .85rem; padding-top: .75rem; border-top: 1px solid var(--line); }
 dialog dt { font-weight: 650; }
 dialog dd { margin: 0 0 .65rem; overflow-wrap: anywhere; }
+.canvas-display-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .6rem; margin-block: .65rem .3rem; }
 dialog:has(.deletion-preview) { width: min(32rem, calc(100% - 2rem)); }
 .deletion-preview { display: grid; gap: .68rem; }
 .deletion-target { display: flex; align-items: flex-start; gap: .68rem; padding: .74rem; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }

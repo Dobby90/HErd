@@ -81,14 +81,16 @@ async function addColumn(page: Page, name: string) {
   await action(page, '컬럼 만들기').click();
 }
 
-it('lists full view first and shows table comments in the inspector', async () => {
+it('saves canvas display options across views independently of the name mode', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
     const document = structuredClone(sampleDocument);
     const tableComment = document.catalog.tables.find(table => table.id === 'users')!.description!;
     const columnComment = '고객 식별자';
-    document.catalog.columns.find(column => column.id === 'user-id')!.description = columnComment;
+    const column = document.catalog.columns.find(column => column.id === 'user-id')!;
+    column.description = columnComment;
+    column.default = { ...document.target, sql: '42', references: [], referencesComplete: true };
     await openEditor(page, origin, document);
 
     const mode = page.getByLabel('이름 표시');
@@ -98,8 +100,12 @@ it('lists full view first and shows table comments in the inspector', async () =
     await mode.selectOption('both');
     const card = tableOnCanvas(page, 'users');
     await card.getByText('고객', { exact: true }).waitFor();
-    await card.getByText(columnComment, { exact: true }).waitFor();
-    expect(await card.getByText(tableComment, { exact: true }).count()).toBe(0);
+    for (const comment of [tableComment, columnComment]) {
+      expect(await card.getByText(comment, { exact: true }).count()).toBe(0);
+    }
+    await card.getByText('DEFAULT 42', { exact: true }).waitFor();
+    await card.getByText('PK', { exact: true }).waitFor();
+    await card.getByRole('button', { name: 'integer 자료형 편집' }).waitFor();
 
     await card.locator(':scope > strong > svg').first().click();
     await tab(page, '이름·배치').click();
@@ -107,9 +113,49 @@ it('lists full view first and shows table comments in the inspector', async () =
 
     await action(page, '내보내기').click();
     await action(page, '이미지 내보내기').click();
-    const imageNames = page.getByRole('dialog', { name: '뷰 이미지 내보내기' }).getByLabel('표시할 이름');
+    const image = page.getByRole('dialog', { name: '뷰 이미지 내보내기' });
+    const imageNames = image.getByLabel('표시할 이름');
     expect(await imageNames.inputValue()).toBe('both');
     expect(await imageNames.locator('option').allTextContents()).toEqual(nameOptions);
+    await image.getByRole('button', { name: '닫기' }).click();
+
+    const options = page.getByRole('dialog', { name: 'ERD 표시 옵션' });
+    const option = (name: string) => options.getByRole('checkbox', { name, exact: true });
+    await action(page, 'ERD 표시 옵션').click();
+    await option('테이블 코멘트').check();
+    await option('컬럼 코멘트').check();
+    for (const name of ['컬럼 자료형', 'PK·FK·UNIQUE 배지', '컬럼 기본값', '관계선 라벨', '메모', '그룹', '배경 격자']) {
+      await option(name).uncheck();
+    }
+    await action(page, '표시 옵션 적용').click();
+    await card.getByText(tableComment, { exact: true }).waitFor();
+    await card.getByText(columnComment, { exact: true }).waitFor();
+    for (const value of ['DEFAULT 42', 'PK', 'integer']) {
+      expect(await card.getByText(value, { exact: true }).count()).toBe(0);
+    }
+    expect(await mode.inputValue()).toBe('both');
+    expect(await page.locator('.logical-edge').count()).toBe(1);
+    expect(await page.locator('.react-flow__edge-text').count()).toBe(0);
+    expect(await page.locator('.react-flow__background, .group-name, .note-text').count()).toBe(0);
+    await expect.poll(async () => (await savedDocument(page)).document.canvasDisplay?.columnComments, { timeout: 5_000 }).toBe(true);
+
+    await page.reload();
+    await card.getByText(columnComment, { exact: true }).waitFor();
+    await action(page, '상품 연결').click();
+    await tableOnCanvas(page, 'orders').getByText('고객별 주문 번호로 주문을 식별', { exact: true }).waitFor();
+    expect(await mode.inputValue()).toBe('physical');
+    await action(page, 'ERD 표시 옵션').click();
+    await option('컬럼 목록').uncheck();
+    await action(page, '표시 옵션 적용').click();
+    await page.locator('.canvas-column-slot').first().waitFor({ state: 'detached' });
+    await expect.poll(() => page.locator('.fk-edge .react-flow__edge-path').count()).toBeGreaterThan(0);
+
+    await action(page, 'ERD 표시 옵션').click();
+    await option('관계선').uncheck();
+    await action(page, '표시 옵션 적용').click();
+    expect(await page.locator('.react-flow__edge').count()).toBe(0);
+    await expect.poll(async () => (await savedDocument(page)).document.canvasDisplay, { timeout: 5_000 })
+      .toMatchObject({ columns: false, relationships: false, tableComments: true });
   });
 }, 60_000);
 

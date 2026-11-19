@@ -165,7 +165,7 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         await edit.getByLabel('기본값 (DEFAULT SQL)', { exact: true }).press('Control+Enter');
         await shipment.getByText('운송장 번호', { exact: true }).waitFor();
         await shipment.getByText("DEFAULT '대기'", { exact: true }).waitFor();
-        await expect.poll(async () => (await read()).document.catalog.columns.find(item => item.id === columns[0].id)?.default?.sql)
+        await expect.poll(async () => (await read()).document.catalog.columns.find(item => item.id === columns[0].id)?.default?.sql, { timeout: 5_000 })
           .toBe("'대기'");
         const withMetadata = await read();
         expect(withMetadata.document.catalog.columns.find(item => item.id === columns[0].id))
@@ -183,6 +183,12 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         expect(metadataSql).toContain("COMMENT ON TABLE \"public\".\"shipment_records\" IS E'물류 작업의 배송 기록'");
         expect(metadataSql).toContain("COMMENT ON COLUMN \"public\".\"shipment_records\".\"tracking_code\" IS E'택배사의 연동 식별자'");
 
+        expect(await shipment.getByText('택배사의 연동 식별자', { exact: true }).count()).toBe(0);
+        await button('ERD 표시 옵션').click();
+        await page.getByRole('dialog', { name: 'ERD 표시 옵션' }).getByRole('checkbox', { name: '컬럼 코멘트' }).check();
+        await button('표시 옵션 적용').click();
+        await expect.poll(async () => (await read()).document.canvasDisplay?.columnComments, { timeout: 5_000 }).toBe(true);
+
         await page.reload();
         expect(await mode.inputValue()).toBe('both');
         await shipment.getByText('택배사의 연동 식별자', { exact: true }).waitFor();
@@ -198,6 +204,7 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         expect(markup).toContain('택배사의 연동 식별자');
         await image.getByRole('button', { name: '닫기' }).click();
 
+        const revisionBeforePan = (await read()).revision;
         const viewport = page.locator('.react-flow__viewport');
         const transform = () => viewport.evaluate(node => (node as HTMLElement).style.transform);
         await button('이동 모드').click();
@@ -210,7 +217,7 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         await page.mouse.move(header!.x + 100, header!.y - 45, { steps: 6 });
         await page.mouse.up();
         await expect.poll(transform).not.toBe(before);
-        expect((await read()).revision).toBe(withMetadata.revision);
+        expect((await read()).revision).toBe(revisionBeforePan);
         await button('이동 모드').press('v');
         expect(await button('선택 모드').getAttribute('aria-pressed')).toBe('true');
         await page.locator('.react-flow__controls-fitview').click();

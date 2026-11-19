@@ -8,6 +8,7 @@ import type { EditorDialect } from '@erd/sql-contract';
 import { ColumnBadges, Icon } from './editor-controls.js';
 import { secondaryName, viewColumnIds, viewLabel } from './editor-fields.js';
 import { CanvasEditing, dragType } from './canvas-edit.js';
+import { canvasDisplay } from './canvas-display.js';
 import { measureTableWidths } from './canvas-width.js';
 import { columnTypeLabel } from './schema-edits.js';
 
@@ -15,10 +16,11 @@ type View = ErdDocument['views'][number];
 type CanvasNode = Node<Record<string, unknown> & {
   label: string;
   logicalName?: string;
+  description?: string;
   tableId?: string;
   highlighted?: boolean;
   columns?: Array<{
-    id: string; name: string; type: string; badges: string[]; highlighted?: boolean;
+    id: string; name: string; type?: string; badges: string[]; highlighted?: boolean;
     logicalName?: string; description?: string; defaultSql?: string;
   }>;
 }, 'table' | 'groupBox' | 'note'>;
@@ -76,7 +78,8 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
   const handles = data.columns?.map(column =>
     [column.id, Boolean(column.logicalName), Boolean(column.description), Boolean(column.defaultSql)].join(':')).join('|');
   const hasLogicalName = Boolean(data.logicalName);
-  useEffect(() => refresh(id), [handles, hasLogicalName, id, refresh, editing, active]);
+  const hasDescription = Boolean(data.description);
+  useEffect(() => refresh(id), [handles, hasLogicalName, hasDescription, id, refresh, editing, active]);
   const editText = (value: string, field: 'table' | 'name' | 'type', columnId?: string) => {
     const open = (event: MouseEvent) => {
       event.stopPropagation();
@@ -101,6 +104,7 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
     <Handle id="table-out" type="source" position={Position.Right} className="table-handle" isConnectable={false} />
     <Handle id="reverse-table-in" type="target" position={Position.Right} className="table-handle route-handle" isConnectable={false} />
     <Handle id="reverse-table-out" type="source" position={Position.Left} className="table-handle route-handle" isConnectable={false} />
+    {data.description && <p className="canvas-table-comment canvas-metadata-line" title={data.description}>{data.description}</p>}
     {editing?.field === 'table' && form}
     {data.columns?.map((column, index, rows) => <div className="canvas-column-slot" key={column.id}>
       <div className={'canvas-column' + (column.highlighted ? ' search-match' : '') + (dropTarget === column.id ? ' column-drop-target' : '')}
@@ -138,7 +142,7 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
       <span className="canvas-names">{editText(column.name, 'name', column.id)}
         {column.logicalName && <span className="canvas-logical-name" title={column.logicalName}>{column.logicalName}</span>}
       </span>
-      {editText(column.type, 'type', column.id)}<ColumnBadges values={column.badges} />
+      {column.type && editText(column.type, 'type', column.id)}<ColumnBadges values={column.badges} />
       <Handle id={'out:' + column.id} type="source" position={Position.Right} aria-label={column.name + ' 연결점'} />
       <Handle id={'reverse-in:' + column.id} type="target" position={Position.Right} className="route-handle" isConnectable={false} />
       <Handle id={'reverse-out:' + column.id} type="source" position={Position.Left} className="route-handle" isConnectable={false} />
@@ -150,7 +154,7 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
       {editing?.columnId === column.id && form}
     </div>)}
     {editing && editing.field !== 'table' && !editing.columnId ? form :
-      active && change && <button type="button" className="quiet canvas-add-column nodrag nopan" aria-label={data.label + ' 컬럼 추가'}
+      data.columns && active && change && <button type="button" className="quiet canvas-add-column nodrag nopan" aria-label={data.label + ' 컬럼 추가'}
         onClick={event => { event.stopPropagation(); change({ instanceId: id, field: 'name' }); }}><Icon name="plus" />컬럼 추가</button>}
   </article>;
 });
@@ -188,22 +192,21 @@ function edgeRoute(source: CanvasNode, target: CanvasNode, fromColumn?: string, 
 }
 
 function project(document: ErdDocument, view: View, dialect: EditorDialect | undefined, viewportOnly: boolean) {
+  const display = canvasDisplay(document);
   const tables = new Map(document.catalog.tables.map(table => [table.id, table]));
   const columns = new Map(document.catalog.columns.map(column => [column.id, column]));
   const enums = new Map(document.catalog.enums.map(item => [item.id, item.physicalName]));
-  const badges = columnBadgesById(document);
-  const primary = primaryColumnsByTable(document);
-  const foreignKeys = dialect?.inspectForeignKeys?.(document);
+  const badges = display.columnBadges ? columnBadgesById(document) : undefined;
   const measureWidth = measureTableWidths();
   const full = view.nameDisplay === 'both';
   const titleMode = full ? 'physical' : view.nameDisplay;
   const instances = new Map<string, CanvasNode[]>();
   const nodes: CanvasNode[] = [
-    ...view.groups.map((group): CanvasNode => ({
+    ...(display.groups ? view.groups : []).map((group): CanvasNode => ({
       id: group.id, type: 'groupBox', position: { x: group.x, y: group.y },
       data: { label: group.name }, style: group.size ?? { width: 480, height: 250 }, zIndex: -1,
     })),
-    ...view.notes.map((note): CanvasNode => ({
+    ...(display.notes ? view.notes : []).map((note): CanvasNode => ({
       id: note.id, type: 'note', position: { x: note.x, y: note.y },
       data: { label: note.text }, style: note.size ?? { width: 210 }, zIndex: 2,
     })),
@@ -211,14 +214,16 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   for (const instance of view.instances) {
     const table = tables.get(instance.tableId);
     if (!table) continue;
-    const visible = viewColumnIds(table, instance);
+    const visible = display.columns ? viewColumnIds(table, instance) : [];
     const label = viewLabel(table, titleMode);
     const logicalName = secondaryName(table, view.nameDisplay);
+    const description = display.tableComments ? table.description : undefined;
     const rows = visible.flatMap(id => {
       const column = columns.get(id);
-      return column ? [{ id, name: viewLabel(column, titleMode), type: columnTypeLabel(column.type, enums), badges: badges.get(id) ?? [],
-        logicalName: secondaryName(column, view.nameDisplay), description: full ? column.description : undefined,
-        defaultSql: full ? column.default?.sql : undefined }] : [];
+      return column ? [{ id, name: viewLabel(column, titleMode),
+        type: display.columnTypes ? columnTypeLabel(column.type, enums) : undefined, badges: badges?.get(id) ?? [],
+        logicalName: secondaryName(column, view.nameDisplay), description: display.columnComments ? column.description : undefined,
+        defaultSql: display.columnDefaults ? column.default?.sql : undefined }] : [];
     });
     const width = instance.size?.width ?? measureWidth(label, logicalName, rows);
     const node: CanvasNode = {
@@ -226,8 +231,8 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
       style: { width }, zIndex: 2,
       ...(viewportOnly && { initialWidth: width, initialHeight: rows.reduce((height, row) =>
         height + 25 + (row.logicalName ? 15 : 0) + (row.description ? 16 : 0) + (row.defaultSql ? 16 : 0),
-      36 + (logicalName ? 15 : 0)) }),
-      data: { tableId: table.id, label, logicalName, columns: rows },
+      36 + (logicalName ? 15 : 0) + (description ? 20 : 0)) }),
+      data: { tableId: table.id, label, logicalName, description, columns: display.columns ? rows : undefined },
     };
     nodes.push(node);
     const copies = instances.get(table.id) ?? [];
@@ -235,10 +240,16 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
     instances.set(table.id, copies);
   }
   const edges: Edge[] = [];
+  if (!display.relationships) return { nodes, edges };
+  const primary = primaryColumnsByTable(document);
+  const foreignKeys = display.relationshipLabels ? dialect?.inspectForeignKeys?.(document) : undefined;
   for (const key of physicalRelationships(document)) {
-    const meaning = foreignKeys ? foreignKeys.cardinality(key) : dialect?.cardinality(document, key);
+    const meaning = display.relationshipLabels && (foreignKeys ? foreignKeys.cardinality(key) : dialect?.cardinality(document, key));
     const pair = key.pairs[0];
     const identifying = isIdentifyingForeignKey(key, primary);
+    const label = meaning
+      ? `${identifying ? '식별' : '비식별'} · 자식 0..${meaning.childMax === 1 ? '1' : 'N'} · 부모 ${meaning.parentOptional ? '0..1' : '1'}`
+      : 'FK · 검토 필요';
     for (const source of instances.get(key.tableId) ?? []) {
       const targets = key.tableId === key.targetTableId ? [source] : instances.get(key.targetTableId) ?? [];
       for (const target of targets) {
@@ -246,7 +257,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
           id: JSON.stringify([key.id, source.id, target.id]), data: { objectId: key.id },
           source: source.id, target: target.id,
           ...edgeRoute(source, target, pair.sourceColumnId, pair.targetColumnId),
-          label: meaning ? `${identifying ? '식별' : '비식별'} · 자식 0..${meaning.childMax === 1 ? '1' : 'N'} · 부모 ${meaning.parentOptional ? '0..1' : '1'}` : 'FK · 검토 필요',
+          label: display.relationshipLabels ? label : undefined,
           className: 'fk-edge ' + (identifying ? 'identifying-edge' : 'non-identifying-edge'),
         });
       }
@@ -258,7 +269,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
       for (const target of targets) edges.push({
         id: JSON.stringify([relation.id, source.id, target.id]), data: { objectId: relation.id },
         source: source.id, target: target.id, ...edgeRoute(source, target),
-        label: relation.name + ' · 논리', className: 'logical-edge', type: 'smoothstep',
+        label: display.relationshipLabels ? relation.name + ' · 논리' : undefined, className: 'logical-edge', type: 'smoothstep',
       });
     }
   }
@@ -395,7 +406,7 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
         proOptions={{ hideAttribution: true }}
       >
         <CanvasViewport focus={focus} viewportOnly={viewportOnly} empty={projected.nodes.length === 0} />
-        <Background gap={22} size={1} color="var(--dot)" />
+        {canvasDisplay(document).grid && <Background gap={22} size={1} color="var(--dot)" />}
         <Controls showInteractive={false} orientation="horizontal" fitViewOptions={fitOptions} />
       </ReactFlow>
       {instruction}

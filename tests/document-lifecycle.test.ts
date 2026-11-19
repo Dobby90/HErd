@@ -25,6 +25,14 @@ it('creates valid documents, removes only the view instance, and supports undo',
   expect(result.undo?.previous).toEqual(sampleDocument);
 });
 
+it('round-trips optional canvas display settings and keeps legacy documents readable', () => {
+  const value = { columnComments: true, columnTypes: false };
+  const result = applyCommand(sampleDocument, { kind: 'set-canvas-display', value });
+  expect(result).toMatchObject({ applied: true, document: { canvasDisplay: value }, undo: { previous: sampleDocument } });
+  expect(deserializeDocument(serializeDocument(result.document))).toEqual({ ...sampleDocument, canvasDisplay: value });
+  expect(deserializeDocument(serializeDocument(sampleDocument))).not.toHaveProperty('canvasDisplay');
+});
+
 it('preserves renamed expressions and rejects a command with broken references', () => {
   const renamed = applyCommand(sampleDocument, { kind: 'rename', objectId: 'item-quantity', physicalName: 'amount' });
   expect(renamed.applied).toBe(true);

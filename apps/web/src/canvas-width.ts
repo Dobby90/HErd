@@ -1,4 +1,4 @@
-type WidthRow = { name: string; logicalName?: string; type: string; badges: string[] };
+type WidthRow = { name: string; logicalName?: string; type?: string; badges: string[] };
 
 export function measureTableWidths() {
   const context = typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d');

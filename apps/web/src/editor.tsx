@@ -2,13 +2,14 @@ import { useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { XYPosition } from '@xyflow/react';
 import { columnBadgesById, createDocument, deletionImpact, isIdentifyingForeignKey, primaryColumnsByTable, validateDocumentStructure, viewNameDisplaySchema } from '@erd/model';
-import type { Catalog, DocumentCommand, ErdDocument, ModelDiagnostic, SqlTarget } from '@erd/model';
+import type { CanvasDisplay, Catalog, DocumentCommand, ErdDocument, ModelDiagnostic, SqlTarget } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
 import { postgresqlEditor } from '@erd/dialect-postgresql/ui';
 import { EditorCanvas } from './editor-canvas.js';
 import type { CanvasFocus, CanvasPosition, LayoutSizes } from './editor-canvas.js';
 import { CanvasEditing, dragType, QuickColumnForm, QuickTableForm } from './canvas-edit.js';
 import type { QuickEdit, QuickRun } from './canvas-edit.js';
+import { canvasDisplay } from './canvas-display.js';
 import { ActionMenu, AppVersion, ColumnBadges, Icon } from './editor-controls.js';
 import { ThemeToggle } from './theme.js';
 import { columnsOf, duplicateView, EditorReadOnly, emptyView, field, Form, id, label, Modal, named, NameFields, placement, putView, ViewNameOptions } from './editor-fields.js';
@@ -87,6 +88,40 @@ function ViewSettings({ view, run, choose, close }: { view: View; run: Run; choo
         }
       }}>뷰 삭제</button>
     </div>
+  </Modal>;
+}
+
+const displayFields = [
+  ['tableComments', '테이블 코멘트'],
+  ['columns', '컬럼 목록'],
+  ['columnTypes', '컬럼 자료형'],
+  ['columnBadges', 'PK·FK·UNIQUE 배지'],
+  ['columnDefaults', '컬럼 기본값'],
+  ['columnComments', '컬럼 코멘트'],
+  ['relationships', '관계선'],
+  ['relationshipLabels', '관계선 라벨'],
+  ['notes', '메모'],
+  ['groups', '그룹'],
+  ['grid', '배경 격자'],
+] as const satisfies ReadonlyArray<readonly [keyof CanvasDisplay, string]>;
+
+function CanvasDisplaySettings({ settings, apply, close }: {
+  settings: CanvasDisplay; apply(value: CanvasDisplay): void; close(): void;
+}) {
+  return <Modal title="ERD 표시 옵션" close={close}>
+    <p className="muted">이 ERD의 모든 뷰에 적용됩니다.</p>
+    <Form button="표시 옵션 적용" cancel={close} submit={form => {
+      const next = { ...settings };
+      for (const [key] of displayFields) next[key] = form.has(key);
+      if (displayFields.some(([key]) => next[key] !== settings[key])) apply(next);
+      else close();
+    }}>
+      <div className="canvas-display-options">
+        {displayFields.map(([key, label]) => <label key={key} className="checkbox">
+          <input type="checkbox" name={key} defaultChecked={settings[key]} />{label}
+        </label>)}
+      </div>
+    </Form>
   </Modal>;
 }
 
@@ -349,6 +384,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
   verifyImage?(): Promise<void>;
 }) {
   const { document } = session;
+  const display = canvasDisplay(document);
   const [chosenView, chooseView] = useState(initialPlacement?.viewId ?? '');
   const [selection, inspect] = useState<Inspector | null>(null);
   const [mobilePane, setMobilePane] = useState<MobilePane>('canvas');
@@ -362,7 +398,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
   const [snap, setSnap] = useState(true);
   const [showMap, setShowMap] = useState(false);
   const mapId = useId();
-  const [dialog, setDialog] = useState<'title' | 'view' | 'view-settings' | null>(null);
+  const [dialog, setDialog] = useState<'title' | 'view' | 'view-settings' | 'display' | null>(null);
   const [fk, setFk] = useState<FkDialog | null>(null);
   const [logical, setLogical] = useState<LogicalSeed | ErdDocument['relationships'][number]>();
   const [tool, setTool] = useState<CanvasTool>();
@@ -591,6 +627,8 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
         <h1 title={document.name}>{document.name}</h1>
         {!readOnly && <button className="icon-button quiet" type="button" aria-label="문서 제목 변경" title="문서 제목 변경"
           onClick={() => setDialog('title')}><Icon name="edit" /></button>}
+        {!readOnly && <button className="icon-button quiet" type="button" aria-label="ERD 표시 옵션" title="ERD 표시 옵션"
+          onClick={() => setDialog('display')}><Icon name="settings" /></button>}
       </div>
       <p className="save-state" role={session.status.error ? 'alert' : 'status'}><span className="status-dot" />{session.status.text}</p>
       <div className="actions document-actions">
@@ -801,9 +839,11 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
           </CanvasEditing.Provider>
           <div className="canvas-status">
             <span>테이블 {view.instances.length}개</span>
-            <span className="edge-legend"><span aria-hidden="true" />식별 FK</span>
-            <span className="edge-legend non-identifying"><span aria-hidden="true" />비식별 FK</span>
-            <span className="edge-legend logical"><span aria-hidden="true" />논리 관계</span>
+            {display.relationships && <>
+              <span className="edge-legend"><span aria-hidden="true" />식별 FK</span>
+              <span className="edge-legend non-identifying"><span aria-hidden="true" />비식별 FK</span>
+              <span className="edge-legend logical"><span aria-hidden="true" />논리 관계</span>
+            </>}
             <button type="button" className="quiet" aria-expanded={showMap} aria-controls={mapId} onClick={() => setShowMap(value => !value)}>
               <Icon name="map" />미니맵</button>
           </div>
@@ -838,6 +878,9 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
         <label>문서 제목<input name="documentName" defaultValue={document.name} maxLength={200} required /></label>
       </Form>
     </Modal>}
+    {dialog === 'display' && <CanvasDisplaySettings settings={display} close={() => setDialog(null)} apply={value => {
+      if (run({ kind: 'set-canvas-display', value })) { setQuickEdit(undefined); setDialog(null); }
+    }} />}
     {view && dialog === 'view-settings' && <ViewSettings key={view.id + view.name} view={view} run={run}
       choose={selectView} close={() => setDialog(null)} />}
     {canEdit && fk && dialect && <ForeignKeyForm document={document} dialect={dialect} seed={fk} run={run} close={() => setFk(null)} />}
