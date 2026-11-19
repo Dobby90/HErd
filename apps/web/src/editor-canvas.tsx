@@ -1,26 +1,44 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { applyNodeChanges, Background, Controls, Handle, MiniMap, Position, ReactFlow, useNodesInitialized, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { applyNodeChanges, Background, Controls, Handle, MiniMap, Position, ReactFlow, ReactFlowProvider, useNodesInitialized, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
 import type { Edge, Node, NodeProps, OnSelectionChangeParams, XYPosition } from '@xyflow/react';
 import { columnBadgesById, physicalRelationships } from '@erd/model';
 import type { ErdDocument } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
+import { ColumnBadges, Icon } from './editor-controls.js';
 import { viewColumnIds, viewLabel } from './editor-fields.js';
 
 type View = ErdDocument['views'][number];
 type CanvasNode = Node<Record<string, unknown> & {
   label: string;
+  tableId?: string;
   highlighted?: boolean;
   columns?: Array<{ id: string; name: string; badges: string[]; highlighted?: boolean }>;
 }, 'table' | 'groupBox' | 'note'>;
 
 export type CanvasFocus = { instanceId: string; columnId?: string };
 export type LayoutSizes = Map<string, { width: number; height: number }>;
+const fitOptions = { padding: 0.18, maxZoom: 1.15 };
+const canvasLabels = {
+  'controls.ariaLabel': '캔버스 확대 및 축소',
+  'controls.zoomIn.ariaLabel': '확대',
+  'controls.zoomOut.ariaLabel': '축소',
+  'controls.fitView.ariaLabel': '전체 보기',
+};
 
-function FocusNode({ focus, viewportOnly }: { focus?: CanvasFocus; viewportOnly: boolean }) {
+function CanvasViewport({ focus, viewportOnly }: { focus?: CanvasFocus; viewportOnly: boolean }) {
   const ready = useNodesInitialized();
   const { fitView, getNode, setCenter, viewportInitialized } = useReactFlow<CanvasNode, Edge>();
+  const opened = useRef(false);
   useEffect(() => {
-    if (!focus || !viewportInitialized) return;
+    if (!viewportInitialized) return;
+    if (!focus) {
+      if (!opened.current && !viewportOnly && ready) {
+        opened.current = true;
+        void fitView(fitOptions);
+      }
+      return;
+    }
+    opened.current = true;
     if (viewportOnly) {
       const node = getNode(focus.instanceId);
       if (node) void setCenter(node.position.x + (node.measured?.width ?? node.initialWidth ?? 195) / 2,
@@ -36,13 +54,17 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
   const handles = data.columns?.map(column => column.id).join(':');
   useEffect(() => refresh(id), [handles, id, refresh]);
   return <article className={'canvas-table' + (data.highlighted ? ' search-match' : '')}>
-    <strong>{data.label}</strong>
-    <Handle id="table-in" type="target" position={Position.Left} isConnectable={false} />
-    <Handle id="table-out" type="source" position={Position.Right} isConnectable={false} />
+    <strong><Icon name="table" /><span>{data.label}</span></strong>
+    <Handle id="table-in" type="target" position={Position.Left} className="table-handle" isConnectable={false} />
+    <Handle id="table-out" type="source" position={Position.Right} className="table-handle" isConnectable={false} />
+    <Handle id="reverse-table-in" type="target" position={Position.Right} className="table-handle route-handle" isConnectable={false} />
+    <Handle id="reverse-table-out" type="source" position={Position.Left} className="table-handle route-handle" isConnectable={false} />
     {data.columns?.map(column => <div className={'canvas-column' + (column.highlighted ? ' search-match' : '')} key={column.id}>
       <Handle id={'in:' + column.id} type="target" position={Position.Left} aria-label={column.name + ' 참조점'} />
-      <span>{column.name}</span><small>{column.badges.join(' · ').toUpperCase()}</small>
+      <span className="canvas-column-name">{column.name}</span><ColumnBadges values={column.badges} />
       <Handle id={'out:' + column.id} type="source" position={Position.Right} aria-label={column.name + ' 연결점'} />
+      <Handle id={'reverse-in:' + column.id} type="target" position={Position.Right} className="route-handle" isConnectable={false} />
+      <Handle id={'reverse-out:' + column.id} type="source" position={Position.Left} className="route-handle" isConnectable={false} />
     </div>)}
   </article>;
 });
@@ -56,6 +78,22 @@ function NoteNode({ data }: NodeProps<CanvasNode>) {
 }
 
 const nodeTypes = { table: TableNode, groupBox: GroupNode, note: NoteNode };
+const mapColors = { groupBox: '#e7e8f6', note: '#e8d5a4', table: '#9aa9c3' };
+const mapNodeColor = (node: CanvasNode) => node.selected || node.className === 'active-table'
+  ? '#8179db' : node.type ? mapColors[node.type] : mapColors.table;
+
+function edgeRoute(source: CanvasNode, target: CanvasNode, fromColumn?: string, toColumn?: string) {
+  const sourceHandle = source.data.columns?.some(column => column.id === fromColumn) ? 'out:' + fromColumn : 'table-out';
+  const targetHandle = target.data.columns?.some(column => column.id === toColumn) ? 'in:' + toColumn : 'table-in';
+  if (source.id === target.id) return { sourceHandle, targetHandle, type: 'smoothstep' };
+  if (source.position.x + Number(source.style?.width) <= target.position.x) return { sourceHandle, targetHandle, type: 'default' };
+  const reversed = target.position.x + Number(target.style?.width) <= source.position.x;
+  return {
+    sourceHandle: reversed ? 'reverse-' + sourceHandle : sourceHandle,
+    targetHandle: 'reverse-' + targetHandle,
+    type: reversed ? 'default' : 'smoothstep',
+  };
+}
 
 function project(document: ErdDocument, view: View, dialect: EditorDialect | undefined, viewportOnly: boolean) {
   const tables = new Map(document.catalog.tables.map(table => [table.id, table]));
@@ -70,7 +108,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
     })),
     ...view.notes.map((note): CanvasNode => ({
       id: note.id, type: 'note', position: { x: note.x, y: note.y },
-      data: { label: note.text }, style: note.size ?? { width: 210 },
+      data: { label: note.text }, style: note.size ?? { width: 210 }, zIndex: 2,
     })),
   ];
   for (const instance of view.instances) {
@@ -80,9 +118,10 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
     const width = instance.size?.width ?? 195;
     const node: CanvasNode = {
       id: instance.id, type: 'table', position: { x: instance.x, y: instance.y },
-      style: { width },
+      style: { width }, zIndex: 2,
       ...(viewportOnly && { initialWidth: width, initialHeight: 36 + visible.length * 24 }),
       data: {
+        tableId: table.id,
         label: viewLabel(table, view.nameDisplay),
         columns: visible.flatMap(id => {
           const column = columns.get(id);
@@ -105,11 +144,9 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
         edges.push({
           id: JSON.stringify([key.id, source.id, target.id]), data: { objectId: key.id },
           source: source.id, target: target.id,
-          sourceHandle: source.data.columns?.some(column => column.id === pair.sourceColumnId) ? 'out:' + pair.sourceColumnId : 'table-out',
-          targetHandle: target.data.columns?.some(column => column.id === pair.targetColumnId) ? 'in:' + pair.targetColumnId : 'table-in',
+          ...edgeRoute(source, target, pair.sourceColumnId, pair.targetColumnId),
           label: meaning ? `자식 0..${meaning.childMax === 1 ? '1' : 'N'} · 부모 ${meaning.parentOptional ? '0..1' : '1'}` : 'FK · 검토 필요',
           className: 'fk-edge',
-          type: source.id === target.id ? 'smoothstep' : 'default',
         });
       }
     }
@@ -119,7 +156,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
       const targets = relation.sourceTableId === relation.targetTableId ? [source] : instances.get(relation.targetTableId) ?? [];
       for (const target of targets) edges.push({
         id: JSON.stringify([relation.id, source.id, target.id]), data: { objectId: relation.id },
-        source: source.id, target: target.id, sourceHandle: 'table-out', targetHandle: 'table-in',
+        source: source.id, target: target.id, ...edgeRoute(source, target),
         label: relation.name + ' · 논리', className: 'logical-edge', type: 'smoothstep',
       });
     }
@@ -127,20 +164,36 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   return { nodes, edges };
 }
 
-export function EditorCanvas({ document, view, dialect, select, selectInstances, focus, connect, move, layoutSizes, snap, readOnly }: {
+export function EditorCanvas({ document, view, dialect, select, clearSelection, selectInstances, focus, activeTableId, activeRelationId,
+  connect, move, layoutSizes, snap, readOnly, showMap, mapId }: {
   document: ErdDocument; view: View; dialect?: EditorDialect;
   select(id: string): void;
+  clearSelection(): void;
   selectInstances(ids: string[]): void;
   focus?: CanvasFocus;
+  activeTableId?: string;
+  activeRelationId?: string;
   layoutSizes: LayoutSizes;
   connect(sourceColumnId: string, targetColumnId: string): void;
   move(positions: Map<string, XYPosition>): void;
   snap: boolean;
   readOnly: boolean;
+  showMap: boolean;
+  mapId: string;
 }) {
   const viewportOnly = view.instances.length >= 120;
   const projected = useMemo(() => project(document, view, dialect, viewportOnly), [document, view, dialect, viewportOnly]);
   const [nodes, setNodes] = useState(projected.nodes);
+  const displayNodes = useMemo(() => activeTableId ? nodes.map(node => node.data.tableId === activeTableId
+    ? { ...node, className: 'active-table' } : node) : nodes, [activeTableId, nodes]);
+  const edges = useMemo(() => {
+    const active = new Set(view.instances.filter(instance => instance.tableId === activeTableId).map(instance => instance.id));
+    if (!activeRelationId && !active.size) return projected.edges;
+    return projected.edges.map(edge => {
+      const related = activeRelationId ? edge.data?.objectId === activeRelationId : active.has(edge.source) || active.has(edge.target);
+      return { ...edge, className: `${edge.className} ${related ? 'related-edge' : 'muted-edge'}`, zIndex: related ? 1 : 0 };
+    });
+  }, [activeRelationId, activeTableId, projected.edges, view.instances]);
   const onSelection = useCallback(({ nodes }: OnSelectionChangeParams) => {
     selectInstances(nodes.filter(node => node.type === 'table').map(node => node.id));
   }, [selectInstances]);
@@ -154,39 +207,48 @@ export function EditorCanvas({ document, view, dialect, select, selectInstances,
     });
   }), [projected, focus]);
   const anchor = view.instances[0];
-  return <ReactFlow<CanvasNode, Edge>
-    aria-label="ERD 캔버스"
-    nodesDraggable={!readOnly} nodesConnectable={!readOnly}
-    nodes={nodes} edges={projected.edges} nodeTypes={nodeTypes}
-    onNodesChange={changes => {
-      setNodes(previous => applyNodeChanges(readOnly ? changes.filter(change => change.type !== 'position') : changes, previous));
-      const positions = new Map<string, XYPosition>();
-      // React Flow batches keyboard moves and pointer drag completion with dragging set to false.
-      for (const change of changes) {
-        if (change.type === 'dimensions' && change.dimensions) layoutSizes.set(change.id, change.dimensions);
-        if (change.type === 'position' && change.dragging === false && change.position) {
-          positions.set(change.id, change.position);
-        }
-      }
-      if (!readOnly && positions.size) move(positions);
-    }}
-    onNodeClick={(_, node) => select(node.id)}
-    onSelectionChange={onSelection}
-    onEdgeClick={(_, edge) => select(String(edge.data?.objectId ?? ''))}
-    isValidConnection={connection => Boolean(connection.sourceHandle?.startsWith('out:') && connection.targetHandle?.startsWith('in:'))}
-    onConnect={({ sourceHandle, targetHandle }) => {
-      if (!readOnly && sourceHandle?.startsWith('out:') && targetHandle?.startsWith('in:')) connect(sourceHandle.slice(4), targetHandle.slice(3));
-    }}
-    connectionRadius={18} snapToGrid={snap} snapGrid={[20, 20]} deleteKeyCode={null} selectionOnDrag
-    panOnDrag={[1, 2]} multiSelectionKeyCode={['Shift', 'Meta', 'Control']} fitView={!viewportOnly}
-    onlyRenderVisibleElements={viewportOnly}
-    defaultViewport={viewportOnly && anchor ? { x: 24 - anchor.x * 0.75, y: 24 - anchor.y * 0.75, zoom: 0.75 } : undefined}
-    minZoom={0.15} maxZoom={2.5}
-    proOptions={{ hideAttribution: true }}
-  >
-    <FocusNode focus={focus} viewportOnly={viewportOnly} />
-    <Background gap={20} color="#54647b" />
-    <Controls showInteractive={false} />
-    <MiniMap pannable zoomable />
-  </ReactFlow>;
+  return <ReactFlowProvider initialNodes={projected.nodes} initialEdges={projected.edges} initialMinZoom={0.15} initialMaxZoom={2.5}>
+    <div className="canvas">
+      <ReactFlow<CanvasNode, Edge>
+        aria-label="ERD 캔버스"
+        ariaLabelConfig={canvasLabels}
+        nodesDraggable={!readOnly} nodesConnectable={!readOnly}
+        nodes={displayNodes} edges={edges} nodeTypes={nodeTypes}
+        onNodesChange={changes => {
+          setNodes(previous => applyNodeChanges(readOnly ? changes.filter(change => change.type !== 'position') : changes, previous));
+          const positions = new Map<string, XYPosition>();
+          // React Flow batches keyboard moves and pointer drag completion with dragging set to false.
+          for (const change of changes) {
+            if (change.type === 'dimensions' && change.dimensions) layoutSizes.set(change.id, change.dimensions);
+            if (change.type === 'position' && change.dragging === false && change.position) {
+              positions.set(change.id, change.position);
+            }
+          }
+          if (!readOnly && positions.size) move(positions);
+        }}
+        onNodeClick={(_, node) => select(node.id)}
+        onPaneClick={clearSelection}
+        onSelectionChange={onSelection}
+        onEdgeClick={(_, edge) => select(String(edge.data?.objectId ?? ''))}
+        isValidConnection={connection => Boolean(connection.sourceHandle?.startsWith('out:') && connection.targetHandle?.startsWith('in:'))}
+        onConnect={({ sourceHandle, targetHandle }) => {
+          if (!readOnly && sourceHandle?.startsWith('out:') && targetHandle?.startsWith('in:')) connect(sourceHandle.slice(4), targetHandle.slice(3));
+        }}
+        connectionRadius={18} snapToGrid={snap} snapGrid={[20, 20]} deleteKeyCode={null} selectionOnDrag
+        panOnDrag={[1, 2]} multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
+        onlyRenderVisibleElements={viewportOnly}
+        defaultViewport={viewportOnly && anchor ? { x: 24 - anchor.x * 0.75, y: 24 - anchor.y * 0.75, zoom: 0.75 } : undefined}
+        minZoom={0.15} maxZoom={2.5}
+        proOptions={{ hideAttribution: true }}
+      >
+        <CanvasViewport focus={focus} viewportOnly={viewportOnly} />
+        <Background gap={22} size={1} color="#c9d0dc" />
+        <Controls showInteractive={false} orientation="horizontal" fitViewOptions={fitOptions} />
+      </ReactFlow>
+    </div>
+    <div id={mapId} className="canvas-map" hidden={!showMap}>
+      {showMap && <MiniMap<CanvasNode> ariaLabel="뷰 미니맵" pannable zoomable nodeColor={mapNodeColor} maskColor="#e8eaf5b3"
+        maskStrokeColor="#7774cd" maskStrokeWidth={1.5} style={{ width: 178, height: 98 }} />}
+    </div>
+  </ReactFlowProvider>;
 }

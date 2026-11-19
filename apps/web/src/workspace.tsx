@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { ImportApplied } from '@erd/sql-contract';
 import { duplicateDocument } from '@erd/model';
 import { createEditorDocument, DocumentEditor, editorTargets } from './editor.js';
+import { Icon } from './editor-controls.js';
 import { field, Form, Modal } from './editor-fields.js';
 import { ApiFailure, apiRequest } from './project-api.js';
 import type { DocumentSummary, Identity, Project, SavedRevision, ServerDocument, SnapshotDetail } from './project-api.js';
@@ -416,6 +417,7 @@ export function Workspace() {
 
   return <main className="project-page">
     <header className="topbar">
+      <span className="brand-mark"><Icon name="brand" /></span>
       <h1>ERD 프로젝트</h1>
       {owner && projectId && <button type="button" onClick={() => go({})}>프로젝트 목록</button>}
       <a href="/" className="workspace-link">로컬 편집기</a>

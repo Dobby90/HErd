@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { createDatabase } from '../apps/api/src/database.js';
 import { withBrowser } from './support/browser.js';
+import { openExport, renameDocument } from './support/editor-ui.js';
 import { builtApi, migrateBuilt } from './support/built-api.js';
 import { mockIdentityProvider } from './support/oidc.js';
 import { withPostgres } from './support/postgres.js';
@@ -54,7 +55,7 @@ it('imports with warnings, edits and downloads SQL, restores a replacement, and 
         await button('컬럼 적용').click();
         await status(2);
 
-        await button('DDL 내보내기').click();
+        await openExport(page, 'DDL');
         await button('SQL 생성').click();
         const [download] = await Promise.all([page.waitForEvent('download'), button('.sql 다운로드').click()]);
         const sql = await readFile(await download.path(), 'utf8');
@@ -85,8 +86,7 @@ it('imports with warnings, edits and downloads SQL, restores a replacement, and 
 
         const user = await page.request.get('/api/me').then(response => response.json());
         await db.query("UPDATE sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE user_id = $1", [user.user.id]);
-        await page.getByLabel('문서 제목', { exact: true }).fill('재로그인 후 복구된 모델');
-        await button('제목 적용').click();
+        await renameDocument(page, '재로그인 후 복구된 모델');
         await page.getByRole('dialog', { name: '다시 로그인' }).getByRole('button', { name: 'OIDC 로그인' }).click();
         await heading('입고·재고 모델');
         await page.getByText('브라우저 복구본', { exact: true }).click();

@@ -5,6 +5,7 @@ import type { GenerateSqlJob, ParseSqlJob } from '@erd/sql-contract';
 import { expect, it } from 'vitest';
 import { scaleDocument } from '../packages/test-fixtures/src/scale.js';
 import { withBrowser } from './support/browser.js';
+import { openExport } from './support/editor-ui.js';
 import { builtApi, migrateBuilt } from './support/built-api.js';
 import { withPostgres } from './support/postgres.js';
 import { freePort } from './support/tcp.js';
@@ -153,7 +154,7 @@ it('measures both release models through the built browser, API and PostgreSQL',
           if (tables === 100) {
             await page.getByLabel('스키마 및 뷰 검색').fill('');
             await button('창고 상세').click();
-            await button('이미지 내보내기').click();
+            await openExport(page, '이미지');
             const start = performance.now();
             await button('출력 미리보기').click();
             await page.getByRole('img', { name: 'ERD 이미지 출력 미리보기' }).waitFor();

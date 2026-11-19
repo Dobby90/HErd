@@ -4,6 +4,7 @@ import { createApi } from '../apps/api/src/app.js';
 import { createDatabase, migrate } from '../apps/api/src/database.js';
 import type { ServerDocument } from '../apps/web/src/project-api.js';
 import { withBrowser } from './support/browser.js';
+import { renameDocument } from './support/editor-ui.js';
 import { mockIdentityProvider } from './support/oidc.js';
 import { withPostgres } from './support/postgres.js';
 import { freePort } from './support/tcp.js';
@@ -22,8 +23,7 @@ async function createErd(page: Page, name: string) {
 }
 
 async function rename(page: Page, name: string) {
-  await page.getByLabel('문서 제목', { exact: true }).fill(name);
-  await action(page, '제목 적용').click();
+  await renameDocument(page, name);
   await heading(page, name);
 }
 

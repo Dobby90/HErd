@@ -3,6 +3,7 @@ import { expect, it } from 'vitest';
 import { createApi } from '../apps/api/src/app.js';
 import { createDatabase, migrate } from '../apps/api/src/database.js';
 import { withBrowser } from './support/browser.js';
+import { renameDocument } from './support/editor-ui.js';
 import { withPostgres } from './support/postgres.js';
 import { freePort } from './support/tcp.js';
 
@@ -75,8 +76,7 @@ CREATE VIEW skip_me AS SELECT * FROM "최신 문서";`;
         await page.getByText('서버 저장됨 · 리비전 1', { exact: true }).waitFor();
         const document = () => page.request.get('/api/erds/' + erdId).then(response => response.json());
         expect((await document()).document.catalog.tables[0].physicalName).toBe('확정 모델');
-        await page.getByLabel('문서 제목').fill('교체 전 이름');
-        await button('제목 적용').click();
+        await renameDocument(page, '교체 전 이름');
         const prepareReplacement = async () => {
           await button('DDL로 모델 교체').click();
           const dialog = page.getByRole('dialog', { name: 'DDL로 모델 교체' });

@@ -32,6 +32,7 @@ const rowHeight = 25;
 const headerHeight = 36;
 const gutter = 14;
 const margin = 24;
+const canvasColor = '#f7f8fa';
 // eslint-disable-next-line no-control-regex -- XML 1.0 disallows these controls.
 const clean = (value: string) => value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff\p{Surrogate}]/gu, '\ufffd');
 const singleLine = (value: string) => clean(value.replace(/[\r\n\t]/g, ' '));
@@ -131,13 +132,13 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
       ...names.map(column => widthOf(column.name, labelSize) + gutter * 2)));
     const height = headerHeight + rowHeight * names.length;
     const rows = new Map<string, number>();
-    add(foreground, { kind: 'rect', x, y, width, height, fill: '#ffffff', stroke: '#94a7bd' });
-    add(foreground, { kind: 'rect', x, y, width, height: headerHeight, fill: '#193754' });
-    text(foreground, x + gutter, y + 24, title, 17, '#ffffff');
+    add(foreground, { kind: 'rect', x, y, width, height, fill: '#ffffff', stroke: '#c9d1df' });
+    add(foreground, { kind: 'rect', x: x + 1, y: y + 1, width: width - 2, height: headerHeight - 1, fill: '#f1f3f9' });
+    text(foreground, x + gutter, y + 24, title, 17, '#172033');
     names.forEach((column, index) => {
       const rowY = y + headerHeight + index * rowHeight;
-      if (index % 2 === 0) add(foreground, { kind: 'rect', x: x + 1, y: rowY, width: width - 2, height: rowHeight - 1, fill: '#edf4fa' });
-      text(foreground, x + gutter, rowY + 17, column.name, labelSize, '#182e43');
+      add(foreground, { kind: 'rect', x: x + 1, y: rowY, width: width - 2, height: 1, fill: '#e9edf3' });
+      text(foreground, x + gutter, rowY + 17, column.name, labelSize, '#172033');
       rows.set(column.id, rowY + rowHeight / 2);
     });
     const group = instances.get(table.id) ?? [];
@@ -152,8 +153,8 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
     const title = singleLine(group.name);
     const width = Math.max(group.size?.width ?? 480, widthOf(title, labelSize) + 2 * gutter);
     add(background, { kind: 'rect', x: group.x, y: group.y, width, height: group.size?.height ?? 250,
-      fill: '#eef5fc', stroke: '#9aacc3' });
-    text(background, group.x + gutter, group.y + 24, title, labelSize, '#345270');
+      fill: '#eef0fa', stroke: '#a9afd0' });
+    text(background, group.x + gutter, group.y + 24, title, labelSize, '#545780');
   }
   for (const note of options.notes ? view.notes : []) {
     if (ids && (!note.groupId || !groupIds.has(note.groupId))) continue;
@@ -161,8 +162,8 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
     const width = lines.reduce((wide, line) => Math.max(wide, widthOf(line, labelSize) + 2 * gutter), note.size?.width ?? 210);
     const lineHeight = 23;
     const height = Math.max(note.size?.height ?? 0, lines.length * lineHeight + 16);
-    add(foreground, { kind: 'rect', x: note.x, y: note.y, width, height, fill: '#fff4cb', stroke: '#c8a853' });
-    lines.forEach((line, index) => text(foreground, note.x + gutter, note.y + 24 + index * lineHeight, line, labelSize, '#54421d'));
+    add(foreground, { kind: 'rect', x: note.x, y: note.y, width, height, fill: '#fff6dc', stroke: '#e2c68c' });
+    lines.forEach((line, index) => text(foreground, note.x + gutter, note.y + 24 + index * lineHeight, line, labelSize, '#5a4726'));
   }
 
   let omitted = 0;
@@ -174,7 +175,7 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
       for (const target of from === to ? [source] : targets) {
         if (relations.length >= 100_000) throw new Error('관계선이 너무 많습니다. 뷰를 나누어 출력하세요.');
         const line = connection(source, target, fromColumn, toColumn);
-        for (const shape of edgeShapes(line, logical ? '#8059a0' : '#25658e', logical)) add(relations, shape);
+        for (const shape of edgeShapes(line, logical ? '#8e7fa7' : '#7d8aa2', logical)) add(relations, shape);
       }
     }
   }
@@ -207,7 +208,7 @@ function svg(scene: Scene, name: string, background: boolean, fontData: string) 
 <title>${xml(singleLine(name))}</title>
 <metadata>${xml(fontLicense)}</metadata>
 <style>@font-face{font-family:"${family}";src:url(data:font/woff2;base64,${fontData}) format("woff2")}</style>
-${background ? `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="#f8fafc"/>` : ''}
+${background ? `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="${canvasColor}"/>` : ''}
 <g font-family="${family}, sans-serif" xml:space="preserve">${markup}</g>
 </svg>`], { type: 'image/svg+xml;charset=utf-8' });
 }
@@ -291,7 +292,7 @@ export async function renderDiagramImage(document: ErdDocument, view: View, opti
     const context = canvas.getContext('2d');
     if (!context || context.isContextLost()) throw new Error('이미지 메모리가 부족합니다. 배율을 낮추거나 뷰를 나누세요.');
     if (options.background) {
-      context.fillStyle = '#f8fafc';
+      context.fillStyle = canvasColor;
       context.fillRect(0, 0, width, height);
     }
     context.scale(scale, scale);

@@ -7,6 +7,7 @@ import { createApi } from '../apps/api/src/app.js';
 import { createDatabase, migrate } from '../apps/api/src/database.js';
 import { exportDocument } from '../packages/test-fixtures/src/ddl-export.js';
 import { withBrowser } from './support/browser.js';
+import { openExport } from './support/editor-ui.js';
 import { withPostgres } from './support/postgres.js';
 import { freePort } from './support/tcp.js';
 
@@ -79,8 +80,8 @@ it('exports and opens pinned SVG and PNG with off-screen Korean nodes, and rejec
           });
         });
         expect(outside).toBe(true);
-        await button('이미지 내보내기').click();
-        expect(await image.evaluate(node => getComputedStyle(node).color)).toBe('rgb(30, 44, 64)');
+        await openExport(page, '이미지');
+        expect(await image.evaluate(node => getComputedStyle(node).color)).toBe('rgb(23, 32, 51)');
         await image.getByLabel('배경 포함').uncheck();
         await image.getByLabel('PNG 배율').selectOption('4');
 
@@ -161,7 +162,7 @@ it('exports and opens pinned SVG and PNG with off-screen Korean nodes, and rejec
             corner: [...context.getImageData(0, 0, 1, 1).data],
             header: [...context.getImageData(70, 96, 1, 1).data] };
         });
-        expect(pixels).toEqual({ width: rasterWidth, height: rasterHeight, corner: [0, 0, 0, 0], header: [25, 55, 84, 255] });
+        expect(pixels).toEqual({ width: rasterWidth, height: rasterHeight, corner: [0, 0, 0, 0], header: [241, 243, 249, 255] });
         await rendered.goto(review + 'diagram.svg');
         const visual = await rendered.locator('svg').evaluate(async element => {
           const svg = element as SVGSVGElement;
@@ -210,7 +211,7 @@ it('exports and opens pinned SVG and PNG with off-screen Korean nodes, and rejec
         expect((await page.request.put(path, { headers, data: { baseRevision: 2, mutationId: randomUUID(), document: edited } })).ok()).toBe(true);
         await page.reload();
         await page.getByText('서버 저장됨 · 리비전 3', { exact: true }).waitFor();
-        await button('이미지 내보내기').click();
+        await openExport(page, '이미지');
         await createImage();
         await image.getByRole('alert').getByText(/4052 × 4048px가 출력 한도를 초과/).waitFor();
         expect(await button('PNG 다운로드').count()).toBe(0);

@@ -55,13 +55,13 @@ export const sampleDocument: ErdDocument = {
     {
       id: 'overview', name: '주문 전체',
       instances: [
-        { id: 'overview-orders', tableId: 'orders', x: 200, y: 40, size: { width: 240, height: 150 }, groupId: 'sales' },
+        { id: 'overview-orders', tableId: 'orders', x: 260, y: 40, size: { width: 240, height: 150 }, groupId: 'sales' },
         { id: 'overview-users', tableId: 'users', x: 0, y: 40 },
-        { id: 'overview-items', tableId: 'items', x: 460, y: 40, groupId: 'sales' },
-        { id: 'overview-products', tableId: 'products', x: 460, y: 240 },
+        { id: 'overview-items', tableId: 'items', x: 560, y: 40, groupId: 'sales' },
+        { id: 'overview-products', tableId: 'products', x: 560, y: 300 },
       ],
-      groups: [{ id: 'sales', name: '주문 처리', x: 180, y: 20 }],
-      notes: [{ id: 'overview-note', text: '고객 ID와 주문 번호가 함께 주문을 식별합니다.', x: 200, y: 220, groupId: 'sales' }],
+      groups: [{ id: 'sales', name: '주문 처리', x: 240, y: 0, size: { width: 540, height: 255 } }],
+      notes: [{ id: 'overview-note', text: '고객 ID와 주문 번호가 함께 주문을 식별합니다.', x: 260, y: 180, groupId: 'sales' }],
     },
     {
       id: 'products-view', name: '상품 연결',

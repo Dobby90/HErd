@@ -5,6 +5,7 @@ import { createApi } from '../apps/api/src/app.js';
 import { createDatabase, migrate } from '../apps/api/src/database.js';
 import { exportDocument } from '../packages/test-fixtures/src/ddl-export.js';
 import { withBrowser } from './support/browser.js';
+import { openExport, renameDocument } from './support/editor-ui.js';
 import { withPostgres } from './support/postgres.js';
 import { freePort } from './support/tcp.js';
 
@@ -35,9 +36,8 @@ it('flushes editor saves, previews dependencies, and downloads UTF-8 DDL for a s
         const editor = '/?workspace=1&project=' + projectId + '&erd=' + fixture.id;
         await page.goto(editor);
         await page.getByRole('heading', { name: fixture.name, exact: true }).waitFor();
-        await page.getByLabel('문서 제목').fill('한글 내보내기');
-        await page.getByRole('button', { name: '제목 적용', exact: true }).click();
-        await page.getByRole('button', { name: 'DDL 내보내기', exact: true }).click();
+        await renameDocument(page, '한글 내보내기');
+        await openExport(page, 'DDL');
         const dialog = page.getByRole('dialog', { name: 'DDL 내보내기' });
         await dialog.getByLabel('내보낼 범위').selectOption('view');
         await dialog.getByRole('button', { name: '의존성 확인' }).click();
@@ -58,10 +58,9 @@ it('flushes editor saves, previews dependencies, and downloads UTF-8 DDL for a s
         expect(await readFile(await downloaded.path(), 'utf8')).toBe(sql);
 
         await dialog.getByRole('button', { name: '닫기', exact: true }).click();
-        await page.getByLabel('문서 제목').fill('새 편집본');
-        await page.getByRole('button', { name: '제목 적용', exact: true }).click();
+        await renameDocument(page, '새 편집본');
         await page.getByText('서버 저장됨 · 리비전 3', { exact: true }).waitFor();
-        await page.getByRole('button', { name: 'DDL 내보내기', exact: true }).click();
+        await openExport(page, 'DDL');
         await dialog.getByText(/현재 편집본과 원본 리비전이 다릅니다/).waitFor();
         await dialog.getByRole('button', { name: '닫기', exact: true }).click();
 
@@ -71,7 +70,7 @@ it('flushes editor saves, previews dependencies, and downloads UTF-8 DDL for a s
         await page.getByText('읽기 전용 · 리비전 3', { exact: true }).waitFor();
         await pool.query("UPDATE erds SET revision = 4, title = $2, payload = jsonb_set(payload, '{name}', to_jsonb($2::text)) WHERE id = $1",
           [fixture.id, '최신 서버 문서']);
-        await page.getByRole('button', { name: 'DDL 내보내기', exact: true }).click();
+        await openExport(page, 'DDL');
         await dialog.getByRole('button', { name: 'SQL 생성', exact: true }).click();
         await dialog.getByText(/작업 완료 · 원본 리비전 4/).waitFor();
         await dialog.getByRole('button', { name: '.sql 다운로드', exact: true }).waitFor();
@@ -80,7 +79,7 @@ it('flushes editor saves, previews dependencies, and downloads UTF-8 DDL for a s
         const blocked = structuredClone(fixture);
         blocked.catalog.indexes[1].predicate = { ...blocked.target, sql: 'TRUE' };
         await pool.query('UPDATE erds SET revision = 5, payload = $2 WHERE id = $1', [fixture.id, JSON.stringify(blocked)]);
-        await page.getByRole('button', { name: 'DDL 내보내기', exact: true }).click();
+        await openExport(page, 'DDL');
         await dialog.getByRole('button', { name: '다시 생성', exact: true }).click();
         await dialog.getByText(/작업 실패 · 원본 리비전 5/).waitFor();
         await dialog.getByText(/부분 인덱스와 식 인덱스/).waitFor();

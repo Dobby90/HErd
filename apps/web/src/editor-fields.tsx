@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { Catalog, ErdDocument, SqlExpression } from '@erd/model';
 
 export type Column = Catalog['columns'][number];
@@ -49,10 +50,10 @@ export function Modal({ children, title, close }: { children: ReactNode; title: 
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
-  return <dialog ref={dialog} aria-label={title} onCancel={event => { event.preventDefault(); close(); }}>
+  return createPortal(<dialog ref={dialog} aria-label={title} onCancel={event => { event.preventDefault(); close(); }}>
     <header><h2>{title}</h2><button type="button" aria-label="닫기" onClick={close}>×</button></header>
     {children}
-  </dialog>;
+  </dialog>, document.body);
 }
 
 export function columnsOf(document: ErdDocument, tableId: string) {

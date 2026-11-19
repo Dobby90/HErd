@@ -4,6 +4,7 @@ import { createApi } from '../apps/api/src/app.js';
 import { createDatabase, migrate } from '../apps/api/src/database.js';
 import { exportDocument } from '../packages/test-fixtures/src/ddl-export.js';
 import { withBrowser } from './support/browser.js';
+import { openExport, renameDocument } from './support/editor-ui.js';
 import { mockIdentityProvider } from './support/oidc.js';
 import { withPostgres } from './support/postgres.js';
 import { freePort } from './support/tcp.js';
@@ -88,16 +89,17 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         await button('이름순 그리드 재배치').click();
         const node = page.locator('.react-flow__node[data-id="a-placement"]');
         await expect.poll(() => node.getAttribute('style')).toContain('translate(0px, 0px)');
-        const title = page.getByLabel('문서 제목');
+        await button('문서 제목 변경').click();
+        const title = dialog('문서 제목 변경').getByLabel('문서 제목', { exact: true });
         await title.fill('편집한 모델');
         await title.press('Control+z');
         await title.press('Delete');
         expect(await dialog('스키마 삭제 영향').count()).toBe(0);
         expect(await node.getAttribute('style')).toContain('translate(0px, 0px)');
+        await dialog('문서 제목 변경').getByRole('button', { name: '입력 취소' }).click();
         await button('실행 취소').click();
         await expect.poll(() => node.getAttribute('style')).toContain('translate(-400px, 200px)');
-        await title.fill('편집한 모델');
-        await button('제목 적용').click();
+        await renameDocument(page, '편집한 모델');
         await heading('편집한 모델');
 
         await button('버전 이력').click();
@@ -157,8 +159,10 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         expect(await button('DDL로 모델 교체').count()).toBe(0);
         expect(await button('실행 취소').count()).toBe(0);
         expect(await button('이름순 그리드 재배치').count()).toBe(0);
+        await button('내보내기').click();
         await button('DDL 내보내기').waitFor();
-        await button('이미지 내보내기').click();
+        await button('내보내기').click();
+        await openExport(page, '이미지');
         await dialog('뷰 이미지 내보내기').getByRole('button', { name: '닫기' }).click();
         const canvasNode = page.locator('.react-flow__node[data-id="a-placement"]');
         const box = (await canvasNode.boundingBox())!;
@@ -174,6 +178,7 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         expect(await canvasNode.evaluate(node => (node as HTMLElement).style.transform)).toBe(position);
         expect(await dialog('스키마 삭제 영향').count()).toBe(0);
         await canvasNode.click();
+        await page.getByRole('tab', { name: '설정', exact: true }).click();
         expect(await page.getByRole('complementary', { name: '속성' }).getByLabel('물리명').isDisabled()).toBe(true);
         await button('버전 이력').click();
         expect(await button('수동 스냅샷 저장').count()).toBe(0);

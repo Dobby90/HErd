@@ -4,11 +4,13 @@ import { deserializeDocument, serializeDocument } from '@erd/model';
 import { sampleDocument } from '@erd/test-fixtures';
 import type { Draft } from '../apps/web/src/recovery.js';
 import { withBrowser } from './support/browser.js';
+import { renameDocument } from './support/editor-ui.js';
 
 const visible = (page: Page, text: string) => page.getByText(text, { exact: true }).first().waitFor();
 const action = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
 const nav = (page: Page) => page.getByRole('complementary', { name: '문서 탐색' });
 const inspector = (page: Page) => page.getByRole('complementary', { name: '속성' });
+const tab = (page: Page, name: string) => inspector(page).getByRole('tab', { name, exact: true });
 const tableOnCanvas = (page: Page, name: string) => page.locator('.canvas-table').filter({ has: page.getByText(name, { exact: true }) });
 
 async function addTable(page: Page, name: string) {
@@ -17,14 +19,57 @@ async function addTable(page: Page, name: string) {
   await action(page, '테이블 만들기').click();
 }
 async function addColumn(page: Page, name: string) {
+  await tab(page, '컬럼').click();
   await action(page, '컬럼 추가').click();
   await inspector(page).getByLabel('물리명', { exact: true }).fill(name);
   await action(page, '컬럼 만들기').click();
 }
-async function renameDocument(page: Page, name: string) {
-  await page.getByLabel('문서 제목', { exact: true }).fill(name);
-  await action(page, '제목 적용').click();
-}
+
+it('fits the view on first open and exposes table tabs and export with the keyboard', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    await page.goto(origin);
+    const canvas = page.locator('.canvas');
+    const tables = canvas.locator('.canvas-table');
+    await tables.first().waitFor();
+    await expect.poll(() => canvas.evaluate(element => {
+      const area = element.getBoundingClientRect();
+      return Array.from(element.querySelectorAll('.canvas-table')).every(table => {
+        const box = table.getBoundingClientRect();
+        return box.left >= area.left && box.right <= area.right && box.top >= area.top && box.bottom <= area.bottom;
+      });
+    })).toBe(true);
+
+    await nav(page).getByRole('button', { name: 'orders', exact: true }).click();
+    const columns = tab(page, '컬럼');
+    expect(await columns.getAttribute('aria-selected')).toBe('true');
+    await inspector(page).getByRole('tabpanel', { name: '컬럼' }).getByRole('button', { name: 'user_id' }).waitFor();
+    await expect.poll(() => canvas.locator('.fk-edge.related-edge').count()).toBe(2);
+    expect(await canvas.locator('.logical-edge.muted-edge').count()).toBe(1);
+    await columns.press('ArrowRight');
+    await inspector(page).getByRole('tabpanel', { name: '제약' }).getByRole('button', { name: '외래 키 추가' }).waitFor();
+
+    const exportMenu = action(page, '내보내기');
+    await exportMenu.press('Enter');
+    await page.keyboard.press('Tab');
+    const imageExport = action(page, '이미지 내보내기');
+    expect(await imageExport.evaluate(element => element === document.activeElement)).toBe(true);
+    await page.keyboard.press('Escape');
+    expect(await exportMenu.getAttribute('aria-expanded')).toBe('false');
+    expect(await exportMenu.evaluate(element => element === document.activeElement)).toBe(true);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const panes = page.getByRole('group', { name: '편집기 영역' });
+    await panes.getByRole('button', { name: '다이어그램' }).click();
+    await canvas.waitFor();
+    expect(await nav(page).count()).toBe(0);
+    await panes.getByRole('button', { name: '스키마' }).click();
+    await nav(page).getByRole('button', { name: 'users', exact: true }).click();
+    await inspector(page).getByRole('heading', { name: 'users', exact: true }).waitFor();
+    expect(await panes.getByRole('button', { name: '속성' }).getAttribute('aria-pressed')).toBe('true');
+    await tables.first().waitFor({ state: 'hidden' });
+  });
+});
 
 it('uses the normal editor to create a composite key and FK by dragging, then restores the committed views', async () => {
   await withBrowser(async (context, origin) => {
@@ -41,6 +86,7 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
     await addTable(page, 'parents');
     await addColumn(page, 'region');
     await addColumn(page, 'number');
+    await tab(page, '제약').click();
     await action(page, 'PK 추가').click();
     await inspector(page).getByLabel('물리명', { exact: true }).fill('parents_pk');
     for (const name of ['region', 'number']) {
@@ -82,8 +128,10 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
     await action(page, '다시 실행').click();
     await page.locator('.fk-edge').waitFor();
 
+    await action(page, '뷰 설정').click();
     await action(page, '뷰 복제').click();
     await nav(page).getByRole('button', { name: 'parents', exact: true }).click();
+    await tab(page, '설정').click();
     await inspector(page).getByLabel('물리명', { exact: true }).fill('parent_records');
     await action(page, '테이블 적용').click();
     await tableOnCanvas(page, 'parent_records').waitFor();
@@ -92,6 +140,7 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
     await page.locator('.fk-edge').waitFor();
     await action(page, '기본 뷰 복제').click();
     await nav(page).getByRole('button', { name: 'parent_records', exact: true }).click();
+    await tab(page, '설정').click();
     await action(page, '이 뷰에서 숨기기').click();
     await tableOnCanvas(page, 'parent_records').waitFor({ state: 'detached' });
     expect(await nav(page).getByRole('button', { name: 'parent_records', exact: true }).count()).toBe(1);
@@ -108,6 +157,7 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
 
     await action(page, '기본 뷰').click();
     await nav(page).getByRole('button', { name: 'parent_records', exact: true }).click();
+    await tab(page, '설정').click();
     await action(page, '스키마에서 실제 삭제').click();
     const impact = page.getByRole('dialog', { name: '스키마 삭제 영향' });
     await impact.getByText(/children_parent_fk/).waitFor();
@@ -358,6 +408,7 @@ it('commits schema form values and restores drafts with object-specific name dia
     await publicSection.getByRole('button', { name: '테이블 추가', exact: true }).click();
     await field('물리명').fill('parts');
     await action(page, '테이블 만들기').click();
+    await tab(page, '설정').click();
     await inspector(page).getByLabel('네임스페이스').selectOption({ label: 'inventory' });
     await field('논리명').fill('부품');
     await field('설명').fill('Part definitions');
@@ -379,6 +430,7 @@ it('commits schema form values and restores drafts with object-specific name dia
     await property('입력 취소').click();
     expect(await activeDraft(page)).toEqual(savedBeforeCancel);
 
+    await tab(page, '제약').click();
     await action(page, 'UNIQUE 추가').click();
     await field('물리명').fill('parts_sku_key');
     for (const name of ['sku', 'amount']) {
@@ -392,6 +444,7 @@ it('commits schema form values and restores drafts with object-specific name dia
     await field('CHECK SQL').fill('amount >= 0');
     await action(page, '제약 만들기').click();
     for (const unique of [false, true]) {
+      await tab(page, '인덱스').click();
       await action(page, 'INDEX 추가').click();
       await field('물리명').fill(unique ? 'parts_unique_idx' : 'parts_amount_idx');
       await field('고유 인덱스').setChecked(unique);
@@ -470,6 +523,7 @@ it('adds reciprocal and self foreign keys and edits an independent logical relat
     ]) {
       await nav(page).getByRole('button', { name: 'users', exact: true }).click();
       await addColumn(page, name.replace('_fk', '_id'));
+      await tab(page, '제약').click();
       await action(page, '외래 키 추가').click();
       const dialog = page.getByRole('dialog', { name: '외래 키 설정' });
       await dialog.getByLabel('물리명', { exact: true }).fill(name);
@@ -481,6 +535,7 @@ it('adds reciprocal and self foreign keys and edits an independent logical relat
     }
     await nav(page).getByRole('button', { name: 'products', exact: true }).click();
     await addColumn(page, 'owner_id');
+    await tab(page, '제약').click();
     await action(page, '외래 키 추가').click();
     const dialog = page.getByRole('dialog', { name: '외래 키 설정' });
     await dialog.getByLabel('물리명', { exact: true }).fill('products_owner_fk');
@@ -526,16 +581,20 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
     await action(page, '뷰 추가').click();
     await page.getByLabel('새 뷰 이름').fill('작업용');
     await action(page, '뷰 만들기').click();
-    await nav(page).getByLabel('뷰 이름', { exact: true }).fill('작업용 상세');
+    await action(page, '뷰 설정').click();
+    await page.getByRole('dialog', { name: '뷰 설정' }).getByLabel('뷰 이름', { exact: true }).fill('작업용 상세');
     await action(page, '뷰 이름 적용').click();
     await workspace.getByRole('heading', { name: '작업용 상세' }).waitFor();
     for (const name of ['users', 'orders']) {
       await nav(page).getByRole('button', { name, exact: true }).click();
+      await tab(page, '설정').click();
       await action(page, '현재 뷰에 배치').click();
     }
+    await action(page, '추가').click();
     await action(page, '그룹 추가').click();
     await inspector(page).getByLabel('그룹 이름').fill('배송 그룹');
     await action(page, '그룹 적용').click();
+    await action(page, '추가').click();
     await action(page, '메모 추가').click();
     const memo = '<img src="memo.png" alt="memo">';
     await inspector(page).getByLabel('메모 텍스트').fill(memo);
@@ -547,16 +606,34 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
     await workspace.getByLabel('이름 표시').selectOption('logical');
     await tableOnCanvas(page, '주문').waitFor();
     await nav(page).getByRole('button', { name: 'orders', exact: true }).click();
+    await tab(page, '설정').click();
     await inspector(page).getByLabel('컬럼 접기').check();
     await inspector(page).getByRole('combobox', { name: /^그룹/ }).selectOption({ label: '배송 그룹' });
     await action(page, '배치 적용').click();
     await expect.poll(() => tableOnCanvas(page, '주문').locator('.canvas-column').count()).toBe(0);
     await page.locator('.fk-edge').waitFor();
-    await page.locator('.react-flow__minimap').waitFor();
+    const map = page.locator('.react-flow__minimap');
+    const toggle = action(page, '미니맵');
+    expect(await map.count()).toBe(0);
+    await toggle.click();
+    await map.waitFor();
+    const canvasBox = await page.locator('.canvas').boundingBox();
+    const mapBox = await map.boundingBox();
+    expect(mapBox!.y).toBeGreaterThanOrEqual(canvasBox!.y + canvasBox!.height);
+    const viewport = page.locator('.react-flow__viewport');
+    const beforePan = await viewport.getAttribute('style');
+    await page.mouse.move(mapBox!.x + 40, mapBox!.y + 30);
+    await page.mouse.down();
+    await page.mouse.move(mapBox!.x + 70, mapBox!.y + 45, { steps: 5 });
+    await page.mouse.up();
+    await expect.poll(() => viewport.getAttribute('style')).not.toBe(beforePan);
+    await toggle.click();
+    await map.waitFor({ state: 'detached' });
 
     await visible(page, '브라우저 저장 완료');
     const original = deserializeDocument((await activeDraft(page)).serialized).views.find(view => view.name === '작업용 상세');
     if (!original) throw new Error('Missing the committed view.');
+    await action(page, '뷰 설정').click();
     await action(page, '뷰 복제').click();
     await visible(page, '브라우저 저장 완료');
     const copy = deserializeDocument((await activeDraft(page)).serialized).views.find(view => view.name === '작업용 상세 복제');
@@ -568,6 +645,7 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
     expect(copy.instances.map(item => item.tableId)).toEqual(original.instances.map(item => item.tableId));
     expect(copy.instances.find(item => item.tableId === 'orders')).toMatchObject({ groupId: copy.groups[0].id, collapsed: true });
 
+    await action(page, '뷰 설정').click();
     page.once('dialog', dialog => dialog.accept());
     await action(page, '뷰 삭제').click();
     await nav(page).getByRole('button', { name: '작업용 상세 복제', exact: true }).waitFor({ state: 'detached' });
@@ -610,6 +688,7 @@ it('restores a v1 recovery draft and preserves advanced data and indexed SQL whe
 
     await page.reload();
     await visible(page, '브라우저 복구 완료');
+    await nav(page).getByText('SQL 지원', { exact: true }).click();
     for (const feature of ['ENUM', 'SEQUENCE', 'IDENTITY']) await visible(page, feature + ' · 보존 전용');
     await visible(page, 'DDL 가져오기 · 서버 문서에서 지원');
     await visible(page, 'DDL 내보내기 · 서버 문서에서 지원');
@@ -618,6 +697,7 @@ it('restores a v1 recovery draft and preserves advanced data and indexed SQL whe
     await inspector(page).getByLabel('설명', { exact: true }).fill('편집한 설명');
     await action(page, '컬럼 적용').click();
     await visible(page, '브라우저 저장 완료');
+    await tab(page, '인덱스').click();
     await inspector(page).getByRole('button', { name: 'INDEX · products_name_idx', exact: true }).click();
     const sqlInput = inspector(page).getByRole('textbox', { name: '인덱스 SQL 식 1', exact: true });
     expect(await sqlInput.inputValue()).toBe(expression.sql.replace(/\r\n/g, '\n'));
