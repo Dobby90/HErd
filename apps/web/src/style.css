@@ -253,11 +253,12 @@ summary { cursor: pointer; }
 .object-icon { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); }
 .inspector-empty .object-icon { background: var(--hover); color: var(--subtle); }
 .inspector-object { display: flex; align-items: center; gap: .62rem; min-width: 0; padding: 0 .12rem .75rem; }
+.inspector-object > div { min-width: 0; }
 .inspector-object h3 { font-family: var(--mono); font-size: 1rem; font-weight: 680; }
 .inspector-object :is(h3, p) { overflow-wrap: anywhere; }
 .object-namespace { font-family: var(--mono); color: var(--muted); font-size: .72rem; }
-.inspector-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 3px; border-radius: 8px; background: var(--hover); }
-.inspector-tabs button { background: transparent; border-color: transparent; color: var(--muted); padding-inline: .15rem; min-height: 29px; font-size: .77rem; }
+.inspector-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(3.8rem, 1.2fr); gap: 2px; padding: 3px; border-radius: 8px; background: var(--hover); }
+.inspector-tabs button { background: transparent; border-color: transparent; color: var(--muted); padding-inline: .15rem; min-height: 32px; font-size: .77rem; white-space: nowrap; }
 .inspector-tabs button[aria-selected="true"] { background: var(--surface); border-color: var(--line); color: var(--accent-ink); box-shadow: 0 1px 2px var(--shadow); }
 .inspector-tab-body { display: grid; gap: .6rem; margin-top: .75rem; }
 .inspector-tab-body > button { justify-self: start; }
@@ -266,9 +267,12 @@ summary { cursor: pointer; }
 .inspector-list button > .ui-icon { color: var(--subtle); width: 14px; height: 14px; }
 .inspector-item-name { display: grid; flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.45; }
 .inspector-item-name small { color: var(--muted); font: .72rem var(--mono); }
-.inspector-add-actions { padding-top: .3rem; }
+.inspector-list-heading { justify-content: space-between; }
+.inspector-add-actions { gap: .25rem; }
+.inspector-add-actions button { padding-inline: .45rem; font-size: .77rem; }
 .inspector-back { align-self: start; justify-content: flex-start; text-align: left; color: var(--accent-ink); overflow-wrap: anywhere; max-width: 100%; }
 .inspector-section { display: grid; gap: .55rem; border-top: 1px solid var(--line); padding: .7rem 0; }
+.inspector-tab-body > .inspector-section:first-child { border-top: 0; padding-top: 0; }
 .inspector-section > button { justify-self: start; }
 .inspector-diagnostics { padding: .58rem .85rem; border-top: 1px solid var(--line); max-height: 33%; overflow: auto; color: var(--muted); font-size: .76rem; }
 .inspector-diagnostics p { display: flex; align-items: center; gap: .36rem; }
@@ -356,7 +360,7 @@ summary { cursor: pointer; }
 .canvas-text:hover:not(:disabled) { background: var(--hover); }
 .canvas-table-text, .canvas-name-text, .canvas-type-text { min-width: 0; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .canvas-table-text, .canvas-name-text { flex: 1; }
-.canvas-type-text { flex: 0 1 auto; max-width: 44%; color: var(--muted); font-size: .66rem; }
+.canvas-type-text { flex: 0 1 auto; max-width: min(44%, 8rem); color: var(--muted); font-size: .66rem; }
 .canvas-node-action, .canvas-column-grip { width: 20px; min-height: 20px; flex: none; padding: 0; color: var(--subtle); }
 .canvas-node-action.danger > .ui-icon, .react-flow__node:is(.selected, .active-table) > .canvas-table > strong .danger > .ui-icon { color: var(--danger); }
 .canvas-node-action .ui-icon, .canvas-column-grip .ui-icon { width: 12px; height: 12px; }
@@ -407,6 +411,9 @@ summary { cursor: pointer; }
 .canvas .react-flow__handle.route-handle { visibility: hidden; pointer-events: none; }
 .react-flow__node-groupBox { background: color-mix(in srgb, var(--accent-soft) 60%, transparent); color: var(--accent-ink); border: 1px dashed var(--logical-edge); border-radius: 9px; padding: .34rem .55rem; font-size: .83rem; }
 .react-flow__node-note { border: 1px solid var(--warning-line); border-radius: 7px; color: var(--warning-ink); background: var(--warning-bg); padding: .55rem; font-size: .82rem; }
+.canvas-annotation-action { position: absolute; inset-block-start: .28rem; inset-inline-end: .34rem; width: 24px; min-height: 24px; background: var(--surface); }
+.group-name { display: block; overflow-wrap: anywhere; }
+.react-flow__node:has(.canvas-annotation-action) > :is(.group-name, .note-text) { padding-inline-end: 1.45rem; }
 .note-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .react-flow__node:is(.selected, .active-table) > .canvas-table { border-color: var(--accent); box-shadow: 0 0 0 2px var(--selection), 0 3px 9px var(--shadow); }
 .react-flow__node:is(.selected, .active-table) > .canvas-table > strong { background: var(--accent-soft); color: var(--accent-ink); }

@@ -22,7 +22,7 @@ const dialects = new Map<string, EditorDialect>([[postgresqlEditor.metadata.id, 
 export const editorTargets = [...dialects.values()].flatMap(dialect => dialect.metadata.profiles.filter(profile => profile.status === 'certified')
   .map(profile => ({ dialectId: dialect.metadata.id, engineVersion: profile.version, name: dialect.metadata.name + ' ' + profile.version })));
 type Run = (command: DocumentCommand) => boolean;
-const tableTabs = { columns: '컬럼', constraints: '제약', indexes: '인덱스', settings: '설정' } as const;
+const tableTabs = { columns: '컬럼', constraints: '제약', indexes: '인덱스', settings: '이름·배치' } as const;
 type TableTab = keyof typeof tableTabs;
 const tabOrder = Object.keys(tableTabs) as TableTab[];
 const mobilePanes = { canvas: '다이어그램', schema: '스키마', properties: '속성' } as const;
@@ -87,6 +87,28 @@ function ViewSettings({ view, run, choose, close }: { view: View; run: Run; choo
         }
       }}>뷰 삭제</button>
     </div>
+  </Modal>;
+}
+
+function DeleteViewObject({ view, object, run, close, removed }: {
+  view: View; object: View['groups'][number] | View['notes'][number]; run: Run; close(): void; removed(): void;
+}) {
+  const group = 'name' in object ? object : undefined;
+  const action = group ? '그룹 삭제' : '메모 삭제';
+  return <Modal title={action} close={close}>
+    <section className="deletion-preview">
+      <p>{group ? `'${group.name}' 그룹을 삭제하면 포함된 테이블과 메모는 그룹에서 분리됩니다.` : '현재 뷰에서 이 메모를 삭제합니다.'}</p>
+      <div className="actions">
+        <button type="button" onClick={close}>취소</button>
+        <button type="button" className="danger" onClick={() => {
+          const next = group ? { ...view, groups: view.groups.filter(item => item.id !== group.id),
+            instances: view.instances.map(item => item.groupId === group.id ? { ...item, groupId: undefined } : item),
+            notes: view.notes.map(item => item.groupId === group.id ? { ...item, groupId: undefined } : item) }
+            : { ...view, notes: view.notes.filter(item => item.id !== object.id) };
+          if (run(putView(next))) { removed(); close(); }
+        }}>{action}</button>
+      </div>
+    </section>
   </Modal>;
 }
 
@@ -159,7 +181,7 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
       { ...item, text: field(form, 'text'), groupId: field(form, 'group') || undefined } : item) }))}>
       <label>메모 텍스트<textarea name="text" defaultValue={note.text} /></label><GroupField view={view} groupId={note.groupId} />
     </Form>
-    <button type="button" disabled={readOnly} onClick={() => { run(putView({ ...view, notes: view.notes.filter(item => item.id !== note.id) })); inspect(null); }}>메모 삭제</button>
+    {!readOnly && <button type="button" className="danger" onClick={() => remove(note.id)}><Icon name="trash" />메모 삭제</button>}
   </>;
   if (group && view) return <>
     <h3>그룹</h3>
@@ -169,12 +191,7 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
       <label>너비<input type="number" name="width" min="40" defaultValue={group.size?.width ?? 480} required /></label>
       <label>높이<input type="number" name="height" min="40" defaultValue={group.size?.height ?? 250} required /></label>
     </Form>
-    <button type="button" disabled={readOnly} onClick={() => {
-      run(putView({ ...view, groups: view.groups.filter(item => item.id !== group.id),
-        instances: view.instances.map(item => item.groupId === group.id ? { ...item, groupId: undefined } : item),
-        notes: view.notes.map(item => item.groupId === group.id ? { ...item, groupId: undefined } : item) }));
-      inspect(null);
-    }}>그룹 삭제</button>
+    {!readOnly && <button type="button" className="danger" onClick={() => remove(group.id)}><Icon name="trash" />그룹 삭제</button>}
   </>;
   if (relationship || selection.type === 'relationship') return <RelationshipForm key={JSON.stringify(relationship) ?? 'new'} document={document} relation={relationship} run={run} close={() => inspect(null)} />;
   if (namespace || selection.type === 'namespace') return <>
@@ -240,7 +257,7 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
     return <TableDetails key={table.id} name={label(table)} namespace={namespaceName} logicalName={table.logicalName}
       initialTab={selection.type === 'object' ? selection.tab ?? 'columns' : 'columns'} panels={{
       columns: <>
-        <div className="section-heading"><span className="muted">컬럼 {columns.length}개</span>
+        <div className="section-heading inspector-list-heading"><span className="muted">컬럼 {columns.length}개</span>
           {!readOnly && <button type="button" className="quiet accent" onClick={() => open({ type: 'column', tableId: table.id })}>
             <Icon name="plus" />컬럼 추가</button>}
         </div>
@@ -256,27 +273,33 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
         })}</ul>}
       </>,
       constraints: <>
-        {constraints.length ? <ul className="object-list inspector-list">{constraints.map(item =>
-          <li key={item.id}><button type="button" aria-label={`${item.kind.toUpperCase()} · ${label(item)}`} onClick={() => openObject(item.id)}>
-            <span className="inspector-item-name"><code>{label(item)}</code><small>{item.kind.toUpperCase()}</small></span><Icon name="right" />
-          </button></li>)}</ul> : <p className="muted">등록된 제약이 없습니다.</p>}
-        {!readOnly && <div className="actions inspector-add-actions">
+        {!readOnly && <div className="actions inspector-add-actions" role="group" aria-label="제약 추가">
           {(['pk', 'unique', 'check'] as const).map(type => <button key={type} type="button"
             onClick={() => open({ type, tableId: table.id })}>{type.toUpperCase()} 추가</button>)}
           <button type="button" disabled={!dialect} onClick={() => fk({ tableId: table.id })}>외래 키 추가</button>
         </div>}
+        {constraints.length ? <ul className="object-list inspector-list">{constraints.map(item =>
+          <li key={item.id}><button type="button" aria-label={`${item.kind.toUpperCase()} · ${label(item)}`} onClick={() => openObject(item.id)}>
+            <span className="inspector-item-name"><code>{label(item)}</code><small>{item.kind.toUpperCase()}</small></span><Icon name="right" />
+          </button></li>)}</ul> : <p className="muted">등록된 제약이 없습니다.</p>}
       </>,
       indexes: <>
+        <div className="section-heading inspector-list-heading"><span className="muted">인덱스 {indexes.length}개</span>
+          {!readOnly && <button type="button" className="quiet accent" onClick={() => open({ type: 'index', tableId: table.id })}>
+            <Icon name="plus" />인덱스 추가</button>}
+        </div>
         {indexes.length ? <ul className="object-list inspector-list">{indexes.map(item =>
           <li key={item.id}><button type="button" aria-label={`${item.unique ? 'UNIQUE INDEX' : 'INDEX'} · ${label(item)}`} onClick={() => openObject(item.id)}>
             <span className="inspector-item-name"><code>{label(item)}</code><small>{item.unique ? 'UNIQUE INDEX' : 'INDEX'}</small></span><Icon name="right" />
           </button></li>)}</ul> : <p className="muted">등록된 인덱스가 없습니다.</p>}
-        {!readOnly && <button type="button" onClick={() => open({ type: 'index', tableId: table.id })}>INDEX 추가</button>}
       </>,
       settings: <>
-        {settings}
-        {!readOnly && view && instance && <div className="inspector-section">
-          <h4>뷰 배치</h4>
+        <section className="inspector-section">
+          <h4>테이블 정보</h4>
+          {settings}
+        </section>
+        {!readOnly && view && instance && <section className="inspector-section">
+          <h4>현재 뷰 배치</h4>
           <Form key={JSON.stringify(instance)} button="배치 적용" submit={form => run(putView({
             ...view, instances: view.instances.map(item => item.id === instance.id ? {
               ...item, groupId: field(form, 'group') || undefined, collapsed: form.has('collapsed'),
@@ -287,13 +310,15 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
           <button type="button" onClick={() => {
             run({ kind: 'remove-instance', viewId: view.id, instanceId: instance.id });
             inspect({ type: 'object', id: table.id, tab: 'settings' });
-          }}>이 뷰에서 숨기기</button>
-        </div>}
+          }}>현재 뷰에서 제거</button>
+        </section>}
         {!readOnly && view && !view.instances.some(item => item.tableId === table.id) && <button type="button" onClick={() => {
           const item = placement(view, table.id);
           if (run(putView({ ...view, instances: [...view.instances, item] }))) inspect({ type: 'object', id: item.id, tab: 'settings' });
         }}>현재 뷰에 배치</button>}
-        {!readOnly && <button type="button" className="danger" onClick={() => remove(table.id)}>스키마에서 실제 삭제</button>}
+        {!readOnly && <section className="inspector-section">
+          <button type="button" className="danger" onClick={() => remove(table.id)}><Icon name="trash" />스키마에서 테이블 삭제</button>
+        </section>}
       </>,
     }} />;
   }
@@ -360,6 +385,8 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
   });
   const capability = dialect?.capabilities(document.target);
   const view = document.views.find(item => item.id === chosenView) ?? document.views[0];
+  const viewObjectToDelete = deletion ? view?.groups.find(item => item.id === deletion) ?? view?.notes.find(item => item.id === deletion) : undefined;
+  const removed = () => { inspect(null); setQuickEdit(undefined); setSearchFocus(undefined); };
   const canEdit = !readOnly;
   const canEditCanvas = canEdit && canvasMode === 'select';
   const canPlace = canEdit && capability?.table.edit === 'supported' && document.catalog.namespaces.length > 0;
@@ -690,12 +717,11 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
             </div>
           </div>
           <CanvasEditing.Provider value={{
-            activeId: selectedInstance?.id, edit: inline ? quickEdit : undefined, form: inline,
+            activeId: selectedInstance?.id ?? selectedId, edit: inline ? quickEdit : undefined, form: inline,
             change: canEditCanvas && !tool && dialect ? edit => {
               selectObject(edit.instanceId);
               setQuickEdit(edit);
             } : undefined,
-            attributes: canEditCanvas && !tool ? id => openProperties({ type: 'object', id }) : undefined,
             remove: canEditCanvas && !tool && !inline ? id => setDeletion(id) : undefined,
             link: canEditCanvas && tool?.kind === 'relation' ? chooseCanvasObject : undefined,
             reorder: canEditCanvas && !tool && !inline ? reorderColumn : undefined,
@@ -797,7 +823,8 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
       <RelationshipForm document={document} seed={logical} relation={'id' in logical ? logical : undefined}
         run={run} close={() => setLogical(undefined)} />
     </Modal>}
-    {deletion && canEdit && <DeleteSchema document={document} objectId={deletion} run={run} close={() => setDeletion('')}
-      removed={() => { inspect(null); setQuickEdit(undefined); setSearchFocus(undefined); }} />}
+    {deletion && canEdit && (view && viewObjectToDelete
+      ? <DeleteViewObject view={view} object={viewObjectToDelete} run={run} close={() => setDeletion('')} removed={removed} />
+      : <DeleteSchema document={document} objectId={deletion} run={run} close={() => setDeletion('')} removed={removed} />)}
   </main></EditorReadOnly.Provider>;
 }

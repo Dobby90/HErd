@@ -20,7 +20,6 @@ export const CanvasEditing = createContext<{
   edit?: QuickEdit;
   form?: ReactNode;
   change?(edit: QuickEdit): void;
-  attributes?(instanceId: string): void;
   remove?(id: string): void;
   link?(instanceId: string): void;
   reorder?(instanceId: string, columnId: string, targetId: string, after: boolean): void;

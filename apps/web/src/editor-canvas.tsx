@@ -8,6 +8,7 @@ import type { EditorDialect } from '@erd/sql-contract';
 import { ColumnBadges, Icon } from './editor-controls.js';
 import { secondaryName, viewColumnIds, viewLabel } from './editor-fields.js';
 import { CanvasEditing, dragType } from './canvas-edit.js';
+import { measureTableWidths } from './canvas-width.js';
 import { columnTypeLabel } from './schema-edits.js';
 
 type View = ErdDocument['views'][number];
@@ -59,11 +60,19 @@ function CanvasViewport({ focus, viewportOnly, empty }: { focus?: CanvasFocus; v
   return null;
 }
 
+function CanvasDeleteButton({ label, title = label, remove, annotation = false }: {
+  label: string; title?: string; remove(): void; annotation?: boolean;
+}) {
+  return <button type="button" className={'quiet danger canvas-node-action nodrag nopan' + (annotation ? ' canvas-annotation-action' : '')}
+    aria-label={label} title={title} onClick={event => { event.stopPropagation(); remove(); }}><Icon name="trash" /></button>;
+}
+
 const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
-  const { activeId, edit, form, change, attributes, remove, reorder, link } = useContext(CanvasEditing);
+  const { activeId, edit, form, change, remove, reorder, link } = useContext(CanvasEditing);
   const [dropTarget, setDropTarget] = useState('');
   const editing = edit?.instanceId === id ? edit : undefined;
   const active = activeId === id;
+  const tableId = data.tableId;
   const refresh = useUpdateNodeInternals();
   const handles = data.columns?.map(column =>
     [column.id, Boolean(column.logicalName), Boolean(column.description), Boolean(column.defaultSql)].join(':')).join('|');
@@ -85,13 +94,8 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
     <strong><Icon name="table" /><span className="canvas-names">{editText(data.label, 'table')}
       {data.logicalName && <span className="canvas-logical-name" title={data.logicalName}>{data.logicalName}</span>}
     </span>
-      {active && attributes && <button type="button" className="quiet canvas-node-action nodrag nopan" aria-label={data.label + ' 속성'}
-        title="테이블 속성" onClick={event => { event.stopPropagation(); attributes(id); }}><Icon name="settings" /></button>}
-      {active && remove && data.tableId && <button type="button" className="quiet danger canvas-node-action nodrag nopan" aria-label={data.label + ' 테이블 삭제'}
-        title="모든 뷰에서 테이블 삭제" onClick={event => {
-          event.stopPropagation();
-          if (data.tableId) remove(data.tableId);
-        }}><Icon name="trash" /></button>}
+      {active && remove && tableId && <CanvasDeleteButton label={data.label + ' 테이블 삭제'}
+        title="모든 뷰에서 테이블 삭제" remove={() => remove(tableId)} />}
       {link && <button type="button" className="quiet canvas-node-action nodrag nopan" aria-label={data.label + ' 관계 연결 대상 선택'}
         title="연결할 테이블로 선택" onClick={event => { event.stopPropagation(); link(id); }}><Icon name="link" /></button>}
     </strong>
@@ -154,12 +158,18 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
   </article>;
 });
 
-function GroupNode({ data }: NodeProps<CanvasNode>) {
-  return <strong>{data.label}</strong>;
+function GroupNode({ id, data }: NodeProps<CanvasNode>) {
+  const { activeId, remove } = useContext(CanvasEditing);
+  return <><strong className="group-name">{data.label}</strong>
+    {activeId === id && remove && <CanvasDeleteButton annotation label={data.label + ' 그룹 삭제'} title="그룹 삭제" remove={() => remove(id)} />}
+  </>;
 }
 
-function NoteNode({ data }: NodeProps<CanvasNode>) {
-  return <div className="note-text">{data.label}</div>;
+function NoteNode({ id, data }: NodeProps<CanvasNode>) {
+  const { activeId, remove } = useContext(CanvasEditing);
+  return <><div className="note-text">{data.label}</div>
+    {activeId === id && remove && <CanvasDeleteButton annotation label="메모 삭제" remove={() => remove(id)} />}
+  </>;
 }
 
 const nodeTypes = { table: TableNode, groupBox: GroupNode, note: NoteNode };
@@ -187,6 +197,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   const badges = columnBadgesById(document);
   const primary = primaryColumnsByTable(document);
   const foreignKeys = dialect?.inspectForeignKeys?.(document);
+  const measureWidth = measureTableWidths();
   const full = view.nameDisplay === 'both';
   const titleMode = full ? 'physical' : view.nameDisplay;
   const instances = new Map<string, CanvasNode[]>();
@@ -204,7 +215,6 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
     const table = tables.get(instance.tableId);
     if (!table) continue;
     const visible = viewColumnIds(table, instance);
-    const width = instance.size?.width ?? 195;
     const label = viewLabel(table, titleMode);
     const logicalName = secondaryName(table, view.nameDisplay);
     const description = full ? table.description : undefined;
@@ -214,6 +224,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
         logicalName: secondaryName(column, view.nameDisplay), description: full ? column.description : undefined,
         defaultSql: full ? column.default?.sql : undefined }] : [];
     });
+    const width = instance.size?.width ?? measureWidth(label, logicalName, rows);
     const node: CanvasNode = {
       id: instance.id, type: 'table', position: { x: instance.x, y: instance.y },
       style: { width }, zIndex: 2,
@@ -302,6 +313,13 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
   const onSelection = useCallback(({ nodes }: OnSelectionChangeParams) => {
     selectInstances(nodes.filter(node => node.type === 'table').map(node => node.id));
   }, [selectInstances]);
+  useEffect(() => {
+    // Large views also need the projected widths of tables outside the viewport.
+    for (const node of projected.nodes) {
+      if (node.type !== 'table') continue;
+      layoutSizes.set(node.id, { width: Number(node.style?.width), height: layoutSizes.get(node.id)?.height ?? 0 });
+    }
+  }, [layoutSizes, projected.nodes]);
   useEffect(() => setNodes(previous => {
     const selected = new Set(previous.filter(node => node.selected).map(node => node.id));
     return projected.nodes.map(node => {

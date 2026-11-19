@@ -81,6 +81,105 @@ async function addColumn(page: Page, name: string) {
   await action(page, '컬럼 만들기').click();
 }
 
+it('fits visible names, reuses canvas widths for arrangement, and keeps inspector actions accessible', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    const document = structuredClone(sampleDocument);
+    const longTable = 'customer_subscription_notification_settings';
+    const longColumn = 'external_customer_subscription_reference_id';
+    document.catalog.tables[0].physicalName = longTable;
+    document.catalog.tables[1].physicalName = 'orders_with_a_saved_custom_width';
+    document.catalog.columns.find(column => column.id === 'product-name')!.physicalName = longColumn;
+    await openEditor(page, origin, document);
+    const users = page.locator('[data-id="overview-users"] .canvas-table');
+    const products = page.locator('[data-id="overview-products"] .canvas-table');
+    const orders = page.locator('[data-id="overview-orders"] .canvas-table');
+    const width = (card: typeof users) => card.evaluate(element => (element as HTMLElement).offsetWidth);
+    const fits = (field: typeof users) => field.evaluate(element => element.scrollWidth <= element.clientWidth);
+    expect(await width(users)).toBeGreaterThan(195);
+    expect(await width(products)).toBeGreaterThan(195);
+    expect(await width(orders)).toBe(240);
+    expect(await fits(users.locator('.canvas-table-text'))).toBe(true);
+    expect(await fits(products.getByRole('button', { name: longColumn + ' 이름 편집' }))).toBe(true);
+
+    await action(page, '이름순 그리드 재배치').click();
+    await waitSaved(page);
+    const placements = (await savedDocument(page)).document.views[0].instances;
+    const customer = placements.find(item => item.id === 'overview-users')!;
+    const product = placements.find(item => item.id === 'overview-products')!;
+    expect(product.x - customer.x).toBeGreaterThanOrEqual(await width(users) + 60);
+
+    await action(page, '전체 보기').click();
+    await users.locator(':scope > strong > svg').first().click();
+    await users.getByRole('button', { name: longTable + ' 테이블 삭제' }).waitFor();
+    expect(await users.getByRole('button', { name: longTable + ' 속성' }).count()).toBe(0);
+    await inspector(page).getByRole('heading', { name: longTable, exact: true }).waitFor();
+    await tab(page, '제약').click();
+    const constraintAdd = await inspector(page).getByRole('group', { name: '제약 추가' }).boundingBox();
+    const constraintList = await inspector(page).getByRole('button', { name: 'PK · users_pkey' }).boundingBox();
+    expect(constraintAdd!.y).toBeLessThan(constraintList!.y);
+    await tab(page, '인덱스').click();
+    await inspector(page).getByRole('button', { name: '인덱스 추가' }).waitFor();
+    await tab(page, '이름·배치').click();
+    await inspector(page).getByRole('heading', { name: '현재 뷰 배치' }).waitFor();
+    await inspector(page).getByRole('button', { name: '현재 뷰에서 제거' }).waitFor();
+    await inspector(page).getByLabel('물리명', { exact: true }).fill('customers');
+    await inspector(page).getByRole('button', { name: '테이블 적용' }).click();
+    await expect.poll(() => width(users)).toBe(195);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const panes = page.getByRole('group', { name: '편집기 영역' });
+    await panes.getByRole('button', { name: '속성' }).click();
+    await inspector(page).getByRole('heading', { name: 'customers', exact: true }).waitFor();
+    await tab(page, '이름·배치').waitFor();
+  });
+}, 60_000);
+
+it('deletes selected canvas notes and groups with confirmation and keeps grouped objects', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    await openEditor(page, origin);
+    const group = page.locator('[data-id="sales"]');
+    const note = page.locator('[data-id="overview-note"]');
+    const deleteGroup = group.getByRole('button', { name: '주문 처리 그룹 삭제' });
+    const deleteNote = note.getByRole('button', { name: '메모 삭제' });
+    expect(await deleteGroup.count()).toBe(0);
+    expect(await deleteNote.count()).toBe(0);
+    await group.locator('.group-name').click();
+    await deleteGroup.click();
+    const confirmGroup = page.getByRole('dialog', { name: '그룹 삭제' });
+    await confirmGroup.getByText(/테이블과 메모는 그룹에서 분리/).waitFor();
+    await confirmGroup.getByRole('button', { name: '그룹 삭제' }).click();
+    await group.waitFor({ state: 'detached' });
+    await note.waitFor();
+    await waitSaved(page);
+    const ungrouped = (await savedDocument(page)).document.views[0];
+    expect(ungrouped.groups).toEqual([]);
+    expect(ungrouped.instances).toHaveLength(sampleDocument.views[0].instances.length);
+    expect(ungrouped.instances.every(instance => !instance.groupId)).toBe(true);
+    expect(ungrouped.notes).toMatchObject([{ id: 'overview-note' }]);
+    expect(ungrouped.notes[0].groupId).toBeUndefined();
+
+    await action(page, '실행 취소').click();
+    await group.waitFor();
+    await note.locator('.note-text').click();
+    await deleteNote.click();
+    const confirmNote = page.getByRole('dialog', { name: '메모 삭제' });
+    await confirmNote.getByRole('button', { name: '취소' }).click();
+    await note.waitFor();
+    await deleteNote.click();
+    await confirmNote.getByRole('button', { name: '메모 삭제' }).click();
+    await note.waitFor({ state: 'detached' });
+    await waitSaved(page);
+    const withoutNote = (await savedDocument(page)).document.views[0];
+    expect(withoutNote.notes).toEqual([]);
+    expect(withoutNote.groups).toEqual(sampleDocument.views[0].groups);
+    expect(withoutNote.instances).toEqual(sampleDocument.views[0].instances);
+  });
+}, 60_000);
+
 it('fits the view on first open and exposes table tabs and export with the keyboard', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
@@ -183,7 +282,7 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
     await action(page, '뷰 설정').click();
     await action(page, '뷰 복제').click();
     await nav(page).getByRole('button', { name: 'parents', exact: true }).click();
-    await tab(page, '설정').click();
+    await tab(page, '이름·배치').click();
     await inspector(page).getByLabel('물리명', { exact: true }).fill('parent_records');
     await action(page, '테이블 적용').click();
     await tableOnCanvas(page, 'parent_records').waitFor();
@@ -192,8 +291,8 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
     await page.locator('.fk-edge').waitFor();
     await action(page, '기본 뷰 복제').click();
     await nav(page).getByRole('button', { name: 'parent_records', exact: true }).click();
-    await tab(page, '설정').click();
-    await action(page, '이 뷰에서 숨기기').click();
+    await tab(page, '이름·배치').click();
+    await action(page, '현재 뷰에서 제거').click();
     await tableOnCanvas(page, 'parent_records').waitFor({ state: 'detached' });
     expect(await nav(page).getByRole('button', { name: 'parent_records', exact: true }).count()).toBe(1);
     await action(page, '기본 뷰').click();
@@ -209,8 +308,8 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
 
     await action(page, '기본 뷰').click();
     await nav(page).getByRole('button', { name: 'parent_records', exact: true }).click();
-    await tab(page, '설정').click();
-    await action(page, '스키마에서 실제 삭제').click();
+    await tab(page, '이름·배치').click();
+    await action(page, '스키마에서 테이블 삭제').click();
     const impact = page.getByRole('dialog', { name: '스키마 삭제 영향' });
     await impact.getByText(/children_parent_fk/).waitFor();
     await action(page, '실제 삭제 확인').click();
@@ -293,7 +392,7 @@ it('commits schema form values and reloads server documents with object-specific
     await publicSection.getByRole('button', { name: '테이블 추가', exact: true }).click();
     await field('물리명').fill('parts');
     await action(page, '테이블 만들기').click();
-    await tab(page, '설정').click();
+    await tab(page, '이름·배치').click();
     await inspector(page).getByLabel('네임스페이스').selectOption({ label: 'inventory' });
     await field('논리명').fill('부품');
     await field('설명').fill('Part definitions');
@@ -330,7 +429,7 @@ it('commits schema form values and reloads server documents with object-specific
     await action(page, '제약 만들기').click();
     for (const unique of [false, true]) {
       await tab(page, '인덱스').click();
-      await action(page, 'INDEX 추가').click();
+      await action(page, '인덱스 추가').click();
       await field('물리명').fill(unique ? 'parts_unique_idx' : 'parts_amount_idx');
       await field('고유 인덱스').setChecked(unique);
       for (const name of unique ? ['amount', 'sku'] : ['amount']) {
@@ -469,7 +568,7 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
     await workspace.getByRole('heading', { name: '작업용 상세' }).waitFor();
     for (const name of ['users', 'orders']) {
       await nav(page).getByRole('button', { name, exact: true }).click();
-      await tab(page, '설정').click();
+      await tab(page, '이름·배치').click();
       await action(page, '현재 뷰에 배치').click();
     }
     await action(page, '추가').click();
@@ -488,7 +587,7 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
     await workspace.getByLabel('이름 표시').selectOption('logical');
     await tableOnCanvas(page, '주문').waitFor();
     await nav(page).getByRole('button', { name: 'orders', exact: true }).click();
-    await tab(page, '설정').click();
+    await tab(page, '이름·배치').click();
     await inspector(page).getByLabel('컬럼 접기').check();
     await inspector(page).getByRole('combobox', { name: /^그룹/ }).selectOption({ label: '배송 그룹' });
     await action(page, '배치 적용').click();

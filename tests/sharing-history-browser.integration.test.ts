@@ -251,7 +251,7 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         expect(await canvasNode.evaluate(node => (node as HTMLElement).style.transform)).toBe(position);
         expect(await dialog('스키마 삭제 영향').count()).toBe(0);
         await canvasNode.click();
-        await page.getByRole('tab', { name: '설정', exact: true }).click();
+        await page.getByRole('tab', { name: '이름·배치', exact: true }).click();
         expect(await page.getByRole('complementary', { name: '속성' }).getByLabel('물리명').isDisabled()).toBe(true);
         await button('버전 이력').click();
         expect(await button('수동 스냅샷 저장').count()).toBe(0);
