@@ -151,6 +151,9 @@ CREATE VIEW skip_me AS SELECT * FROM "최신 문서";`;
         expect(appended.views[1].instances).toHaveLength(destination.instances.length + 2);
         expect((await pool.query("SELECT description FROM erd_revisions WHERE erd_id = $1 AND source_revision = 5", [erdId])).rows)
           .toContainEqual({ description: 'DDL 테이블 추가 전' });
+        const notice = page.getByText('추가한 테이블을 리비전 6에 저장했습니다.', { exact: true });
+        await notice.waitFor();
+        await notice.waitFor({ state: 'hidden', timeout: 5000 });
         await button('ERD 목록').click();
         await page.locator('.thumbnail-box').first().waitFor();
         const thumbnail = await page.request.get('/api/erds/' + erdId + '/thumbnail');

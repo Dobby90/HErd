@@ -70,10 +70,11 @@ const index = tableMember.extend({
 });
 const position = z.object({ x: z.number(), y: z.number() });
 const size = z.object({ width: z.number().positive(), height: z.number().positive() });
+export const viewNameDisplaySchema = z.enum(['physical', 'logical', 'both']);
 const view = z.object({
   id,
   name: id,
-  nameDisplay: z.enum(['physical', 'logical']).optional(),
+  nameDisplay: viewNameDisplaySchema.optional(),
   instances: z.array(position.extend({
     id, tableId: id, collapsed: z.boolean().optional(), size: size.optional(), visibleColumnIds: z.array(id).optional(), groupId: id.optional(),
   })),

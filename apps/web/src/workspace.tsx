@@ -153,7 +153,7 @@ export function Workspace() {
   const [epoch, reload] = useState(0);
   const [problem, setProblem] = useState('');
   const [denied, setDenied] = useState<string>();
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState<{ text: string; transient?: boolean }>();
   const [busy, setBusy] = useState(false);
   const running = useRef(false);
   const [loginPrompt, setLoginPrompt] = useState(false);
@@ -165,6 +165,13 @@ export function Workspace() {
   const documentId = location.documentId;
   const owner = identity?.user?.id;
   const project = projectView?.project.id === projectId ? projectView?.project : undefined;
+  const noticeVisible = Boolean(owner && project && open && open.id === documentId && !problem);
+
+  useEffect(() => {
+    if (!notice?.transient || !noticeVisible) return;
+    const timer = window.setTimeout(() => setNotice(current => current === notice ? undefined : current), 3500);
+    return () => window.clearTimeout(timer);
+  }, [notice, noticeVisible]);
 
   function go(next: Location) {
     const query = new URLSearchParams({ workspace: '1' });
@@ -176,7 +183,7 @@ export function Workspace() {
     setPreview(undefined);
     setApplied(undefined);
     setDialog(undefined);
-    setNotice('');
+    setNotice(undefined);
     setQuery('');
     setProblem('');
     setDenied(undefined);
@@ -223,6 +230,7 @@ export function Workspace() {
       setApplied(undefined);
       setDialog(undefined);
       setProblem('');
+      setNotice(undefined);
       setDenied(undefined);
       setQuery('');
     };
@@ -307,7 +315,7 @@ export function Workspace() {
         if (!active || currentLocation.current.projectId !== projectId || currentIdentity.current?.user?.id !== owner || current.role === project?.role) return;
         clearEditors();
         setProjectView(previous => previous && previous.project.id === projectId ? { ...previous, project: current } : previous);
-        setNotice(current.role === 'viewer' ? '편집 권한이 변경되어 읽기 전용으로 열었습니다.' : '프로젝트 역할이 변경되었습니다.');
+        setNotice({ text: current.role === 'viewer' ? '편집 권한이 변경되어 읽기 전용으로 열었습니다.' : '프로젝트 역할이 변경되었습니다.' });
         refresh();
       } catch (error) {
         if (!active || currentLocation.current.projectId !== projectId || currentIdentity.current?.user?.id !== owner) return;
@@ -315,7 +323,7 @@ export function Workspace() {
           clearEditors();
           setProjectView(undefined);
           setProjects(null);
-          setNotice('');
+          setNotice(undefined);
           setProblem('이 프로젝트에 대한 접근 권한이 회수되었거나 프로젝트가 삭제되었습니다.');
           setDenied(projectId);
         } else if (error instanceof ApiFailure && error.status === 401) {
@@ -410,10 +418,10 @@ export function Workspace() {
       setOpen(undefined);
       setPreview(undefined);
       setApplied(result);
-      setNotice(status);
+      setNotice({ text: status, transient: Boolean(result) });
       const reopen = (cleaned: boolean) => {
         if (currentIdentity.current?.user?.id !== owner || currentLocation.current.documentId !== open.id) return;
-        if (!cleaned) setNotice(status + ' 브라우저 복구본을 정리하지 못했습니다.');
+        if (!cleaned) setNotice({ text: status + ' 브라우저 복구본을 정리하지 못했습니다.' });
         refresh();
       };
       void open.editor.discard().then(() => reopen(true), () => reopen(false));
@@ -459,7 +467,10 @@ export function Workspace() {
           })}
           discard={discard} logIn={() => setLoginPrompt(true)} />}
       {problem && <p className="workspace-notice" role="alert">{problem}</p>}
-      {!problem && notice && <p className="workspace-notice" role="status">{notice}</p>}
+      {!problem && notice && <div className="workspace-notice">
+        <p role="status">{notice.text}</p>
+        <button type="button" className="quiet icon-button" aria-label="알림 닫기" onClick={() => setNotice(undefined)}><Icon name="close" /></button>
+      </div>}
       {loginPrompt && <Modal title="다시 로그인" close={() => setLoginPrompt(false)}>{reauth}</Modal>}
     </>;
   }

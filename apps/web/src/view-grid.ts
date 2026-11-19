@@ -5,6 +5,9 @@ import type { View } from './editor-fields.js';
 
 export function arrangeView(document: ErdDocument, view: View, measured: Readonly<LayoutSizes>): View {
   const tables = new Map(document.catalog.tables.map(table => [table.id, table]));
+  const columnsById = new Map(document.catalog.columns.map(column => [column.id, column]));
+  const full = view.nameDisplay === 'both';
+  const names = full ? 'physical' : view.nameDisplay;
   const instances = new Map<string, View['instances']>();
   for (const instance of view.instances) {
     const key = instance.groupId ?? '';
@@ -16,8 +19,8 @@ export function arrangeView(document: ErdDocument, view: View, measured: Readonl
   function pack(items: View['instances'], left: number, top: number) {
     const ordered = [...items].sort((a, b) => {
       const first = tables.get(a.tableId), second = tables.get(b.tableId);
-      return viewLabel(first ?? { physicalName: '' }, view.nameDisplay)
-        .localeCompare(viewLabel(second ?? { physicalName: '' }, view.nameDisplay)) ||
+      return viewLabel(first ?? { physicalName: '' }, names)
+        .localeCompare(viewLabel(second ?? { physicalName: '' }, names)) ||
         a.x - b.x || a.y - b.y || a.id.localeCompare(b.id);
     });
     const width = items.reduce((width, item) => Math.max(width, measured.get(item.id)?.width ?? 0, item.size?.width ?? 0), 195);
@@ -27,8 +30,13 @@ export function arrangeView(document: ErdDocument, view: View, measured: Readonl
       ordered.slice(row, row + 4).forEach((item, column) => {
         positions.set(item.id, { x: left + column * (width + 60), y });
         const table = tables.get(item.tableId);
+        const visible = table ? viewColumnIds(table, item) : [];
+        const extra = full ? visible.reduce((height, id) => {
+          const column = columnsById.get(id);
+          return height + (column?.logicalName ? 15 : 0) + (column?.description ? 16 : 0) + (column?.default ? 16 : 0);
+        }, (table?.logicalName ? 15 : 0) + (table?.description ? 22 : 0)) : 0;
         height = Math.max(height, measured.get(item.id)?.height ?? 0, item.size?.height ?? 0,
-          42 + 28 * (table ? viewColumnIds(table, item).length : 0));
+          42 + 28 * visible.length + extra);
       });
       y += height + 60;
     }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Catalog, DocumentCommand, ErdDocument, ForeignKey } from '@erd/model';
-import { deletionImpact, isIdentifyingForeignKey, primaryColumnsByTable } from '@erd/model';
+import { deletionImpact, documentExpressions, isIdentifyingForeignKey, primaryColumnsByTable } from '@erd/model';
 import { Icon } from './editor-controls.js';
 import type { EditorDialect } from '@erd/sql-contract';
 import { columnsOf, field, Form, id, label, Modal, moveItem, named, NameFields, OrderedColumns, OrderedItems, sqlExpression } from './editor-fields.js';
@@ -18,23 +18,80 @@ export type FkDialog = {
   existing?: ForeignKey; mode?: PhysicalRelation;
 };
 
-export function DeleteSchema({ document, objectId, run, close }: { document: ErdDocument; objectId: string; run: Run; close(): void }) {
+export function DeleteSchema({ document, objectId, run, close, removed }: {
+  document: ErdDocument; objectId: string; run: Run; close(): void; removed(): void;
+}) {
   const impact = deletionImpact(document, objectId);
   if (!impact) return null;
-  const objects = new Map(Object.values(document.catalog).flat().map(item => [item.id, label(item)]));
-  for (const item of document.relationships) objects.set(item.id, item.name);
-  const names = (ids: Iterable<string>) => [...ids].map(id => (objects.get(id) ? objects.get(id) + ' (' + id + ')' : id)).join(', ');
-  const viewNames = document.views.filter(view => impact.views.has(view.id)).map(view => view.name).join(', ');
+  const { catalog } = document;
+  const names = new Map(catalog.namespaces.map(item => [item.id, label(item)]));
+  for (const item of [...catalog.tables, ...catalog.enums, ...catalog.sequences]) {
+    names.set(item.id, [names.get(item.namespaceId), label(item)].filter(Boolean).join('.'));
+  }
+  for (const item of [...catalog.columns, ...catalog.constraints, ...catalog.indexes]) {
+    names.set(item.id, [names.get(item.tableId), label(item)].filter(Boolean).join('.'));
+  }
+  for (const item of document.relationships) names.set(item.id, item.name);
+  const table = catalog.tables.find(item => item.id === objectId);
+  const column = catalog.columns.find(item => item.id === objectId);
+  const owner = table?.id ?? column?.tableId;
+  const affected = (items: { id: string }[]) => items.filter(item => item.id !== objectId && impact.removed.has(item.id));
+  const crossTable = affected(catalog.constraints.filter(key => key.kind === 'fk' && Boolean(owner) && key.tableId !== owner));
+  const crossIds = new Set(crossTable.map(item => item.id));
+  const groups = [
+    { title: '다른 테이블의 외래 키', items: crossTable, open: true },
+    { title: '컬럼', items: affected(catalog.columns) },
+    { title: '키·제약', items: affected(catalog.constraints.filter(key => !crossIds.has(key.id))) },
+    { title: '인덱스', items: affected(catalog.indexes) },
+    { title: '논리 관계', items: affected(document.relationships) },
+  ];
+  const blocked = impact.blockedBy.length > 0;
+  const expressions = documentExpressions(document);
+  const dependencies = new Map<string, string>();
+  if (blocked) {
+    const ids = new Set(impact.blockedBy);
+    for (const { ownerId, expression } of expressions) {
+      if (!ids.has(ownerId)) continue;
+      if (expression.references?.some(id => impact.removed.has(id))) dependencies.set(ownerId, 'SQL 식이 삭제 대상을 참조합니다.');
+      else if (!dependencies.has(ownerId)) dependencies.set(ownerId, 'SQL 식의 참조 범위를 확인해야 합니다.');
+    }
+  }
+  const affectedViews = document.views.filter(view => impact.views.has(view.id));
   return <Modal title="스키마 삭제 영향" close={close}>
-    <dl>
-      <dt>삭제되는 객체 및 배치</dt><dd>{names(impact.removed)}</dd>
-      {viewNames && <><dt>영향받는 뷰</dt><dd>{viewNames}</dd></>}
-      {impact.detachedSequences.length > 0 && <><dt>소유 참조를 해제할 시퀀스</dt><dd>{names(impact.detachedSequences)}</dd></>}
-      {impact.blockedBy.length > 0 && <><dt>먼저 확인할 종속 객체 또는 SQL 식</dt><dd role="alert">{names(impact.blockedBy)}</dd></>}
-    </dl>
-    <button type="button" disabled={impact.blockedBy.length > 0} onClick={() => {
-      if (run({ kind: 'remove-schema-object', objectId })) close();
-    }}>실제 삭제 확인</button>
+    <section className="deletion-preview">
+      <div className="deletion-target"><Icon name="trash" /><div>
+        <h3>{names.get(objectId) ?? '선택한 스키마 객체'}</h3>
+        <p>{table ? '테이블 정의와 모든 뷰의 배치를 삭제합니다.' : column ? '컬럼 정의와 연결된 스키마 객체를 삭제합니다.' : '선택한 스키마 객체를 삭제합니다.'}</p>
+      </div></div>
+      {blocked && <div className="deletion-blocked" role="alert">
+        <h3>먼저 확인할 의존 항목 {impact.blockedBy.length}개</h3>
+        <ul>{impact.blockedBy.map(id => <li key={id}>
+          <strong>{names.get(id) ?? '스키마 객체'}</strong>
+          <span>{dependencies.get(id) ?? '이 스키마에 속한 객체입니다.'}</span>
+        </li>)}</ul>
+      </div>}
+      {affectedViews.length > 0 && <div className="deletion-views">
+        <h3>영향받는 뷰 {affectedViews.length}개</h3>
+        <ul>{affectedViews.map(view => {
+          const count = view.instances.filter(item => impact.removed.has(item.id)).length;
+          return <li key={view.id}>{view.name}{Boolean(count) && <span className="muted">배치 {count}개</span>}</li>;
+        })}</ul>
+      </div>}
+      {groups.filter(group => group.items.length > 0).map(group => <details key={group.title} open={group.open}>
+        <summary>{group.title} {group.items.length}개 삭제</summary>
+        <ul>{group.items.map(item => <li key={item.id}>{names.get(item.id)}</li>)}</ul>
+      </details>)}
+      {impact.detachedSequences.length > 0 && <details>
+        <summary>시퀀스 소유 연결 {impact.detachedSequences.length}개 해제</summary>
+        <ul>{impact.detachedSequences.map(id => <li key={id}>{names.get(id)}</li>)}</ul>
+      </details>}
+      <div className="actions deletion-actions">
+        <button type="button" autoFocus onClick={close}>취소</button>
+        <button type="button" className="destructive" aria-label="실제 삭제 확인" disabled={blocked} onClick={() => {
+          if (run({ kind: 'remove-schema-object', objectId })) { removed(); close(); }
+        }}>삭제하기</button>
+      </div>
+    </section>
   </Modal>;
 }
 

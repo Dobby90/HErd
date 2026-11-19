@@ -10,8 +10,17 @@ export type Named = { physicalName: string; logicalName?: string; description?: 
 export const id = () => crypto.randomUUID();
 export const label = (value: Named) => value.physicalName || '(이름 없음)';
 export const field = (form: FormData, key: string) => String(form.get(key) ?? '');
-export const viewLabel = (value: Named, mode: View['nameDisplay']) =>
-  (mode === 'logical' && value.logicalName) || label(value);
+export const secondaryName = (value: Named, mode: View['nameDisplay']) =>
+  mode === 'both' && value.logicalName !== value.physicalName ? value.logicalName : undefined;
+export function viewLabel(value: Named, mode: View['nameDisplay']) {
+  const secondary = secondaryName(value, mode);
+  if (secondary) return label(value) + ' · ' + secondary;
+  return (mode === 'logical' && value.logicalName) || label(value);
+}
+
+export function ViewNameOptions() {
+  return <><option value="physical">물리명</option><option value="logical">논리명</option><option value="both">전체 보기</option></>;
+}
 export const viewColumnIds = (table: Table, instance: View['instances'][number]) =>
   instance.collapsed ? [] : instance.visibleColumnIds ?? table.columnIds;
 

@@ -195,8 +195,11 @@ it('previews column deletion in the editor and restores the column and its FK to
     await orderNumber.waitFor();
     await expect.poll(() => foreignKeys.count()).toBe(2);
     await previewColumnDeletion('orders', 'number');
-    await impact.getByText(/orders_pkey.*order_items_order_fk/).waitFor();
-    await impact.getByText('주문 전체, 상품 연결', { exact: true }).waitFor();
+    await impact.getByText(/order_items_order_fk/).waitFor();
+    await impact.getByText('키·제약 1개 삭제', { exact: true }).click();
+    await impact.getByText(/orders_pkey/).waitFor();
+    await impact.getByText('주문 전체', { exact: true }).waitFor();
+    await impact.getByText('상품 연결', { exact: true }).waitFor();
     await close.click();
     await orderNumber.waitFor();
     expect(await foreignKeys.count()).toBe(2);

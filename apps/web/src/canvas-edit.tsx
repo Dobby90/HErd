@@ -1,10 +1,11 @@
 import { createContext, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useReactFlow } from '@xyflow/react';
 import type { DocumentCommand, ErdDocument } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
 import { Icon } from './editor-controls.js';
-import { field, id, label, putView } from './editor-fields.js';
-import type { Column, Table, View } from './editor-fields.js';
+import { field, id, label, putView, sqlExpression } from './editor-fields.js';
+import type { Column, Named, Table, View } from './editor-fields.js';
 import { availableName, columnTypeLabel, putColumn, schemaRelationNames, validPhysicalName } from './schema-edits.js';
 
 export const dragType = { newTable: 'application/x-herd-new-table', table: 'application/x-herd-table', column: 'application/x-herd-column' };
@@ -20,28 +21,44 @@ export const CanvasEditing = createContext<{
   form?: ReactNode;
   change?(edit: QuickEdit): void;
   attributes?(instanceId: string): void;
+  remove?(id: string): void;
   link?(instanceId: string): void;
   reorder?(instanceId: string, columnId: string, targetId: string, after: boolean): void;
 }>({});
 
-function QuickForm({ children, title, initialFocus = 'name', cancel, submit }: {
+function QuickForm({ children, title, initialFocus = 'physicalName', cancel, submit }: {
   children: ReactNode; title: string; initialFocus?: string; cancel(): void;
   submit(form: FormData, report: (error: string) => void): void;
 }) {
   const form = useRef<HTMLFormElement>(null);
   const composing = useRef(false);
   const [error, setError] = useState('');
+  const { getViewport, setViewport } = useReactFlow();
   useEffect(() => {
     const root = form.current;
     const previous = document.activeElement;
-    const input = root?.querySelector<HTMLInputElement>('input[name="' + initialFocus + '"]');
+    const input = root?.querySelector<HTMLInputElement | HTMLTextAreaElement>(':is(input, textarea)[name="' + initialFocus + '"]');
     input?.focus({ preventScroll: true });
     input?.select();
+    const frame = requestAnimationFrame(() => {
+      const canvas = root?.closest('.canvas')?.getBoundingClientRect();
+      const box = root?.getBoundingClientRect();
+      if (!canvas || !box || !root?.closest('.canvas-table')) return;
+      const shift = (start: number, end: number, min: number, max: number) =>
+        start < min ? min - start : end > max ? Math.max(min - start, max - end) : 0;
+      const x = shift(box.left, box.right, canvas.left + 8, canvas.right - 8);
+      const y = shift(box.top, box.bottom, canvas.top + 8, canvas.bottom - 8);
+      if (x || y) {
+        const viewport = getViewport();
+        void setViewport({ ...viewport, x: viewport.x + x, y: viewport.y + y });
+      }
+    });
     return () => {
+      cancelAnimationFrame(frame);
       if (previous instanceof HTMLElement && previous.isConnected &&
         (document.activeElement === document.body || root?.contains(document.activeElement))) previous.focus({ preventScroll: true });
     };
-  }, [initialFocus]);
+  }, [getViewport, initialFocus, setViewport]);
   return <form ref={form} className="quick-form nodrag nopan nowheel" aria-label={title}
     onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
     onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
@@ -49,8 +66,8 @@ function QuickForm({ children, title, initialFocus = 'name', cancel, submit }: {
       event.stopPropagation();
       if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
       if (event.key === 'Escape') { event.preventDefault(); cancel(); }
-      if (event.key === 'Enter' && event.target instanceof HTMLInputElement &&
-        (event.target.type === 'text' || event.target.type === 'checkbox')) {
+      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey || (event.target instanceof HTMLInputElement &&
+        (event.target.type === 'text' || event.target.type === 'checkbox')))) {
         event.preventDefault();
         event.currentTarget.requestSubmit();
       }
@@ -70,36 +87,62 @@ function QuickForm({ children, title, initialFocus = 'name', cancel, submit }: {
   </form>;
 }
 
-export function QuickTableForm({ document, table, logical, cancel, apply }: {
-  document: ErdDocument; table?: Table; logical?: boolean; cancel(): void;
+function CanvasNameFields({ value, mode }: { value?: Named; mode: View['nameDisplay'] }) {
+  return <>
+    {(!value || mode !== 'logical') && <label>물리명<input name="physicalName" defaultValue={value?.physicalName} required spellCheck={false} /></label>}
+    {(mode === 'logical' || mode === 'both') && <label>논리명<input name="logicalName" defaultValue={value?.logicalName} /></label>}
+  </>;
+}
+
+function canvasNames(form: FormData, previous?: Named): Named {
+  const logicalName = field(form, 'logicalName');
+  return {
+    physicalName: form.has('physicalName') ? field(form, 'physicalName') : previous?.physicalName ?? '',
+    logicalName: form.has('logicalName') ? logicalName.trim() ? logicalName : undefined : previous?.logicalName,
+    description: field(form, 'description') || undefined,
+  };
+}
+
+function CommentField({ value }: { value?: string }) {
+  return <label>코멘트<textarea name="description" rows={2} defaultValue={value} /></label>;
+}
+
+function sameNames(previous: Named, next: Named) {
+  return previous.physicalName === next.physicalName && previous.logicalName === next.logicalName && previous.description === next.description;
+}
+
+export function QuickTableForm({ document, table, mode, cancel, apply }: {
+  document: ErdDocument; table?: Table; mode?: View['nameDisplay']; cancel(): void;
   apply(table: Table, report: (message: string) => void): void;
 }) {
   const namespaces = document.catalog.namespaces;
-  const nameField = logical ? 'logicalName' : 'physicalName';
-  return <QuickForm title={table ? '테이블 이름 편집' : '새 테이블'} cancel={cancel} submit={(form, report) => {
-    const name = field(form, 'name');
+  return <QuickForm title={table ? '테이블 이름 편집' : '새 테이블'} initialFocus={table && mode === 'logical' ? 'logicalName' : 'physicalName'}
+    cancel={cancel} submit={(form, report) => {
+    const names = canvasNames(form, table);
+    const name = names.physicalName;
     const namespaceId = table?.namespaceId ?? (field(form, 'namespace') || namespaces[0]?.id);
     if (!namespaceId) return report('네임스페이스를 먼저 추가하세요.');
-    if (!logical && !validPhysicalName(name)) return report('물리명은 UTF-8 기준 1~63바이트여야 합니다.');
-    if (!logical && name !== table?.physicalName &&
-      (schemaRelationNames(document, namespaceId).has(name) ||
-       document.catalog.enums.some(item => item.namespaceId === namespaceId && item.physicalName === name))) {
-      return report('이 스키마에 이미 같은 이름의 객체가 있습니다.');
+    if (names.description?.includes('\0')) return report('코멘트에 NUL 문자를 사용할 수 없습니다.');
+    if (name !== table?.physicalName) {
+      if (!validPhysicalName(name)) return report('물리명은 UTF-8 기준 1~63바이트여야 합니다.');
+      if (schemaRelationNames(document, namespaceId).has(name) ||
+        document.catalog.enums.some(item => item.namespaceId === namespaceId && item.physicalName === name)) {
+        return report('이 스키마에 이미 같은 이름의 객체가 있습니다.');
+      }
     }
-    const next = table ?? { id: id(), namespaceId, physicalName: '', columnIds: [] };
-    const value = logical && !name.trim() ? undefined : name;
-    if (table && value === table[nameField]) cancel();
-    else apply({ ...next, [nameField]: value }, report);
+    if (table && sameNames(table, names)) cancel();
+    else apply({ ...(table ?? { id: id(), namespaceId, columnIds: [] }), ...names }, report);
   }}>
-    <label>{logical ? '논리명' : '물리명'}<input name="name" defaultValue={table?.[nameField]} required={!logical} spellCheck={false} /></label>
+    <CanvasNameFields value={table} mode={mode} />
     {!table && namespaces.length > 1 && <label>스키마<select name="namespace" defaultValue={namespaces.find(item => item.physicalName === 'public')?.id}>
       {namespaces.map(item => <option key={item.id} value={item.id}>{label(item)}</option>)}
     </select></label>}
+    <CommentField value={table?.description} />
   </QuickForm>;
 }
 
-export function QuickColumnForm({ document, table, column, dialect, logical, focus, run, view, instance, cancel, done }: {
-  document: ErdDocument; table: Table; column?: Column; dialect: EditorDialect; logical: boolean; focus: 'name' | 'type';
+export function QuickColumnForm({ document, table, column, dialect, mode, focus, run, view, instance, cancel, done }: {
+  document: ErdDocument; table: Table; column?: Column; dialect: EditorDialect; mode?: View['nameDisplay']; focus: 'name' | 'type';
   view: View; instance: View['instances'][number];
   run: QuickRun; cancel(): void; done(columnId: string): void;
 }) {
@@ -113,16 +156,19 @@ export function QuickColumnForm({ document, table, column, dialect, logical, foc
   const primary = Boolean(column && pk?.kind === 'pk' && pk.columnIds.includes(column.id));
   const [addPrimary, setAddPrimary] = useState(false);
   const [nullable, setNullable] = useState(column?.nullable ?? true);
-  const nameField = logical && column ? 'logicalName' : 'physicalName';
-  return <QuickForm title={column ? '컬럼 편집' : '새 컬럼'} initialFocus={focus === 'type' && native ? 'type' : 'name'}
+  const nameFocus = mode === 'logical' && column ? 'logicalName' : 'physicalName';
+  return <QuickForm title={column ? '컬럼 편집' : '새 컬럼'} initialFocus={focus === 'type' && native ? 'type' : nameFocus}
     cancel={cancel} submit={(form, report) => {
-      const name = field(form, 'name');
-      if (nameField === 'physicalName') {
+      const names = canvasNames(form, column);
+      const name = names.physicalName;
+      if (name !== column?.physicalName) {
         if (!validPhysicalName(name)) return report('물리명은 UTF-8 기준 1~63바이트여야 합니다.');
         if (document.catalog.columns.some(item => item.tableId === table.id && item.id !== column?.id && item.physicalName === name)) {
           return report('이 테이블에 이미 같은 이름의 컬럼이 있습니다.');
         }
       }
+      const defaultSql = field(form, 'default');
+      if (names.description?.includes('\0') || defaultSql.includes('\0')) return report('코멘트와 기본값에 NUL 문자를 사용할 수 없습니다.');
       const input = field(form, 'type').trim();
       let descriptor = type;
       if (native && input !== typeText) {
@@ -135,12 +181,12 @@ export function QuickColumnForm({ document, table, column, dialect, logical, foc
         if (problem) return report(problem);
       }
       const next: Column = {
-        ...column, id: column?.id ?? id(), tableId: table.id, type: descriptor,
-        physicalName: column?.physicalName ?? name, nullable: primary ? column?.nullable ?? false : !addPrimary && nullable,
-        [nameField]: nameField === 'logicalName' && !name.trim() ? undefined : name,
+        ...column, ...names, id: column?.id ?? id(), tableId: table.id, type: descriptor,
+        nullable: primary ? column?.nullable ?? false : !addPrimary && nullable,
+        default: column?.identity ? column.default : defaultSql.trim() ? sqlExpression(document, defaultSql, column?.default) : undefined,
       };
       const index = column ? table.columnIds.indexOf(column.id) : table.columnIds.length;
-      if (column && !addPrimary && next[nameField] === column[nameField] && next.nullable === column.nullable && descriptor === type) {
+      if (column && !addPrimary && sameNames(column, next) && next.nullable === column.nullable && descriptor === type && next.default === column.default) {
         done(column.id);
         return;
       }
@@ -159,13 +205,15 @@ export function QuickColumnForm({ document, table, column, dialect, logical, foc
       }
       if (run({ kind: 'batch', commands }, report)) done(next.id);
     }}>
-    <label>{nameField === 'logicalName' ? '논리명' : '물리명'}<input name="name" defaultValue={column?.[nameField]}
-      required={nameField === 'physicalName'} spellCheck={false} /></label>
+    <CanvasNameFields value={column} mode={mode} />
     <label>자료형<input name="type" defaultValue={typeText} list={native ? list : undefined} readOnly={!native} required spellCheck={false} /></label>
     {native && <datalist id={list}>{choices.map(choice => <option key={choice} value={choice} />)}</datalist>}
     {!pk && <label className="checkbox"><input type="checkbox" checked={addPrimary}
       onChange={event => setAddPrimary(event.target.checked)} />기본키</label>}
     <label className="checkbox"><input type="checkbox" checked={!primary && !addPrimary && nullable}
       onChange={event => setNullable(event.target.checked)} disabled={primary || addPrimary} />NULL 허용</label>
+    {!column?.identity && <label>기본값 (DEFAULT SQL)<textarea name="default" rows={2} defaultValue={column?.default?.sql}
+      spellCheck={false} placeholder="예: 0, '대기', CURRENT_TIMESTAMP" /></label>}
+    <CommentField value={column?.description} />
   </QuickForm>;
 }

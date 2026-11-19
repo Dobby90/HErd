@@ -2,6 +2,7 @@ import type { ErdDocument } from '@erd/model';
 import { isIdentifyingForeignKey, physicalRelationships, primaryColumnsByTable } from '@erd/model';
 import type { View } from './editor-fields.js';
 import { viewColumnIds, viewLabel } from './editor-fields.js';
+import { columnTypeLabel } from './schema-edits.js';
 import fontUrl from './fonts/noto-sans-kr.woff2?url';
 import fontLicense from './fonts/noto-sans-kr-OFL.txt?raw';
 
@@ -30,6 +31,8 @@ const font = (size: number) => `${size}px "${family}", sans-serif`;
 const labelSize = 14;
 const rowHeight = 25;
 const headerHeight = 36;
+const detailHeight = 17;
+const detailSize = 12;
 const gutter = 14;
 const margin = 24;
 const canvasColor = '#f7f8fa';
@@ -114,6 +117,7 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
   const groupIds = new Set<string>();
   const tables = new Map(document.catalog.tables.map(table => [table.id, table]));
   const columns = new Map(document.catalog.columns.map(column => [column.id, column]));
+  const enums = new Map(document.catalog.enums.map(item => [item.id, item.physicalName]));
   let tableCount = 0;
   for (const instance of view.instances) {
     if (ids && !ids.has(instance.id)) continue;
@@ -122,25 +126,36 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
     if (instance.groupId) groupIds.add(instance.groupId);
     const visible = options.columns === 'all' ? table.columnIds
       : options.columns === 'collapsed' ? [] : viewColumnIds(table, instance);
+    const full = options.names === 'both';
+    const details = (lines: (string | undefined)[]) => lines.filter((value): value is string => Boolean(value)).map(singleLine);
+    const tableDetails = full ? details([table.description]) : [];
     const names = visible.flatMap(id => {
       const column = columns.get(id);
-      return column ? [{ id, name: singleLine(viewLabel(column, options.names)) }] : [];
+      return column ? [{ id, name: singleLine(viewLabel(column, options.names)), details: full ? details([
+        columnTypeLabel(column.type, enums), column.default && 'DEFAULT ' + column.default.sql, column.description,
+      ]) : [] }] : [];
     });
     const title = singleLine(viewLabel(table, options.names));
     const { x, y } = instance;
     const width = Math.ceil(Math.max(instance.size?.width ?? 195, widthOf(title, 17) + gutter * 2,
-      ...names.map(column => widthOf(column.name, labelSize) + gutter * 2)));
-    const height = headerHeight + rowHeight * names.length;
+      ...names.map(column => widthOf(column.name, labelSize) + gutter * 2),
+      ...[...tableDetails, ...names.flatMap(column => column.details)].map(value => widthOf(value, detailSize) + gutter * 2)));
+    const header = headerHeight + detailHeight * tableDetails.length;
+    const height = header + names.reduce((sum, column) => sum + rowHeight + detailHeight * column.details.length, 0);
     const rows = new Map<string, number>();
     add(foreground, { kind: 'rect', x, y, width, height, fill: '#ffffff', stroke: '#c9d1df' });
-    add(foreground, { kind: 'rect', x: x + 1, y: y + 1, width: width - 2, height: headerHeight - 1, fill: '#f1f3f9' });
+    add(foreground, { kind: 'rect', x: x + 1, y: y + 1, width: width - 2, height: header - 1, fill: '#f1f3f9' });
     text(foreground, x + gutter, y + 24, title, 17, '#172033');
-    names.forEach((column, index) => {
-      const rowY = y + headerHeight + index * rowHeight;
+    tableDetails.forEach((value, index) => text(foreground, x + gutter, y + headerHeight + 8 + index * detailHeight, value, detailSize, '#5d687d'));
+    let rowY = y + header;
+    for (const column of names) {
       add(foreground, { kind: 'rect', x: x + 1, y: rowY, width: width - 2, height: 1, fill: '#e9edf3' });
       text(foreground, x + gutter, rowY + 17, column.name, labelSize, '#172033');
+      column.details.forEach((value, index) =>
+        text(foreground, x + gutter, rowY + rowHeight + 8 + index * detailHeight, value, detailSize, '#5d687d'));
       rows.set(column.id, rowY + rowHeight / 2);
-    });
+      rowY += rowHeight + detailHeight * column.details.length;
+    }
     const group = instances.get(table.id) ?? [];
     group.push({ x, y, width, height, rows });
     instances.set(table.id, group);

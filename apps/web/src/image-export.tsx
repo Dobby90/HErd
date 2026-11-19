@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ErdDocument } from '@erd/model';
+import { viewNameDisplaySchema } from '@erd/model';
 import type { View } from './editor-fields.js';
-import { Modal, viewLabel } from './editor-fields.js';
+import { Modal, ViewNameOptions, viewLabel } from './editor-fields.js';
 import type { ImageOptions, renderDiagramImage } from './diagram-image.js';
 
 type Result = Awaited<ReturnType<typeof renderDiagramImage>>;
@@ -84,8 +85,8 @@ function ImageExportDialog({ document, view, selection, verify, close }: {
       <label>출력 범위<select value={scope} onChange={event => { reset(); setScope(event.target.value === 'selected' ? 'selected' : 'view'); }}>
         <option value="view">현재 뷰 전체</option><option value="selected">선택한 테이블</option>
       </select></label>
-      <label>표시할 이름<select value={options.names} onChange={event => change({ names: event.target.value === 'logical' ? 'logical' : 'physical' })}>
-        <option value="physical">물리명</option><option value="logical">논리명</option>
+      <label>표시할 이름<select value={options.names} onChange={event => change({ names: viewNameDisplaySchema.parse(event.target.value) })}>
+        <ViewNameOptions />
       </select></label>
       <label>컬럼 표시<select value={options.columns} onChange={event => {
         const value = event.target.value;

@@ -1,7 +1,7 @@
 import { useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { XYPosition } from '@xyflow/react';
-import { columnBadgesById, createDocument, deletionImpact, isIdentifyingForeignKey, primaryColumnsByTable, validateDocumentStructure } from '@erd/model';
+import { columnBadgesById, createDocument, deletionImpact, isIdentifyingForeignKey, primaryColumnsByTable, validateDocumentStructure, viewNameDisplaySchema } from '@erd/model';
 import type { Catalog, DocumentCommand, ErdDocument, ModelDiagnostic, SqlTarget } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
 import { postgresqlEditor } from '@erd/dialect-postgresql/ui';
@@ -11,7 +11,7 @@ import { CanvasEditing, dragType, QuickColumnForm, QuickTableForm } from './canv
 import type { QuickEdit, QuickRun } from './canvas-edit.js';
 import { ActionMenu, ColumnBadges, Icon } from './editor-controls.js';
 import { ThemeToggle } from './theme.js';
-import { columnsOf, duplicateView, EditorReadOnly, emptyView, field, Form, id, label, Modal, named, NameFields, placement, putView } from './editor-fields.js';
+import { columnsOf, duplicateView, EditorReadOnly, emptyView, field, Form, id, label, Modal, named, NameFields, placement, putView, ViewNameOptions } from './editor-fields.js';
 import type { Table, View } from './editor-fields.js';
 import { useEditorSession } from './editor-session.js';
 import { ImageExport } from './image-export.js';
@@ -338,6 +338,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
   const [fk, setFk] = useState<FkDialog | null>(null);
   const [logical, setLogical] = useState<LogicalSeed | ErdDocument['relationships'][number]>();
   const [tool, setTool] = useState<CanvasTool>();
+  const [canvasMode, setCanvasMode] = useState<'select' | 'pan'>('select');
   const [quickEdit, setQuickEdit] = useState<QuickEdit>();
   const [deletion, setDeletion] = useState('');
   const registered = dialects.get(document.target.dialectId);
@@ -359,6 +360,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
   const capability = dialect?.capabilities(document.target);
   const view = document.views.find(item => item.id === chosenView) ?? document.views[0];
   const canEdit = !readOnly && !session.loading;
+  const canEditCanvas = canEdit && canvasMode === 'select';
   const canPlace = canEdit && capability?.table.edit === 'supported' && document.catalog.namespaces.length > 0;
   const selectedId = selection && 'id' in selection ? selection.id : undefined;
   const selectedInstance = view?.instances.find(item => item.id === (selection?.instanceId ?? selectedId));
@@ -401,8 +403,15 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
   }
 
   function chooseTool(next: CanvasTool) {
+    setCanvasMode('select');
     setQuickEdit(undefined);
     setTool(next);
+  }
+
+  function changeCanvasMode(mode: 'select' | 'pan') {
+    setCanvasMode(mode);
+    setTool(undefined);
+    setQuickEdit(undefined);
   }
 
   function chooseCanvasObject(instanceId: string) {
@@ -487,14 +496,21 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
       setQuickEdit(undefined);
       return;
     }
-    if (readOnly || session.loading || event.defaultPrevented || event.nativeEvent.isComposing ||
-      !(event.target instanceof Element) ||
-      event.target.closest('input, textarea, select, button, dialog, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')) return;
     const key = event.key.toLowerCase();
+    if (event.defaultPrevented || event.nativeEvent.isComposing || !(event.target instanceof Element)) return;
+    const interactive = event.target.closest('input, textarea, select, button, dialog, [contenteditable]:not([contenteditable="false"]), [role="textbox"]');
+    if (view && (!interactive || event.target.closest('.canvas-modes, .canvas-text')) &&
+      !event.ctrlKey && !event.metaKey && !event.altKey && (key === 'v' || key === 'h')) {
+      event.preventDefault();
+      changeCanvasMode(key === 'h' ? 'pan' : 'select');
+      return;
+    }
+    if (interactive && !(key === 'delete' && selectedInstance && event.target.closest('.canvas-table-text'))) return;
+    if (!canEdit) return;
     if ((event.ctrlKey || event.metaKey) && !event.altKey && (key === 'z' || key === 'y')) {
       event.preventDefault();
       session.step(key === 'y' || event.shiftKey ? 'redo' : 'undo');
-    } else if (key === 'delete' && selection?.type === 'object') {
+    } else if (key === 'delete' && canvasMode === 'select' && selection?.type === 'object') {
       const target = view?.instances.find(instance => instance.id === selection.id)?.tableId ?? selection.id;
       if (deletionImpact(document, target)) {
         event.preventDefault();
@@ -525,11 +541,11 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
   const editedTable = document.catalog.tables.find(item => item.id === edited?.tableId);
   const editedColumn = document.catalog.columns.find(item => item.id === quickEdit?.columnId && item.tableId === editedTable?.id);
   const inline = canEdit && view && edited && editedTable && quickEdit && (!quickEdit.columnId || editedColumn) ? (
-    quickEdit.field === 'table' ? <QuickTableForm key={edited.id} document={document} table={editedTable}
-      logical={view.nameDisplay === 'logical'} cancel={() => setQuickEdit(undefined)} apply={(value, report) => {
+    quickEdit.field === 'table' ? <QuickTableForm key={edited.id + ':' + (view.nameDisplay ?? 'physical')} document={document} table={editedTable}
+      mode={view.nameDisplay} cancel={() => setQuickEdit(undefined)} apply={(value, report) => {
         if (run({ kind: 'put-catalog', collection: 'tables', value }, report)) setQuickEdit(undefined);
       }} /> : dialect && <QuickColumnForm key={edited.id + ':' + (editedColumn?.id ?? 'new') + ':' + quickEdit.field}
-      document={document} table={editedTable} column={editedColumn} dialect={dialect} logical={view.nameDisplay === 'logical'}
+      document={document} table={editedTable} column={editedColumn} dialect={dialect} mode={view.nameDisplay}
       focus={quickEdit.field} run={run} view={view} instance={edited}
       cancel={() => setQuickEdit(undefined)} done={() => setQuickEdit(undefined)} />
   ) : undefined;
@@ -589,8 +605,8 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
               onClick={() => openProperties({ type: 'object', id: namespace.id })}><Icon name="schema" /><code>{label(namespace)}</code></button>
             <ul className="object-list">{tables.map(table => <li key={table.id}>
               <button type="button" aria-current={selectedTableId === table.id ? 'true' : undefined}
-                draggable={canEdit && Boolean(view)} onDragStart={event => {
-                  if (!canEdit || !view) return;
+                draggable={canEditCanvas && Boolean(view)} onDragStart={event => {
+                  if (!canEditCanvas || !view) return;
                   event.dataTransfer.setData(dragType.table, table.id);
                   event.dataTransfer.effectAllowed = 'copy';
                 }}
@@ -639,10 +655,16 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
             {!readOnly && <button type="button" className="quiet icon-button" title="뷰 설정" aria-label="뷰 설정"
               onClick={() => setDialog('view-settings')}><Icon name="settings" /></button>}
             <div className="canvas-tools">
+              <div className="canvas-modes" role="group" aria-label="캔버스 모드">
+                <button type="button" className="quiet icon-button" aria-label="선택 모드" title="선택 모드 (V)"
+                  aria-pressed={canvasMode === 'select'} onClick={() => changeCanvasMode('select')}><Icon name="cursor" /></button>
+                <button type="button" className="quiet icon-button" aria-label="이동 모드" title="이동 모드 (H)"
+                  aria-pressed={canvasMode === 'pan'} onClick={() => changeCanvasMode('pan')}><Icon name="hand" /></button>
+              </div>
               {canEdit && <>
                 <button type="button" className="canvas-toolbar-primary" aria-label="캔버스에 테이블 추가" title="클릭하거나 캔버스로 드래그"
-                  disabled={!canPlace} draggable={canPlace} aria-pressed={tool?.kind === 'place'} onDragStart={event => {
-                    if (!canPlace) return;
+                  disabled={!canPlace} draggable={canPlace && canEditCanvas} aria-pressed={tool?.kind === 'place'} onDragStart={event => {
+                    if (!canPlace || !canEditCanvas) return;
                     event.dataTransfer.setData(dragType.newTable, 'table');
                     event.dataTransfer.effectAllowed = 'copy';
                   }} onClick={() => chooseTool({ kind: 'place' })}><Icon name="plus" />테이블</button>
@@ -655,9 +677,11 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
                     onClick={() => chooseTool({ kind: 'relation', mode: 'logical' })}>논리 관계</button>
                 </ActionMenu>
               </>}
-              <label><span className="sr-only">이름 표시</span><select disabled={readOnly} value={view.nameDisplay ?? 'physical'} onChange={event =>
-                run(putView({ ...view, nameDisplay: event.target.value === 'logical' ? 'logical' : 'physical' }))}>
-                <option value="physical">물리명</option><option value="logical">논리명</option>
+              <label><span className="sr-only">이름 표시</span><select disabled={readOnly} value={view.nameDisplay ?? 'physical'} onChange={event => {
+                setQuickEdit(undefined);
+                run(putView({ ...view, nameDisplay: viewNameDisplaySchema.parse(event.target.value) }));
+              }}>
+                <ViewNameOptions />
               </select></label>
               <label className="checkbox"><input type="checkbox" checked={snap} disabled={readOnly} onChange={event => setSnap(event.target.checked)} />그리드 맞춤</label>
               {!readOnly && <button type="button" className="quiet" disabled={!view.instances.length} aria-label="이름순 그리드 재배치"
@@ -679,17 +703,19 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
           </div>
           <CanvasEditing.Provider value={{
             activeId: selectedInstance?.id, edit: inline ? quickEdit : undefined, form: inline,
-            change: canEdit && !tool && dialect ? edit => {
+            change: canEditCanvas && !tool && dialect ? edit => {
               selectObject(edit.instanceId);
               setQuickEdit(edit);
             } : undefined,
-            attributes: canEdit && !tool ? id => openProperties({ type: 'object', id }) : undefined,
-            link: canEdit && tool?.kind === 'relation' ? chooseCanvasObject : undefined,
-            reorder: canEdit && !tool && !inline ? reorderColumn : undefined,
+            attributes: canEditCanvas && !tool ? id => openProperties({ type: 'object', id }) : undefined,
+            remove: canEditCanvas && !tool && !inline ? id => setDeletion(id) : undefined,
+            link: canEditCanvas && tool?.kind === 'relation' ? chooseCanvasObject : undefined,
+            reorder: canEditCanvas && !tool && !inline ? reorderColumn : undefined,
           }}>
             <EditorCanvas key={document.id + view.id} document={document} view={view} dialect={dialect} select={chooseCanvasObject}
               clearSelection={() => { inspect(null); setQuickEdit(undefined); }} activeTableId={selectedTableId} activeRelationId={selectedRelation?.id}
               selectInstances={setSelectedInstances} focus={searchFocus} move={move} layoutSizes={layoutSizes.current} snap={snap} readOnly={readOnly}
+              panMode={canvasMode === 'pan'}
               showMap={showMap} mapId={mapId} placing={canPlace && tool?.kind === 'place'}
               picking={canEdit && tool?.kind === 'relation'} pickId={canEdit && tool?.kind === 'relation' ? tool.origin?.id : undefined}
               editRelation={canEdit ? id => {
@@ -711,7 +737,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
               place={canPlace ? at => chooseTool({ kind: 'place', at }) : undefined}
               placementForm={canPlace && tool?.kind === 'place' && tool.at ? {
                 screen: tool.at.screen,
-                content: <QuickTableForm key={tool.at.point.x + ':' + tool.at.point.y} document={document}
+                content: <QuickTableForm key={tool.at.point.x + ':' + tool.at.point.y} document={document} mode={view.nameDisplay}
                   cancel={() => setTool(undefined)} apply={(table, report) => {
                     if (tool.at && !placeTable(table, tool.at.point, true)) report('현재 뷰에 테이블을 추가하지 못했습니다.');
                   }} />,
@@ -794,6 +820,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
       <RelationshipForm document={document} seed={logical} relation={'id' in logical ? logical : undefined}
         run={run} close={() => setLogical(undefined)} />
     </Modal>}
-    {deletion && <DeleteSchema document={document} objectId={deletion} run={run} close={() => setDeletion('')} />}
+    {deletion && canEdit && <DeleteSchema document={document} objectId={deletion} run={run} close={() => setDeletion('')}
+      removed={() => { inspect(null); setQuickEdit(undefined); setSearchFocus(undefined); }} />}
   </main></EditorReadOnly.Provider>;
 }

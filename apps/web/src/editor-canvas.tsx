@@ -6,16 +6,21 @@ import { columnBadgesById, isIdentifyingForeignKey, physicalRelationships, prima
 import type { ErdDocument } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
 import { ColumnBadges, Icon } from './editor-controls.js';
-import { viewColumnIds, viewLabel } from './editor-fields.js';
+import { secondaryName, viewColumnIds, viewLabel } from './editor-fields.js';
 import { CanvasEditing, dragType } from './canvas-edit.js';
 import { columnTypeLabel } from './schema-edits.js';
 
 type View = ErdDocument['views'][number];
 type CanvasNode = Node<Record<string, unknown> & {
   label: string;
+  logicalName?: string;
+  description?: string;
   tableId?: string;
   highlighted?: boolean;
-  columns?: Array<{ id: string; name: string; type: string; badges: string[]; highlighted?: boolean }>;
+  columns?: Array<{
+    id: string; name: string; type: string; badges: string[]; highlighted?: boolean;
+    logicalName?: string; description?: string; defaultSql?: string;
+  }>;
 }, 'table' | 'groupBox' | 'note'>;
 
 export type CanvasFocus = { instanceId: string; columnId?: string };
@@ -55,13 +60,16 @@ function CanvasViewport({ focus, viewportOnly, empty }: { focus?: CanvasFocus; v
 }
 
 const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
-  const { activeId, edit, form, change, attributes, reorder, link } = useContext(CanvasEditing);
+  const { activeId, edit, form, change, attributes, remove, reorder, link } = useContext(CanvasEditing);
   const [dropTarget, setDropTarget] = useState('');
   const editing = edit?.instanceId === id ? edit : undefined;
   const active = activeId === id;
   const refresh = useUpdateNodeInternals();
-  const handles = data.columns?.map(column => column.id).join(':');
-  useEffect(() => refresh(id), [handles, id, refresh, editing, active]);
+  const handles = data.columns?.map(column =>
+    [column.id, Boolean(column.logicalName), Boolean(column.description), Boolean(column.defaultSql)].join(':')).join('|');
+  const hasLogicalName = Boolean(data.logicalName);
+  const hasDescription = Boolean(data.description);
+  useEffect(() => refresh(id), [handles, hasLogicalName, hasDescription, id, refresh, editing, active]);
   const editText = (value: string, field: 'table' | 'name' | 'type', columnId?: string) => {
     const open = (event: MouseEvent) => {
       event.stopPropagation();
@@ -74,9 +82,16 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
       onDoubleClick={open}>{value}</button> : <span className={'canvas-' + field + '-text'} title={value}>{value}</span>;
   };
   return <article className={'canvas-table' + (data.highlighted ? ' search-match' : '')}>
-    <strong><Icon name="table" />{editText(data.label, 'table')}
+    <strong><Icon name="table" /><span className="canvas-names">{editText(data.label, 'table')}
+      {data.logicalName && <span className="canvas-logical-name" title={data.logicalName}>{data.logicalName}</span>}
+    </span>
       {active && attributes && <button type="button" className="quiet canvas-node-action nodrag nopan" aria-label={data.label + ' 속성'}
         title="테이블 속성" onClick={event => { event.stopPropagation(); attributes(id); }}><Icon name="settings" /></button>}
+      {active && remove && data.tableId && <button type="button" className="quiet danger canvas-node-action nodrag nopan" aria-label={data.label + ' 테이블 삭제'}
+        title="모든 뷰에서 테이블 삭제" onClick={event => {
+          event.stopPropagation();
+          if (data.tableId) remove(data.tableId);
+        }}><Icon name="trash" /></button>}
       {link && <button type="button" className="quiet canvas-node-action nodrag nopan" aria-label={data.label + ' 관계 연결 대상 선택'}
         title="연결할 테이블로 선택" onClick={event => { event.stopPropagation(); link(id); }}><Icon name="link" /></button>}
     </strong>
@@ -84,6 +99,7 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
     <Handle id="table-out" type="source" position={Position.Right} className="table-handle" isConnectable={false} />
     <Handle id="reverse-table-in" type="target" position={Position.Right} className="table-handle route-handle" isConnectable={false} />
     <Handle id="reverse-table-out" type="source" position={Position.Left} className="table-handle route-handle" isConnectable={false} />
+    {data.description && <p className="canvas-table-comment canvas-metadata-line" title={data.description}>{data.description}</p>}
     {editing?.field === 'table' && form}
     {data.columns?.map((column, index, rows) => <div className="canvas-column-slot" key={column.id}>
       <div className={'canvas-column' + (column.highlighted ? ' search-match' : '') + (dropTarget === column.id ? ' column-drop-target' : '')}
@@ -118,11 +134,18 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
           const target = rows[index + (after ? 1 : -1)];
           if (target) reorder(id, column.id, target.id, after);
         }}><Icon name="grip" /></button>}
-      {editText(column.name, 'name', column.id)}{editText(column.type, 'type', column.id)}<ColumnBadges values={column.badges} />
+      <span className="canvas-names">{editText(column.name, 'name', column.id)}
+        {column.logicalName && <span className="canvas-logical-name" title={column.logicalName}>{column.logicalName}</span>}
+      </span>
+      {editText(column.type, 'type', column.id)}<ColumnBadges values={column.badges} />
       <Handle id={'out:' + column.id} type="source" position={Position.Right} aria-label={column.name + ' 연결점'} />
       <Handle id={'reverse-in:' + column.id} type="target" position={Position.Right} className="route-handle" isConnectable={false} />
       <Handle id={'reverse-out:' + column.id} type="source" position={Position.Left} className="route-handle" isConnectable={false} />
       </div>
+      {(column.description || column.defaultSql) && <div className="canvas-column-meta">
+        {column.defaultSql && <p className="canvas-metadata-line canvas-default" title={column.defaultSql}><span>DEFAULT </span>{column.defaultSql}</p>}
+        {column.description && <p className="canvas-metadata-line" title={column.description}>{column.description}</p>}
+      </div>}
       {editing?.columnId === column.id && form}
     </div>)}
     {editing && editing.field !== 'table' && !editing.columnId ? form :
@@ -164,6 +187,8 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   const badges = columnBadgesById(document);
   const primary = primaryColumnsByTable(document);
   const foreignKeys = dialect?.inspectForeignKeys?.(document);
+  const full = view.nameDisplay === 'both';
+  const titleMode = full ? 'physical' : view.nameDisplay;
   const instances = new Map<string, CanvasNode[]>();
   const nodes: CanvasNode[] = [
     ...view.groups.map((group): CanvasNode => ({
@@ -180,18 +205,22 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
     if (!table) continue;
     const visible = viewColumnIds(table, instance);
     const width = instance.size?.width ?? 195;
+    const label = viewLabel(table, titleMode);
+    const logicalName = secondaryName(table, view.nameDisplay);
+    const description = full ? table.description : undefined;
+    const rows = visible.flatMap(id => {
+      const column = columns.get(id);
+      return column ? [{ id, name: viewLabel(column, titleMode), type: columnTypeLabel(column.type, enums), badges: badges.get(id) ?? [],
+        logicalName: secondaryName(column, view.nameDisplay), description: full ? column.description : undefined,
+        defaultSql: full ? column.default?.sql : undefined }] : [];
+    });
     const node: CanvasNode = {
       id: instance.id, type: 'table', position: { x: instance.x, y: instance.y },
       style: { width }, zIndex: 2,
-      ...(viewportOnly && { initialWidth: width, initialHeight: 36 + visible.length * 24 }),
-      data: {
-        tableId: table.id,
-        label: viewLabel(table, view.nameDisplay),
-        columns: visible.flatMap(id => {
-          const column = columns.get(id);
-          return column ? [{ id, name: viewLabel(column, view.nameDisplay), type: columnTypeLabel(column.type, enums), badges: badges.get(id) ?? [] }] : [];
-        }),
-      },
+      ...(viewportOnly && { initialWidth: width, initialHeight: rows.reduce((height, row) =>
+        height + 25 + (row.logicalName ? 15 : 0) + (row.description ? 16 : 0) + (row.defaultSql ? 16 : 0),
+      36 + (logicalName ? 15 : 0) + (description ? 20 : 0)) }),
+      data: { tableId: table.id, label, logicalName, description, columns: rows },
     };
     nodes.push(node);
     const copies = instances.get(table.id) ?? [];
@@ -230,7 +259,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
 }
 
 export function EditorCanvas({ document, view, dialect, select, clearSelection, selectInstances, focus, activeTableId, activeRelationId,
-  connect, move, layoutSizes, snap, readOnly, showMap, mapId, placing, picking, pickId, place, placementForm, dropTable, instruction, editRelation }: {
+  connect, move, layoutSizes, snap, readOnly, panMode, showMap, mapId, placing, picking, pickId, place, placementForm, dropTable, instruction, editRelation }: {
   document: ErdDocument; view: View; dialect?: EditorDialect;
   select(id: string): void;
   clearSelection(): void;
@@ -243,6 +272,7 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
   move(positions: Map<string, XYPosition>): void;
   snap: boolean;
   readOnly: boolean;
+  panMode: boolean;
   showMap: boolean;
   mapId: string;
   placing?: boolean;
@@ -289,16 +319,17 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
     if (!bounds || !flow.current) return;
     return { point: flow.current.screenToFlowPosition({ x, y }, { snapToGrid: snap }),
       screen: { x: Math.min(Math.max(x - bounds.left, 8), Math.max(bounds.width - 258, 8)),
-        y: Math.min(Math.max(y - bounds.top, 8), Math.max(bounds.height - 196, 8)) } };
+        y: Math.min(Math.max(y - bounds.top, 8), Math.max(bounds.height - 310, 8)) } };
   };
   return <ReactFlowProvider initialNodes={projected.nodes} initialEdges={projected.edges} initialMinZoom={0.15} initialMaxZoom={2.5}>
-    <div ref={canvas} className="canvas" data-tool={placing ? 'place' : picking ? 'connect' : undefined}
+    <div ref={canvas} className="canvas" tabIndex={0} aria-label="캔버스 탐색"
+      data-mode={panMode ? 'pan' : 'select'} data-tool={placing ? 'place' : picking ? 'connect' : undefined}
       onDragOver={event => {
-        if (readOnly || !event.dataTransfer.types.some(type => type === dragType.table || type === dragType.newTable)) return;
+        if (readOnly || panMode || !event.dataTransfer.types.some(type => type === dragType.table || type === dragType.newTable)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = 'copy';
       }} onDrop={event => {
-        if (readOnly) return;
+        if (readOnly || panMode) return;
         const isNew = event.dataTransfer.types.includes(dragType.newTable);
         const tableId = event.dataTransfer.getData(dragType.table);
         if (!isNew && !tableId) return;
@@ -311,10 +342,11 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
         aria-label="ERD 캔버스"
         ariaLabelConfig={canvasLabels}
         onInit={instance => { flow.current = instance; }}
-        nodesDraggable={!readOnly && !picking && !placing} nodesConnectable={!readOnly && !picking && !placing}
+        nodesDraggable={!readOnly && !picking && !placing && !panMode} nodesConnectable={!readOnly && !picking && !placing && !panMode}
+        elementsSelectable={!panMode} nodesFocusable={!panMode} edgesFocusable={!panMode}
         nodes={displayNodes} edges={edges} nodeTypes={nodeTypes}
         onNodesChange={changes => {
-          setNodes(previous => applyNodeChanges(readOnly ? changes.filter(change => change.type !== 'position') : changes, previous));
+          setNodes(previous => applyNodeChanges(readOnly || panMode ? changes.filter(change => change.type !== 'position') : changes, previous));
           const positions = new Map<string, XYPosition>();
           // React Flow batches keyboard moves and pointer drag completion with dragging set to false.
           for (const change of changes) {
@@ -323,25 +355,26 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
               positions.set(change.id, change.position);
             }
           }
-          if (!readOnly && positions.size) move(positions);
+          if (!readOnly && !panMode && positions.size) move(positions);
         }}
-        onNodeClick={(_, node) => select(node.id)}
+        onNodeClick={panMode ? undefined : (_, node) => select(node.id)}
         onPaneClick={event => {
+          if (panMode) return;
           if (!placing || readOnly) return clearSelection();
           const at = position(event.clientX, event.clientY);
           if (at) place?.(at);
         }}
         onPaneContextMenu={event => { if (placing || picking) event.preventDefault(); }}
         onSelectionChange={onSelection}
-        onEdgeClick={(_, edge) => select(String(edge.data?.objectId ?? ''))}
-        onEdgeDoubleClick={(_, edge) => { if (!picking && !placing) editRelation?.(String(edge.data?.objectId ?? '')); }}
+        onEdgeClick={panMode ? undefined : (_, edge) => select(String(edge.data?.objectId ?? ''))}
+        onEdgeDoubleClick={panMode ? undefined : (_, edge) => { if (!picking && !placing) editRelation?.(String(edge.data?.objectId ?? '')); }}
         isValidConnection={connection => Boolean(connection.sourceHandle?.startsWith('out:') && connection.targetHandle?.startsWith('in:'))}
         onConnect={({ sourceHandle, targetHandle }) => {
-          if (!readOnly && sourceHandle?.startsWith('out:') && targetHandle?.startsWith('in:')) connect(sourceHandle.slice(4), targetHandle.slice(3));
+          if (!readOnly && !panMode && sourceHandle?.startsWith('out:') && targetHandle?.startsWith('in:')) connect(sourceHandle.slice(4), targetHandle.slice(3));
         }}
-        connectionRadius={18} snapToGrid={snap} snapGrid={[20, 20]} deleteKeyCode={null} selectionOnDrag
+        connectionRadius={18} snapToGrid={snap} snapGrid={[20, 20]} deleteKeyCode={null} selectionOnDrag={!panMode}
         zoomOnDoubleClick={!placing && !picking}
-        panOnDrag={[1, 2]} multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
+        panOnDrag={panMode ? true : [1, 2]} panActivationKeyCode="Space" multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
         onlyRenderVisibleElements={viewportOnly}
         defaultViewport={viewportOnly && anchor ? { x: 24 - anchor.x * 0.75, y: 24 - anchor.y * 0.75, zoom: 0.75 } : undefined}
         minZoom={0.15} maxZoom={2.5}
