@@ -71,8 +71,9 @@ it('starts with separate probes, restores an actual service backup, recovers aft
       const created = await write('/api/projects', 'POST', { name: 'fixture-project-품질' });
       expect(created.status).toBe(201);
       const project = '/api/projects/' + (await created.json()).id;
-      const code = (await send(api, viewer.headers, '/api/me').then(response => response.json())).user.shareCode;
-      expect((await write(project + '/members', 'POST', { shareCode: code, role: 'viewer' })).status).toBe(201);
+      expect((await send(api, viewer.headers, '/api/me/directory', 'PATCH',
+        { publicName: 'Release viewer', alias: 'release-viewer' })).status).toBe(200);
+      expect((await write(project + '/members', 'POST', { userId: viewer.id, role: 'viewer' })).status).toBe(201);
       const original = exportDocument(randomUUID());
       original.name = 'fixture-body <em>설명</em> O\'Brien';
       original.extensions = [{ namespace: 'archive-fixture', version: 712, data: { text: '배포 🧪 \\u0000' } }];

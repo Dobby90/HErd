@@ -1,10 +1,9 @@
 import type { Page } from 'playwright-core';
 import { expect, it } from 'vitest';
-import { deserializeDocument, serializeDocument } from '@erd/model';
+import type { ErdDocument } from '@erd/model';
 import { sampleDocument } from '@erd/test-fixtures';
-import type { Draft } from '../apps/web/src/recovery.js';
+import type { Mutation, ServerDocument } from '../apps/web/src/project-api.js';
 import { withBrowser } from './support/browser.js';
-import { renameDocument } from './support/editor-ui.js';
 
 const visible = (page: Page, text: string) => page.getByText(text, { exact: true }).first().waitFor();
 const action = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
@@ -12,6 +11,63 @@ const nav = (page: Page) => page.getByRole('complementary', { name: '문서 탐�
 const inspector = (page: Page) => page.getByRole('complementary', { name: '속성' });
 const tab = (page: Page, name: string) => inspector(page).getByRole('tab', { name, exact: true });
 const tableOnCanvas = (page: Page, name: string) => page.locator('.canvas-table').filter({ has: page.getByText(name, { exact: true }) });
+
+const projectId = 'editor-project';
+const date = '2026-01-01T00:00:00.000Z';
+const waitSaved = (page: Page) => page.locator('.save-state').filter({ hasText: /서버 저장됨 · 리비전 / }).waitFor();
+
+async function openEditor(page: Page, origin: string, document = sampleDocument, open = true) {
+  const documents = new Map<string, ServerDocument>([[document.id, { document, revision: 1, updatedAt: date }]]);
+  const project = { id: projectId, name: '편집기 테스트', role: 'owner', createdBy: 'browser-user', updatedAt: date };
+  const base = '/api/projects/' + projectId;
+  await page.route('**/api/**', async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path === '/api/me') return route.fulfill({ json: {
+      user: { id: 'browser-user', displayName: '편집기 사용자', isAdmin: false, directory: null },
+      csrfToken: 'browser-csrf', auth: { oidc: false, development: false, local: true },
+    } });
+    if (path === base) return route.fulfill({ json: { ...project, documentCount: documents.size } });
+    if (path === base + '/erds') {
+      if (request.method() === 'POST') {
+        const { document } = request.postDataJSON() as { document: ErdDocument };
+        const saved = { document, revision: 1, updatedAt: date };
+        documents.set(document.id, saved);
+        return route.fulfill({ status: 201, json: saved });
+      }
+      return route.fulfill({ json: [...documents.values()].map(({ document, revision, updatedAt }) => ({
+        id: document.id, title: document.name, target: document.target, revision, updatedAt,
+      })) });
+    }
+    const saved = documents.get(path.slice('/api/erds/'.length));
+    if (!path.startsWith('/api/erds/') || !saved) return route.fulfill({ status: 404, json: { message: 'Fixture resource not found.' } });
+    if (request.method() !== 'PUT') return route.fulfill({ json: saved });
+    const mutation = request.postDataJSON() as Mutation;
+    if (mutation.baseRevision !== saved.revision) return route.fulfill({ status: 409, json: { code: 'REVISION_CONFLICT' } });
+    const next = { document: mutation.document, revision: saved.revision + 1, updatedAt: date };
+    documents.set(next.document.id, next);
+    return route.fulfill({ json: { revision: next.revision, updatedAt: next.updatedAt } });
+  });
+  await page.goto(origin + '/?project=' + projectId + (open ? '&erd=' + document.id : ''));
+  if (open) await waitSaved(page);
+}
+
+function savedDocument(page: Page) {
+  return page.evaluate(async () => {
+    const id = new URLSearchParams(location.search).get('erd');
+    return await fetch('/api/erds/' + id).then(response => response.json()) as ServerDocument;
+  });
+}
+
+async function createErd(page: Page, name: string) {
+  await action(page, '새 ERD').click();
+  const dialog = page.getByRole('dialog', { name: '새 서버 ERD' });
+  expect(await dialog.getByLabel('SQL 대상').locator('option').allTextContents()).toEqual(['PostgreSQL 17']);
+  await dialog.getByLabel('ERD 이름').fill(name);
+  await action(page, 'ERD 생성').click();
+  await page.getByRole('heading', { name, exact: true }).waitFor();
+  await waitSaved(page);
+}
 
 async function addTable(page: Page, name: string) {
   await nav(page).getByRole('button', { name: '테이블 추가', exact: true }).click();
@@ -28,7 +84,7 @@ async function addColumn(page: Page, name: string) {
 it('fits the view on first open and exposes table tabs and export with the keyboard', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
-    await page.goto(origin);
+    await openEditor(page, origin);
     const canvas = page.locator('.canvas');
     const tables = canvas.locator('.canvas-table');
     await tables.first().waitFor();
@@ -51,6 +107,8 @@ it('fits the view on first open and exposes table tabs and export with the keybo
 
     const exportMenu = action(page, '내보내기');
     await exportMenu.press('Enter');
+    await page.keyboard.press('Tab');
+    await expect.poll(() => page.getByRole('button', { name: 'DDL 내보내기' }).evaluate(element => element === document.activeElement)).toBe(true);
     await page.keyboard.press('Tab');
     const imageExport = action(page, '이미지 내보내기');
     expect(await imageExport.evaluate(element => element === document.activeElement)).toBe(true);
@@ -75,14 +133,8 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
-    await page.goto(origin);
-    await visible(page, '브라우저 임시 저장 대기');
-    await action(page, '새 문서').click();
-    const creation = page.getByRole('dialog', { name: '새 ERD 문서' });
-    expect(await creation.getByLabel('SQL 대상').locator('option').allTextContents()).toEqual(['PostgreSQL 17']);
-    await creation.getByLabel('새 문서 제목').fill('물류');
-    await action(page, '문서 만들기').click();
-    await page.getByRole('heading', { name: '물류', exact: true }).waitFor();
+    await openEditor(page, origin, sampleDocument, false);
+    await createErd(page, '물류');
     await addTable(page, 'parents');
     await addColumn(page, 'region');
     await addColumn(page, 'number');
@@ -146,9 +198,9 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
     expect(await nav(page).getByRole('button', { name: 'parent_records', exact: true }).count()).toBe(1);
     await action(page, '기본 뷰').click();
     await tableOnCanvas(page, 'parent_records').waitFor();
-    await visible(page, '브라우저 저장 완료');
+    await waitSaved(page);
     await page.reload();
-    await visible(page, '브라우저 복구 완료');
+    await waitSaved(page);
     await page.getByRole('heading', { name: '물류', exact: true }).waitFor();
     await page.locator('.fk-edge').waitFor();
     await action(page, '기본 뷰 복제').click();
@@ -172,8 +224,7 @@ it('previews column deletion in the editor and restores the column and its FK to
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
-    await page.goto(origin);
-    await visible(page, '브라우저 임시 저장 대기');
+    await openEditor(page, origin);
     const impact = page.getByRole('dialog', { name: '스키마 삭제 영향' });
     const confirm = impact.getByRole('button', { name: '실제 삭제 확인', exact: true });
     const close = impact.getByRole('button', { name: '닫기', exact: true });
@@ -217,184 +268,15 @@ it('previews column deletion in the editor and restores the column and its FK to
     await action(page, '다시 실행').click();
     await orderNumber.waitFor({ state: 'detached' });
     await expect.poll(() => foreignKeys.count()).toBe(1);
-    await visible(page, '브라우저 저장 완료');
+    await waitSaved(page);
   });
 }, 90_000);
 
-it('isolates stale tabs, preserves both versions, and retries failed reads and writes', async () => {
-  await withBrowser(async (context, origin) => {
-    await context.addInitScript(() => {
-      const open = IDBFactory.prototype.open;
-      IDBFactory.prototype.open = function (name, version) {
-        if (sessionStorage.getItem('erd-test-idb-error')) {
-          throw new DOMException('Recovery storage fault', 'QuotaExceededError');
-        }
-        return open.call(this, name, version);
-      };
-    });
-    const first = context.pages()[0] ?? await context.newPage();
-    const second = await context.newPage();
-    first.setDefaultTimeout(8_000);
-    second.setDefaultTimeout(8_000);
-    await first.goto(origin);
-    await visible(first, '브라우저 임시 저장 대기');
-    await renameDocument(first, '공유 기준');
-    await visible(first, '브라우저 저장 완료');
-    await second.goto(origin);
-    await visible(second, '브라우저 복구 완료');
-    await visible(first, '다른 탭에서 이 문서를 열었습니다.');
-    await visible(second, '다른 탭에서 이 문서를 열었습니다.');
-
-    await renameDocument(first, '최신 복구본');
-    await visible(first, '브라우저 저장 완료');
-    await renameDocument(second, '늦게 저장한 편집');
-    await visible(second, '탭 충돌 · 별도 복구본 저장 완료');
-    const firstConflict = await activeDraft(second);
-    await nav(second).getByRole('button', { name: /저장된 복구본.*shop-sample/ }).click();
-    await second.getByRole('heading', { name: '최신 복구본', exact: true }).waitFor();
-    await renameDocument(first, '두 번째 최신 복구본');
-    await visible(first, '브라우저 저장 완료');
-    await renameDocument(second, '두 번째 늦은 편집');
-    await visible(second, '탭 충돌 · 별도 복구본 저장 완료');
-
-    const secondConflict = await activeDraft(second);
-    expect(secondConflict.tabId).toBe(firstConflict.tabId);
-    expect(secondConflict.key).not.toBe(firstConflict.key);
-    const conflictButton = (draft: Draft) => nav(second).getByRole('button', {
-      name: `탭 충돌 복구본 · ${draft.updatedAt} · shop-sample`, exact: true,
-    });
-    await conflictButton(firstConflict).click();
-    await second.getByRole('heading', { name: '늦게 저장한 편집', exact: true }).waitFor();
-    await conflictButton(secondConflict).click();
-    await second.getByRole('heading', { name: '두 번째 늦은 편집', exact: true }).waitFor();
-    await conflictButton(firstConflict).click();
-    await second.getByRole('heading', { name: '늦게 저장한 편집', exact: true }).waitFor();
-    await second.reload();
-    await visible(second, '탭 충돌 복구본을 열었습니다.');
-    await second.getByRole('heading', { name: '늦게 저장한 편집', exact: true }).waitFor();
-    await first.reload();
-    await visible(first, '브라우저 복구 완료');
-    await first.getByRole('heading', { name: '두 번째 최신 복구본', exact: true }).waitFor();
-
-    await renameDocument(second, '첫 번째 충돌 복구본의 후속 편집');
-    await visible(second, '브라우저 저장 완료');
-    expect(await activeDraft(second)).toMatchObject({ key: firstConflict.key, generation: firstConflict.generation + 1 });
-    expect((await storedDrafts(second)).find(draft => draft.key === secondConflict.key)).toEqual(secondConflict);
-
-    await first.evaluate(() => sessionStorage.setItem('erd-test-idb-error', 'true'));
-    await renameDocument(first, '저장 재시도');
-    await visible(first, '브라우저 저장 공간이 부족합니다.');
-    await first.getByRole('heading', { name: '저장 재시도', exact: true }).waitFor();
-    const reader = await context.newPage();
-    reader.setDefaultTimeout(8_000);
-    await reader.goto(origin);
-    await reader.getByRole('heading', { name: '두 번째 최신 복구본', exact: true }).waitFor();
-    await first.evaluate(() => sessionStorage.removeItem('erd-test-idb-error'));
-    await action(first, '다시 시도').click();
-    await visible(first, '브라우저 저장 완료');
-
-    await reader.evaluate(() => sessionStorage.setItem('erd-test-idb-error', 'true'));
-    await reader.reload();
-    await visible(reader, '브라우저 복구본을 읽을 수 없습니다.');
-    await reader.evaluate(() => sessionStorage.removeItem('erd-test-idb-error'));
-    await action(reader, '다시 시도').click();
-    await reader.getByRole('heading', { name: '저장 재시도', exact: true }).waitFor();
-
-    const rewriteVersion = (page: Page, version: number) => page.evaluate(formatVersion => new Promise<void>((resolve, reject) => {
-      const opening = indexedDB.open('erd-local-recovery', 1);
-      opening.onerror = () => reject(opening.error);
-      opening.onsuccess = () => {
-        const db = opening.result;
-        const tx = db.transaction('drafts', 'readwrite');
-        const store = tx.objectStore('drafts');
-        const request = store.get(JSON.stringify(['anonymous:local', 'shop-sample']));
-        request.onsuccess = () => {
-          const draft = request.result;
-          const document = JSON.parse(draft.serialized);
-          store.put({ ...draft, formatVersion, serialized: JSON.stringify({ ...document, formatVersion }) });
-        };
-        tx.oncomplete = () => { db.close(); resolve(); };
-        tx.onabort = () => { db.close(); reject(tx.error); };
-      };
-    }), version);
-    await rewriteVersion(reader, 99);
-    await reader.reload();
-    await visible(reader, '이 복구본은 더 최신 문서 형식입니다.');
-    await action(reader, '다시 시도').click();
-    await visible(reader, '이 복구본은 더 최신 문서 형식입니다.');
-    await rewriteVersion(reader, 1);
-    await action(reader, '다시 시도').click();
-    await reader.getByRole('heading', { name: '저장 재시도', exact: true }).waitFor();
-
-    const damagedId = 'recovery-metadata';
-    const repairable = {
-      ...await activeDraft(reader),
-      key: JSON.stringify(['anonymous:local', damagedId]),
-      documentId: damagedId,
-      serialized: serializeDocument({ ...sampleDocument, id: damagedId, name: '다른 복구본' }),
-    };
-    const damaged = { ...repairable, updatedAt: new Date(), documentId: { id: damagedId } };
-    await putStoredDraft(reader, damaged);
-    await renameDocument(reader, '현재 탭의 작업');
-    await visible(reader, '브라우저 저장 완료');
-    await nav(reader).getByRole('button', { name: '손상된 복구본', exact: true }).click();
-    await visible(reader, '복구본이 손상되었습니다.');
-    await reader.getByRole('heading', { name: '현재 탭의 작업', exact: true }).waitFor();
-    await action(reader, '다시 시도').click();
-    await visible(reader, '복구본이 손상되었습니다.');
-    expect((await storedDrafts(reader)).find(draft => draft.key === damaged.key)).toMatchObject(damaged);
-    await reader.getByRole('heading', { name: '현재 탭의 작업', exact: true }).waitFor();
-
-    await putStoredDraft(reader, repairable);
-    await action(reader, '다시 시도').click();
-    await reader.getByRole('heading', { name: '다른 복구본', exact: true }).waitFor();
-    await visible(reader, '브라우저 복구 완료');
-    await nav(reader).getByRole('button', { name: /저장된 복구본.*shop-sample/ }).click();
-    await reader.getByRole('heading', { name: '현재 탭의 작업', exact: true }).waitFor();
-  });
-}, 90_000);
-
-function putStoredDraft(page: Page, draft: unknown) {
-  return page.evaluate(record => new Promise<void>((resolve, reject) => {
-    const opening = indexedDB.open('erd-local-recovery', 1);
-    opening.onerror = () => reject(opening.error);
-    opening.onsuccess = () => {
-      const database = opening.result;
-      const transaction = database.transaction('drafts', 'readwrite');
-      transaction.objectStore('drafts').put(record);
-      transaction.oncomplete = () => { database.close(); resolve(); };
-      transaction.onabort = () => { database.close(); reject(transaction.error); };
-    };
-  }), draft);
-}
-
-function storedDrafts(page: Page) {
-  return page.evaluate(() => new Promise<Draft[]>((resolve, reject) => {
-    const opening = indexedDB.open('erd-local-recovery', 1);
-    opening.onerror = () => reject(opening.error);
-    opening.onsuccess = () => {
-      const database = opening.result;
-      const transaction = database.transaction('drafts');
-      const reading = transaction.objectStore('drafts').getAll();
-      transaction.oncomplete = () => { database.close(); resolve(reading.result); };
-      transaction.onabort = () => { database.close(); reject(transaction.error); };
-    };
-  }));
-}
-
-async function activeDraft(page: Page) {
-  const key = await page.evaluate(() => sessionStorage.getItem('erd-active-draft'));
-  const draft = (await storedDrafts(page)).find(record => record.key === key);
-  if (!draft) throw new Error('The active recovery draft was not stored.');
-  return draft;
-}
-
-it('commits schema form values and restores drafts with object-specific name diagnostics', async () => {
+it('commits schema form values and reloads server documents with object-specific name diagnostics', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
-    await page.goto(origin);
-    await visible(page, '브라우저 임시 저장 대기');
+    await openEditor(page, origin);
     const field = (name: string) => inspector(page).getByLabel(name, { exact: true });
     const property = (name: string) => inspector(page).getByRole('button', { name, exact: true });
 
@@ -425,13 +307,13 @@ it('commits schema form values and restores drafts with object-specific name dia
     await field('NULL 허용').uncheck();
     await field('DEFAULT SQL').fill('0');
     await action(page, '컬럼 적용').click();
-    await visible(page, '브라우저 저장 완료');
+    await waitSaved(page);
 
-    const savedBeforeCancel = await activeDraft(page);
+    const savedBeforeCancel = await savedDocument(page);
     await property('sku').click();
     await field('물리명').fill('cancelled_sku');
     await property('입력 취소').click();
-    expect(await activeDraft(page)).toEqual(savedBeforeCancel);
+    expect(await savedDocument(page)).toEqual(savedBeforeCancel);
 
     await tab(page, '제약').click();
     await action(page, 'UNIQUE 추가').click();
@@ -468,12 +350,11 @@ it('commits schema form values and restores drafts with object-specific name dia
       await action(page, '테이블 만들기').click();
     }
 
-    await visible(page, '브라우저 저장 완료');
-    const draft = await activeDraft(page);
-    expect(draft).toMatchObject({ owner: 'anonymous:local', documentId: sampleDocument.id, formatVersion: 1, baseRevision: null });
-    expect(Number.isFinite(Date.parse(draft.updatedAt))).toBe(true);
-    expect(draft.generation).toBeGreaterThan(savedBeforeCancel.generation);
-    const { catalog } = deserializeDocument(draft.serialized);
+    await waitSaved(page);
+    const saved = await savedDocument(page);
+    expect(saved.document).toMatchObject({ id: sampleDocument.id, formatVersion: 1 });
+    expect(saved.revision).toBeGreaterThan(savedBeforeCancel.revision);
+    const { catalog } = saved.document;
     const namespace = catalog.namespaces.find(item => item.physicalName === 'inventory');
     const table = catalog.tables.find(item => item.logicalName === '부품');
     const [amount, sku] = (table?.columnIds ?? []).map(id => catalog.columns.find(item => item.id === id));
@@ -499,7 +380,7 @@ it('commits schema form values and restores drafts with object-specific name dia
     ]);
 
     await page.reload();
-    await visible(page, '브라우저 복구 완료');
+    await waitSaved(page);
     await visible(page, '구조 검증 통과');
     for (const [id, message] of [
       [blank.id, '물리명을 입력하세요.'],
@@ -517,8 +398,7 @@ it('adds reciprocal and self foreign keys and edits an independent logical relat
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
-    await page.goto(origin);
-    await visible(page, '브라우저 임시 저장 대기');
+    await openEditor(page, origin);
 
     for (const [name, target, onDelete, onUpdate] of [
       ['users_parent_fk', 'users', 'set-null', 'cascade'],
@@ -557,8 +437,8 @@ it('adds reciprocal and self foreign keys and edits an independent logical relat
     await page.locator('.logical-edge').filter({ hasText: '상품과 고객 · 논리' }).waitFor();
     await expect.poll(() => page.locator('.fk-edge').count()).toBe(6);
     await page.locator('.fk-edge').filter({ hasText: '자식 0..N · 부모 0..1' }).first().waitFor();
-    await visible(page, '브라우저 저장 완료');
-    const { catalog, relationships } = deserializeDocument((await activeDraft(page)).serialized);
+    await waitSaved(page);
+    const { catalog, relationships } = (await savedDocument(page)).document;
     expect(catalog.constraints.slice(-3)).toMatchObject([
       { kind: 'fk', physicalName: 'users_parent_fk', tableId: 'users', targetTableId: 'users', onDelete: 'set-null', onUpdate: 'cascade' },
       { kind: 'fk', physicalName: 'users_product_fk', tableId: 'users', targetTableId: 'products', onDelete: 'restrict', onUpdate: 'no-action' },
@@ -572,8 +452,7 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
-    await page.goto(origin);
-    await visible(page, '브라우저 임시 저장 대기');
+    await openEditor(page, origin);
     const workspace = page.getByRole('region', { name: '다이어그램' });
     const search = nav(page).getByRole('searchbox');
     await search.fill('order_items');
@@ -633,13 +512,13 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
     await toggle.click();
     await map.waitFor({ state: 'detached' });
 
-    await visible(page, '브라우저 저장 완료');
-    const original = deserializeDocument((await activeDraft(page)).serialized).views.find(view => view.name === '작업용 상세');
+    await waitSaved(page);
+    const original = (await savedDocument(page)).document.views.find(view => view.name === '작업용 상세');
     if (!original) throw new Error('Missing the committed view.');
     await action(page, '뷰 설정').click();
     await action(page, '뷰 복제').click();
-    await visible(page, '브라우저 저장 완료');
-    const copy = deserializeDocument((await activeDraft(page)).serialized).views.find(view => view.name === '작업용 상세 복제');
+    await waitSaved(page);
+    const copy = (await savedDocument(page)).document.views.find(view => view.name === '작업용 상세 복제');
     if (!copy) throw new Error('Missing the cloned view.');
     expect(copy.groups[0]).toMatchObject({ name: '배송 그룹' });
     expect(copy.groups[0].id).not.toBe(original.groups[0].id);
@@ -659,12 +538,10 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
   });
 }, 90_000);
 
-it('restores a v1 recovery draft and preserves advanced data and indexed SQL when editing other attributes', async () => {
+it('preserves advanced data and indexed SQL in existing server documents', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
-    await page.goto(origin);
-    await visible(page, '브라우저 임시 저장 대기');
 
     const legacy = structuredClone(sampleDocument);
     legacy.catalog.enums.push({ id: 'state-type', physicalName: 'state', namespaceId: 'public-schema', values: ['new', 'paid'] });
@@ -683,35 +560,28 @@ it('restores a v1 recovery draft and preserves advanced data and indexed SQL whe
     };
     const legacyIndex = legacy.catalog.indexes[0];
     legacyIndex.keys = [{ kind: 'expression', expression }];
-    const key = JSON.stringify(['anonymous:local', legacy.id]);
-    await putStoredDraft(page, {
-      key, owner: 'anonymous:local', documentId: legacy.id, updatedAt: new Date().toISOString(),
-      formatVersion: 1, baseRevision: null, generation: 1, serialized: serializeDocument(legacy),
-    });
-
-    await page.reload();
-    await visible(page, '브라우저 복구 완료');
+    await openEditor(page, origin, legacy);
     await nav(page).getByText('SQL 지원', { exact: true }).click();
     for (const feature of ['ENUM', 'SEQUENCE', 'IDENTITY']) await visible(page, feature + ' · 보존 전용');
-    await visible(page, 'DDL 가져오기 · 서버 문서에서 지원');
-    await visible(page, 'DDL 내보내기 · 서버 문서에서 지원');
+    await visible(page, 'DDL 가져오기 · 지원');
+    await visible(page, 'DDL 내보내기 · 지원');
     await nav(page).getByRole('button', { name: 'products', exact: true }).click();
     await inspector(page).getByRole('button', { name: 'name', exact: true }).click();
     await inspector(page).getByLabel('설명', { exact: true }).fill('편집한 설명');
     await action(page, '컬럼 적용').click();
-    await visible(page, '브라우저 저장 완료');
+    await waitSaved(page);
     await tab(page, '인덱스').click();
     await inspector(page).getByRole('button', { name: 'INDEX · products_name_idx', exact: true }).click();
     const sqlInput = inspector(page).getByRole('textbox', { name: '인덱스 SQL 식 1', exact: true });
     expect(await sqlInput.inputValue()).toBe(expression.sql.replace(/\r\n/g, '\n'));
     await inspector(page).getByLabel('설명', { exact: true }).fill('인덱스 설명만 변경');
     await action(page, '인덱스 적용').click();
-    await visible(page, '브라우저 저장 완료');
+    await waitSaved(page);
     await page.reload();
-    await visible(page, '브라우저 복구 완료');
+    await waitSaved(page);
     await inspector(page).getByText('보존된 SQL 식을 검토하세요.', { exact: true }).waitFor();
 
-    const restored = deserializeDocument((await activeDraft(page)).serialized);
+    const restored = (await savedDocument(page)).document;
     expect(restored.catalog.columns.find(column => column.id === 'product-name')).toEqual({ ...productName, description: '편집한 설명' });
     expect(restored.catalog.columns.find(column => column.id === 'user-id')).toEqual(legacy.catalog.columns[0]);
     expect(restored.catalog.enums).toEqual(legacy.catalog.enums);
@@ -725,8 +595,7 @@ it('pans and zooms the canvas and commits a snapped multi-selection drag as one 
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
-    await page.goto(origin);
-    await visible(page, '브라우저 임시 저장 대기');
+    await openEditor(page, origin);
     const viewport = page.locator('.react-flow__viewport');
     const transform = () => viewport.evaluate(node => {
       const { a, e, f } = new DOMMatrixReadOnly(getComputedStyle(node).transform);
@@ -763,10 +632,10 @@ it('pans and zooms the canvas and commits a snapped multi-selection drag as one 
     await page.mouse.down();
     await page.mouse.move(start.x + 58, start.y + 49, { steps: 12 });
     await page.mouse.up();
-    await visible(page, '브라우저 저장 완료');
+    await waitSaved(page);
 
     const original = sampleDocument.views[0].instances;
-    const moved = deserializeDocument((await activeDraft(page)).serialized).views[0].instances;
+    const moved = (await savedDocument(page)).document.views[0].instances;
     for (const item of original) {
       const actual = moved.find(instance => instance.id === item.id);
       if (['users', 'products'].includes(item.tableId)) {
@@ -779,23 +648,22 @@ it('pans and zooms the canvas and commits a snapped multi-selection drag as one 
     }
 
     await action(page, '실행 취소').click();
-    await visible(page, '브라우저 저장 완료');
-    expect(deserializeDocument((await activeDraft(page)).serialized).views[0].instances).toEqual(original);
+    await waitSaved(page);
+    expect((await savedDocument(page)).document.views[0].instances).toEqual(original);
     expect(await action(page, '실행 취소').isDisabled()).toBe(true);
     await action(page, '다시 실행').click();
-    await visible(page, '브라우저 저장 완료');
-    expect(deserializeDocument((await activeDraft(page)).serialized).views[0].instances).toEqual(moved);
+    await waitSaved(page);
+    expect((await savedDocument(page)).document.views[0].instances).toEqual(moved);
 
-    await action(page, '새 문서').click();
-    await page.getByLabel('새 문서 제목').fill('별도 이력');
-    await action(page, '문서 만들기').click();
-    await visible(page, '브라우저 저장 완료');
+    await action(page, 'ERD 목록').click();
+    await createErd(page, '별도 이력');
     expect(await action(page, '실행 취소').isDisabled()).toBe(true);
-    await nav(page).getByRole('button', { name: /저장된 복구본.*shop-sample/ }).click();
+    await action(page, 'ERD 목록').click();
+    await action(page, sampleDocument.name).click();
     await page.getByRole('heading', { name: sampleDocument.name, exact: true }).waitFor();
     await action(page, '실행 취소').click();
-    await visible(page, '브라우저 저장 완료');
-    expect(deserializeDocument((await activeDraft(page)).serialized).views[0].instances).toEqual(original);
+    await waitSaved(page);
+    expect((await savedDocument(page)).document.views[0].instances).toEqual(original);
 
     await tableOnCanvas(page, 'users').getByText('users', { exact: true }).click();
     const userNode = page.locator('.react-flow__node-table').filter({ has: page.getByText('users', { exact: true }) });
@@ -805,18 +673,18 @@ it('pans and zooms the canvas and commits a snapped multi-selection drag as one 
     await expect.poll(xOnCanvas).toBe(originalUser.x);
     await userNode.press('ArrowRight');
     await expect.poll(xOnCanvas).toBe(originalUser.x + 20);
-    await visible(page, '브라우저 저장 완료');
+    await waitSaved(page);
     const keyboardMoved = original.map(item => item.id === originalUser.id ? { ...item, x: item.x + 20 } : item);
-    expect(deserializeDocument((await activeDraft(page)).serialized).views[0].instances).toEqual(keyboardMoved);
+    expect((await savedDocument(page)).document.views[0].instances).toEqual(keyboardMoved);
 
     await action(page, '실행 취소').click();
-    await visible(page, '브라우저 저장 완료');
+    await waitSaved(page);
     await expect.poll(xOnCanvas).toBe(originalUser.x);
     await action(page, '다시 실행').click();
-    await visible(page, '브라우저 저장 완료');
+    await waitSaved(page);
     await expect.poll(xOnCanvas).toBe(originalUser.x + 20);
     await page.reload();
-    await visible(page, '브라우저 복구 완료');
+    await waitSaved(page);
     await expect.poll(xOnCanvas).toBe(originalUser.x + 20);
   });
 }, 90_000);

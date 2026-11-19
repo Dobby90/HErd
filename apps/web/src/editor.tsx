@@ -13,7 +13,6 @@ import { ActionMenu, AppVersion, ColumnBadges, Icon } from './editor-controls.js
 import { ThemeToggle } from './theme.js';
 import { columnsOf, duplicateView, EditorReadOnly, emptyView, field, Form, id, label, Modal, named, NameFields, placement, putView, ViewNameOptions } from './editor-fields.js';
 import type { Table, View } from './editor-fields.js';
-import { useEditorSession } from './editor-session.js';
 import { ImageExport } from './image-export.js';
 import { ColumnForm, DeleteSchema, ForeignKeyForm, IndexForm, KeyForm } from './schema-inspector.js';
 import type { FkDialog, PhysicalRelation } from './schema-inspector.js';
@@ -301,8 +300,15 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
   return <p>선택한 객체를 사용할 수 없습니다.</p>;
 }
 
-type LocalSession = ReturnType<typeof useEditorSession>;
-type EditingSession = Pick<LocalSession, 'document' | 'loading' | 'status' | 'diagnostics' | 'canUndo' | 'canRedo' | 'run' | 'step'>;
+type EditingSession = {
+  document: ErdDocument;
+  status: { text: string; error?: boolean };
+  diagnostics: ModelDiagnostic[];
+  canUndo: boolean;
+  canRedo: boolean;
+  run(command: DocumentCommand, guard?: (before: ErdDocument, after: ErdDocument) => ModelDiagnostic[]): boolean;
+  step(direction: 'undo' | 'redo'): void;
+};
 
 export function createEditorDocument(name: string, target: SqlTarget) {
   return createDocument({
@@ -311,13 +317,8 @@ export function createEditorDocument(name: string, target: SqlTarget) {
   }).document;
 }
 
-export function Editor({ topActions }: { topActions?: ReactNode } = {}) {
-  const local = useEditorSession();
-  return <DocumentEditor session={local} local={local} topActions={topActions} />;
-}
-
-export function DocumentEditor({ session, local, readOnly = false, topActions, saveActions, exportAction, importAction, initialPlacement, verifyImage }: {
-  session: EditingSession; local?: LocalSession; readOnly?: boolean; topActions?: ReactNode; saveActions?: ReactNode; exportAction?(viewId: string | undefined): ReactNode;
+export function DocumentEditor({ session, readOnly = false, topActions, saveActions, exportAction, importAction, initialPlacement, verifyImage }: {
+  session: EditingSession; readOnly?: boolean; topActions?: ReactNode; saveActions?: ReactNode; exportAction?(viewId: string | undefined): ReactNode;
   importAction?(viewId: string | undefined): ReactNode;
   initialPlacement?: CanvasFocus & { viewId: string };
   verifyImage?(): Promise<void>;
@@ -334,7 +335,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
   const [snap, setSnap] = useState(true);
   const [showMap, setShowMap] = useState(false);
   const mapId = useId();
-  const [dialog, setDialog] = useState<'document' | 'title' | 'view' | 'view-settings' | null>(null);
+  const [dialog, setDialog] = useState<'title' | 'view' | 'view-settings' | null>(null);
   const [fk, setFk] = useState<FkDialog | null>(null);
   const [logical, setLogical] = useState<LogicalSeed | ErdDocument['relationships'][number]>();
   const [tool, setTool] = useState<CanvasTool>();
@@ -344,7 +345,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
   const registered = dialects.get(document.target.dialectId);
   const dialect = registered?.metadata.profiles.some(profile => profile.version === document.target.engineVersion &&
     profile.status === 'certified') ? registered : undefined;
-  const run: QuickRun = (command, report) => !readOnly && !session.loading && session.run(command, (before, after) => {
+  const run: QuickRun = (command, report) => !readOnly && session.run(command, (before, after) => {
     if (!dialect) return [];
     const issues = (document: ErdDocument) => {
       const foreignKeys = dialect.inspectForeignKeys?.(document);
@@ -359,7 +360,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
   });
   const capability = dialect?.capabilities(document.target);
   const view = document.views.find(item => item.id === chosenView) ?? document.views[0];
-  const canEdit = !readOnly && !session.loading;
+  const canEdit = !readOnly;
   const canEditCanvas = canEdit && canvasMode === 'select';
   const canPlace = canEdit && capability?.table.edit === 'supported' && document.catalog.namespaces.length > 0;
   const selectedId = selection && 'id' in selection ? selection.id : undefined;
@@ -519,10 +520,6 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
     }
   }
 
-  async function openRecovery(key?: string) {
-    if (local && await (key ? local.restore(key) : local.retry())) selectView('');
-  }
-
   function move(positions: Map<string, XYPosition>) {
     if (!view || !positions.size) return;
     const groupDeltas = new Map(view.groups.flatMap(group => {
@@ -556,7 +553,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
       <div className="document-title">
         <h1 title={document.name}>{document.name}</h1>
         {!readOnly && <button className="icon-button quiet" type="button" aria-label="문서 제목 변경" title="문서 제목 변경"
-          disabled={session.loading} onClick={() => setDialog('title')}><Icon name="edit" /></button>}
+          onClick={() => setDialog('title')}><Icon name="edit" /></button>}
       </div>
       <p className="save-state" role={session.status.error ? 'alert' : 'status'}><span className="status-dot" />{session.status.text}</p>
       <div className="actions document-actions">
@@ -566,7 +563,6 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
           <button className="icon-button quiet" type="button" aria-label="다시 실행" title="다시 실행" disabled={!session.canRedo}
             onClick={() => session.step('redo')}><Icon name="redo" /></button>
         </div>}
-        {local && <button type="button" className="quiet" disabled={local.loading || local.unsaved} onClick={() => setDialog('document')}>새 문서</button>}
         <div className="actions secondary-actions">{topActions}</div>
         {importAction && <ActionMenu label="가져오기" icon="import">{importAction(view?.id)}</ActionMenu>}
         {(exportAction || view) && <ActionMenu label="내보내기" icon="export" primary>
@@ -577,9 +573,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
       </div>
     </header>
     <div className="editor-feedback">
-      {local?.status.retry && <button type="button" onClick={() => void openRecovery()}>다시 시도</button>}
       {saveActions}
-      {local?.otherTab && <p role="status">다른 탭에서 이 문서를 열었습니다.</p>}
     </div>
     <div className="mobile-panes" role="group" aria-label="편집기 영역">
       {(Object.keys(mobilePanes) as MobilePane[]).map(pane => <button key={pane} type="button" aria-pressed={mobilePane === pane}
@@ -588,7 +582,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
     <div className="editor-layout" data-mobile-pane={mobilePane}>
       <aside className="navigator" id={`${mobilePanesId}-schema`} aria-label="문서 탐색">
         <div className="section-heading nav-heading"><h2>스키마</h2>{!readOnly && <button type="button" className="quiet icon-button"
-          aria-label="네임스페이스 추가" title="네임스페이스 추가" disabled={session.loading}
+          aria-label="네임스페이스 추가" title="네임스페이스 추가"
           onClick={() => openProperties({ type: 'namespace' })}><Icon name="plus" /></button>}</div>
         <label className="schema-search"><Icon name="search" /><span className="sr-only">스키마 및 뷰 검색</span>
           <input type="search" placeholder="스키마 및 뷰 검색" value={query} onChange={event => {
@@ -616,12 +610,12 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
               {searchColumns.has(table.id) && <ul className="object-list column-matches">{searchColumns.get(table.id)?.map(column =>
                 <li key={column.id}><button type="button" onClick={() => locate(table.id, column.id)}>{namedResult(column)}</button></li>)}</ul>}
             </li>)}</ul>
-            {!readOnly && <button className="quiet schema-add" type="button" disabled={session.loading}
+            {!readOnly && <button className="quiet schema-add" type="button"
               onClick={() => openProperties({ type: 'table', namespaceId: namespace.id })}><Icon name="plus" />테이블 추가</button>}
           </section>;
         })}
         <div className="section-heading nav-heading section-separated"><h2>뷰</h2>{!readOnly && <button type="button" className="quiet icon-button"
-          aria-label="뷰 추가" title="뷰 추가" disabled={session.loading} onClick={() => setDialog('view')}><Icon name="plus" /></button>}</div>
+          aria-label="뷰 추가" title="뷰 추가" onClick={() => setDialog('view')}><Icon name="plus" /></button>}</div>
         <ul className="object-list">{document.views.filter(item => matches(item.name)).map(item => <li key={item.id}>
           <button type="button" aria-pressed={view?.id === item.id} onClick={() => selectView(item.id)}><Icon name="view" /><span>{item.name}</span></button>
         </li>)}</ul>
@@ -633,19 +627,13 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
         <details className="sql-support">
           <summary>SQL 지원</summary>
           <ul className="support-list">
-            <li>DDL 가져오기 · {capability?.table.import === 'supported' ? (local ? '서버 문서에서 지원' : '지원') : '미구현'}</li>
-            <li>DDL 내보내기 · {capability?.table.export === 'supported' ? (local ? '서버 문서에서 지원' : '지원') : '미구현'}</li>
+            <li>DDL 가져오기 · {capability?.table.import === 'supported' ? '지원' : '미구현'}</li>
+            <li>DDL 내보내기 · {capability?.table.export === 'supported' ? '지원' : '미구현'}</li>
             {(['enum', 'sequence', 'identity'] as const).map(feature =>
               <li key={feature}>{feature.toUpperCase()} · {capability?.[feature].edit === 'supported' ? '편집 가능' : '보존 전용'}</li>)}
           </ul>
         </details>
         <p className="sql-target">{dialect?.metadata.name ?? document.target.dialectId} {document.target.engineVersion}</p>
-        {local && local.drafts.length > 0 && <><h2>브라우저 복구본</h2><ul className="object-list">
-          {local.drafts.map(draft => <li key={draft.key}><button type="button" disabled={local.unsaved} onClick={() => void openRecovery(draft.key)}>
-            {'invalid' in draft ? '손상된 복구본' :
-              `${draft.tabId ? '탭 충돌 복구본' : '저장된 복구본'} · ${draft.updatedAt} · ${draft.documentId}`}
-          </button></li>)}
-        </ul></>}
       </aside>
       <section className="workspace" id={`${mobilePanesId}-canvas`} aria-label="다이어그램">
         {view ? <>
@@ -776,8 +764,8 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
       <aside className="inspector" id={`${mobilePanesId}-properties`} aria-label="속성">
         <div className="pane-heading"><h2>속성</h2></div>
         <div className="inspector-body">
-          {!session.loading && <Properties document={document} view={view} dialect={dialect} selection={selection}
-            run={run} inspect={inspect} fk={setFk} remove={setDeletion} readOnly={readOnly} />}
+          <Properties document={document} view={view} dialect={dialect} selection={selection}
+            run={run} inspect={inspect} fk={setFk} remove={setDeletion} readOnly={readOnly} />
         </div>
         <div className="inspector-diagnostics" aria-label="진단">
           <p role="status" className={structure.length ? 'error-text' : ''}>
@@ -789,17 +777,6 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
         </div>
       </aside>
     </div>
-    {local && dialog === 'document' && <Modal title="새 ERD 문서" close={() => setDialog(null)}>
-      <Form button="문서 만들기" cancel={() => setDialog(null)} submit={form => {
-        const target = editorTargets[Number(field(form, 'target'))];
-        if (!target) return;
-        const created = createEditorDocument(field(form, 'name'), { dialectId: target.dialectId, engineVersion: target.engineVersion });
-        if (created) { local.start(created); selectView(created.views[0].id); setDialog(null); }
-      }}>
-        <label>새 문서 제목<input name="name" required /></label>
-        <label>SQL 대상<select name="target">{editorTargets.map((target, index) => <option key={target.name} value={index}>{target.name}</option>)}</select></label>
-      </Form>
-    </Modal>}
     {dialog === 'view' && <Modal title="새 뷰" close={() => setDialog(null)}>
       <Form button="뷰 만들기" cancel={() => setDialog(null)} submit={form => {
         const next = emptyView(field(form, 'name'));
@@ -810,7 +787,7 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
       <Form button="제목 적용" cancel={() => setDialog(null)} submit={form => {
         if (run({ kind: 'title', name: field(form, 'documentName') })) setDialog(null);
       }}>
-        <label>문서 제목<input name="documentName" defaultValue={document.name} maxLength={local ? undefined : 200} required /></label>
+        <label>문서 제목<input name="documentName" defaultValue={document.name} maxLength={200} required /></label>
       </Form>
     </Modal>}
     {view && dialog === 'view-settings' && <ViewSettings key={view.id + view.name} view={view} run={run}

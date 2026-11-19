@@ -1,9 +1,8 @@
-import { deserializeDocument, serializeDocument } from '@erd/model';
-import type { ErdDocument } from '@erd/model';
+import { deserializeDocument } from '@erd/model';
 
 const owner = 'anonymous:local';
 const storeName = 'drafts';
-export const draftKey = (id: string) => JSON.stringify([owner, id]);
+const draftKey = (id: string) => JSON.stringify([owner, id]);
 
 export interface Draft {
   key: string;
@@ -18,7 +17,7 @@ export interface Draft {
   branchId?: string;
 }
 
-export type DraftEntry = Draft | { key: string; invalid: true };
+type DraftEntry = Draft | { invalid: true };
 
 function request<T>(operation: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -33,11 +32,15 @@ async function open() {
   return request(opening);
 }
 
-function finished(transaction: IDBTransaction) {
-  return new Promise<void>((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB transaction aborted.'));
-  });
+export async function countDrafts() {
+  if (typeof indexedDB.databases === 'function' &&
+      !(await indexedDB.databases()).some(database => database.name === 'erd-local-recovery')) return 0;
+  const database = await open();
+  try {
+    return await request(database.transaction(storeName).objectStore(storeName).count());
+  } finally {
+    database.close();
+  }
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -68,7 +71,7 @@ export async function readDrafts(): Promise<DraftEntry[]> {
     const invalid: DraftEntry[] = [];
     for (const item of all) {
       if (validMetadata(item)) valid.push(item);
-      else if (record(item) && item.owner === owner && typeof item.key === 'string') invalid.push({ key: item.key, invalid: true });
+      else invalid.push({ invalid: true });
     }
     return [...valid.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), ...invalid];
   } finally {
@@ -92,44 +95,4 @@ export function restoreDraft(draft: unknown) {
     throw new Error('Invalid recovery envelope.');
   }
   return { document, draft };
-}
-
-export async function writeDraft(document: ErdDocument, key: string, expected: number, tabId: string) {
-  const serialized = serializeDocument(document);
-  const branchId = crypto.randomUUID();
-  const database = await open();
-  try {
-    const transaction = database.transaction(storeName, 'readwrite');
-    const complete = finished(transaction);
-    let result: { draft: Draft; conflict: boolean } | undefined;
-    const store = transaction.objectStore(storeName);
-    const reading = store.get(key);
-    reading.onsuccess = () => {
-      let current: Draft | undefined;
-      let conflict = expected !== 0;
-      if (reading.result !== undefined) {
-        try {
-          current = restoreDraft(reading.result).draft;
-          conflict = current.documentId !== document.id || current.generation !== expected;
-        } catch {
-          conflict = true;
-        }
-      }
-      const draft: Draft = {
-        key: conflict ? JSON.stringify([owner, document.id, tabId, branchId]) : key,
-        owner, documentId: document.id, updatedAt: new Date().toISOString(),
-        formatVersion: document.formatVersion, baseRevision: null, generation: conflict ? 1 : expected + 1, serialized,
-        tabId: conflict ? tabId : current?.tabId,
-        branchId: conflict ? branchId : current?.branchId,
-      };
-      if (conflict) store.add(draft);
-      else store.put(draft);
-      result = { draft, conflict };
-    };
-    await complete;
-    if (!result) throw new Error('IndexedDB did not save the draft.');
-    return result;
-  } finally {
-    database.close();
-  }
 }

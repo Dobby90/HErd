@@ -54,12 +54,18 @@ export function Form({ children, submit, button = '적용', disabled = false, ca
   </form>;
 }
 
-export function Modal({ children, title, close }: { children: ReactNode; title: string; close(): void }) {
+export function Modal({ children, title, close, className }: { children: ReactNode; title: string; close(): void; className?: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    dialog.current?.showModal();
+    const element = dialog.current;
+    const previous = document.activeElement;
+    element?.showModal();
+    return () => {
+      element?.close();
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
   }, []);
-  return createPortal(<dialog ref={dialog} aria-label={title} onCancel={event => { event.preventDefault(); close(); }}>
+  return createPortal(<dialog ref={dialog} aria-label={title} className={className} onCancel={event => { event.preventDefault(); close(); }}>
     <header><h2>{title}</h2><button type="button" aria-label="닫기" onClick={close}>×</button></header>
     {children}
   </dialog>, document.body);

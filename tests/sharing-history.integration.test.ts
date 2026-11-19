@@ -21,17 +21,16 @@ async function setup(connectionString: string) {
     } else done();
   });
 
-  async function account(name: string) {
+  async function account(name: string, admin = false) {
     const id = randomUUID();
     const token = randomBytes(32).toString('base64url');
-    const { rows: [{ shareCode }] } = await db.query<{ shareCode: string }>(
-      'INSERT INTO users (id, issuer, subject, display_name) VALUES ($1,$2,$3,$3) RETURNING share_code AS "shareCode"',
-      [id, 'urn:fixture:accounts', name]);
+    await db.query('INSERT INTO users (id, issuer, subject, display_name, is_admin) VALUES ($1,$2,$3,$3,$4)',
+      [id, 'urn:fixture:accounts', name, admin]);
     await db.query("INSERT INTO sessions VALUES ($1,$2,now() + interval '1 hour')", [createHash('sha256').update(token).digest('hex'), id]);
     const headers = { cookie: 'herd-session=' + token, origin, 'x-csrf-token': createHash('sha256').update('herd:csrf:' + token).digest('hex') };
     const request = (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, payload?: Record<string, unknown>) =>
       api.inject({ method, url, headers, payload });
-    return { id, shareCode, headers, request, get: (url: string) => request('GET', url) };
+    return { id, headers, request, get: (url: string) => request('GET', url) };
   }
 
   async function project(actor: Awaited<ReturnType<typeof account>>, name: string) {
@@ -60,15 +59,20 @@ it('enforces member and document scope, checks live access for old SQL jobs, and
     const path = await project(owner, '공유 검증');
     const other = await project(outsider, '별도 프로젝트');
     const members = path + '/members';
-    const lookup = members + '/lookup';
-    expect((await owner.request('POST', lookup, { shareCode: editor.shareCode })).json()).toEqual({ displayName: 'editor' });
-    expect((await owner.request('POST', lookup, { shareCode: randomUUID() })).statusCode).toBe(404);
-    expect((await outsider.request('POST', lookup, { shareCode: editor.shareCode })).statusCode).toBe(404);
-    const invite = (shareCode: string, role: string) => owner.request('POST', members, { shareCode, role });
-    expect((await invite(editor.shareCode, 'editor')).statusCode).toBe(201);
-    expect((await invite(editor.shareCode, 'viewer')).json()).toMatchObject({ code: 'ALREADY_A_MEMBER' });
+    const lookup = members + '/candidates?q=ed';
+    const invite = (userId: string, role: string) => owner.request('POST', members, { userId, role });
+    expect((await owner.get(lookup)).json()).toEqual({ users: [], hasMore: false });
+    expect((await invite(editor.id, 'editor')).statusCode).toBe(404);
+    expect((await editor.request('PATCH', '/api/me/directory', { publicName: '공개 사용자', alias: 'editor' })).statusCode).toBe(200);
+    expect((await outsider.request('PATCH', '/api/me/directory', { publicName: '다른 사용자', alias: 'EDITOR' })).statusCode).toBe(409);
+    expect((await owner.get(lookup)).json()).toEqual({ users: [{ id: editor.id, publicName: '공개 사용자', alias: 'editor' }], hasMore: false });
+    expect((await owner.get(members + '/candidates?q=%25_')).json()).toEqual({ users: [], hasMore: false });
+    expect((await outsider.get(lookup)).statusCode).toBe(404);
+    expect((await invite(editor.id, 'editor')).statusCode).toBe(201);
+    expect((await invite(editor.id, 'viewer')).json()).toMatchObject({ code: 'ALREADY_A_MEMBER' });
+    expect((await owner.get(lookup)).json()).toEqual({ users: [], hasMore: false });
     expect((await editor.get(members)).statusCode).toBe(403);
-    expect((await editor.request('POST', lookup, { shareCode: outsider.shareCode })).statusCode).toBe(403);
+    expect((await editor.get(lookup)).statusCode).toBe(403);
     expect((await owner.request('PATCH', members + '/' + outsider.id, { role: 'viewer' })).statusCode).toBe(404);
     expect((await owner.request('DELETE', members + '/' + owner.id)).json()).toMatchObject({ code: 'LAST_OWNER' });
 
@@ -113,11 +117,11 @@ it('enforces member and document scope, checks live access for old SQL jobs, and
     await expect.poll(async () => (await editor.get(exportPath)).json().state, { timeout: 10_000 }).toBe('succeeded');
 
     expect((await owner.request('DELETE', members + '/' + editor.id)).statusCode).toBe(204);
-    expect((await editor.get('/api/me')).json().user).toMatchObject({ id: editor.id, shareCode: editor.shareCode });
+    expect((await editor.get('/api/me')).json().user).toMatchObject({ id: editor.id, directory: { alias: 'editor' } });
     for (const protectedPath of [path, erd, erd + '/revisions', version, exportPath, parsePath]) {
       expect((await editor.get(protectedPath)).statusCode).toBe(404);
     }
-    expect((await invite(editor.shareCode, 'owner')).statusCode).toBe(201);
+    expect((await invite(editor.id, 'owner')).statusCode).toBe(201);
     const attempts = await Promise.all([
       owner.request('DELETE', members + '/' + owner.id),
       editor.request('PATCH', members + '/' + editor.id, { role: 'viewer' }),
@@ -127,6 +131,42 @@ it('enforces member and document scope, checks live access for old SQL jobs, and
     expect((await db.query("SELECT 1 FROM project_members WHERE project_id = $1 AND role = 'owner'", [path.split('/').at(-1)])).rowCount).toBe(1);
   });
 }, 90_000);
+
+it('limits administration to service admins and preserves an active project owner across concurrent changes', async () => {
+  await fixture(async ({ db, api, account, project }) => {
+    const [admin, owner, other] = await Promise.all([account('admin', true), account('owner'), account('co-owner')]);
+    const path = await project(owner, '활성 소유자');
+    const adminPath = '/api/admin/users';
+    const status = adminPath + '/' + owner.id;
+    const setDisabled = (disabled: boolean) => admin.request('PATCH', status, { disabled });
+    expect((await owner.get(adminPath)).statusCode).toBe(403);
+    expect((await admin.get(path)).statusCode).toBe(404);
+    expect((await admin.get(adminPath + '?q=owner')).json().users).toHaveLength(2);
+    expect((await admin.request('PATCH', adminPath + '/' + admin.id, { disabled: true })).json()).toMatchObject({ code: 'ADMIN_ACCOUNT_PROTECTED' });
+    expect((await api.inject({ method: 'PATCH', url: status, headers: { ...admin.headers, origin: 'https://other.invalid' },
+      payload: { disabled: true } })).statusCode).toBe(403);
+    expect((await setDisabled(true)).json()).toMatchObject({ code: 'LAST_OWNER' });
+
+    expect((await other.request('PATCH', '/api/me/directory', { publicName: '공동 소유자', alias: 'co-owner' })).statusCode).toBe(200);
+    const members = path + '/members';
+    expect((await owner.request('POST', members, { userId: other.id, role: 'owner' })).statusCode).toBe(201);
+    const attempts = await Promise.all([
+      setDisabled(true),
+      other.request('PATCH', members + '/' + other.id, { role: 'viewer' }),
+    ]);
+    expect(attempts.map(result => result.statusCode).sort()).toEqual([204, 409]);
+    if (attempts[0].statusCode === 409) {
+      expect((await owner.request('PATCH', members + '/' + other.id, { role: 'owner' })).statusCode).toBe(204);
+      expect((await setDisabled(true)).statusCode).toBe(204);
+    }
+    expect((await owner.get('/api/me')).json().user).toBe(null);
+    expect((await owner.get(path)).statusCode).toBe(401);
+    expect((await other.request('DELETE', members + '/' + other.id)).json()).toMatchObject({ code: 'LAST_OWNER' });
+    expect((await db.query('SELECT 1 FROM sessions WHERE user_id = $1', [owner.id])).rowCount).toBe(0);
+    expect((await setDisabled(false)).statusCode).toBe(204);
+    expect((await owner.get(path)).statusCode).toBe(401);
+  });
+});
 
 it('migrates version payloads, restores atomically through failure and replay, and prunes checkpoints only', async () => {
   await fixture(async ({ db, api, account, project }) => {

@@ -2,13 +2,15 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import type { ImportApplied } from '@erd/sql-contract';
 import { duplicateDocument } from '@erd/model';
+import { AdminUsers } from './admin-users.js';
+import { DirectorySettings } from './directory-profile.js';
 import { createEditorDocument, DocumentEditor, editorTargets } from './editor.js';
 import { ActionMenu, AppVersion, Icon } from './editor-controls.js';
 import { field, Form, Modal } from './editor-fields.js';
 import { ApiFailure, apiRequest } from './project-api.js';
-import type { DocumentSummary, Identity, Project, SavedRevision, ServerDocument, SnapshotDetail } from './project-api.js';
-import { ProjectMembers, ShareCode } from './project-members.js';
-import { readDraft, readDrafts, restoreDraft } from './recovery.js';
+import type { DirectoryProfile, DocumentSummary, Identity, Project, SavedRevision, ServerDocument, SnapshotDetail } from './project-api.js';
+import { ProjectMembers } from './project-members.js';
+import { countDrafts, readDraft, readDrafts, restoreDraft } from './recovery.js';
 import { removeServerDraft, serverDrafts } from './server-drafts.js';
 import type { ServerDraft } from './server-drafts.js';
 import { SqlExport } from './sql-export.js';
@@ -22,6 +24,7 @@ type Location = { projectId?: string; documentId?: string };
 type ProjectView = { project: Project; documents: DocumentSummary[] };
 type OpenDocument = { id: string; editor: ServerEditor; drafts: ServerDraft[] };
 type LocalDraft = { key: string; name: string; updatedAt: string };
+type LocalImport = { key: string; name: string; document: ReturnType<typeof duplicateDocument> };
 const readLocation = (): Location => {
   const query = new URLSearchParams(window.location.search);
   return { projectId: query.get('project') ?? undefined, documentId: query.get('erd') ?? undefined };
@@ -96,7 +99,7 @@ function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActio
       projectId={projectId} csrf={csrf} viewId={viewId} disabled={suspended} viewer={readOnly}
       prepare={() => readOnly ? apiRequest<ServerDocument>('/erds/' + state.history.present.id) : editor.savedForExport()} />}
     session={{
-    document: state.history.present, loading: false, diagnostics: state.diagnostics,
+    document: state.history.present, diagnostics: state.diagnostics,
     canUndo: state.history.past.length > 0, canRedo: state.history.future.length > 0,
     status: { text: readOnly ? `읽기 전용 · 리비전 ${state.revision}` : status, error: !['saved', 'saving'].includes(state.phase) },
     run: (command, guard) => editor.run(command, guard), step: direction => editor.step(direction),
@@ -135,7 +138,7 @@ function ServerPreview({ preview: { envelope, snapshotId }, close }: { preview: 
   const url = '/erds/' + envelope.document.id + (snapshotId ? '/revisions/' + snapshotId : '');
   return <DocumentEditor readOnly verifyImage={() => apiRequest<void>(url, { method: 'HEAD' })}
     topActions={<button type="button" onClick={close}>{snapshotId ? '현재 문서로 돌아가기' : '내 편집으로 돌아가기'}</button>} session={{
-    document: envelope.document, loading: false, diagnostics: [], canUndo: false, canRedo: false,
+    document: envelope.document, diagnostics: [], canUndo: false, canRedo: false,
     status: { text: `${snapshotId ? '과거 버전 · 읽기 전용' : '서버 최신본'} · 리비전 ${envelope.revision}` }, run: () => false, step: () => undefined,
   }} />;
 }
@@ -159,7 +162,10 @@ export function Workspace() {
   const [loginPrompt, setLoginPrompt] = useState(false);
   const [dialog, setDialog] = useState<'new' | 'local' | 'new-project' | 'rename'>();
   const [applied, setApplied] = useState<ImportApplied>();
-  const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
+  const [localDrafts, setLocalDrafts] = useState<{ available: LocalDraft[]; invalid: number }>({ available: [], invalid: 0 });
+  const [legacyCount, setLegacyCount] = useState(0);
+  const [legacyLink] = useState(() => new URLSearchParams(window.location.search).has('local'));
+  const localImport = useRef<LocalImport>(undefined);
   const editors = useRef(new Map<string, ServerEditor>());
   const projectId = location.projectId;
   const documentId = location.documentId;
@@ -168,16 +174,22 @@ export function Workspace() {
   const noticeVisible = Boolean(owner && project && open && open.id === documentId && !problem);
 
   useEffect(() => {
+    let active = true;
+    void countDrafts().then(count => { if (active) setLegacyCount(count); }, () => undefined);
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     if (!notice?.transient || !noticeVisible) return;
     const timer = window.setTimeout(() => setNotice(current => current === notice ? undefined : current), 3500);
     return () => window.clearTimeout(timer);
   }, [notice, noticeVisible]);
 
   function go(next: Location) {
-    const query = new URLSearchParams({ workspace: '1' });
+    const query = new URLSearchParams();
     if (next.projectId) query.set('project', next.projectId);
     if (next.documentId) query.set('erd', next.documentId);
-    window.history.pushState(null, '', '/?' + query);
+    window.history.pushState(null, '', query.size ? '/?' + query : '/');
     currentLocation.current = next;
     setLocation(next);
     setPreview(undefined);
@@ -203,6 +215,14 @@ export function Workspace() {
     currentIdentity.current = identity;
     setIdentity(identity);
     return identity;
+  }
+
+  function updateDirectory(profile: DirectoryProfile | null) {
+    const current = currentIdentity.current;
+    if (current?.user?.id !== owner || !current?.user) return;
+    const next = { ...current, user: { ...current.user, directory: profile } };
+    currentIdentity.current = next;
+    setIdentity(next);
   }
 
   async function act(action: () => Promise<void>) {
@@ -478,7 +498,8 @@ export function Workspace() {
   const writable = project && project.role !== 'viewer';
   const openLocal = () => void act(async () => {
     const entries = await readDrafts();
-    const local = entries.filter(entry => !('invalid' in entry)).flatMap(entry => {
+    const available = entries.flatMap(entry => {
+      if ('invalid' in entry) return [];
       try {
         const { document, draft } = restoreDraft(entry);
         return [{ key: draft.key, name: document.name, updatedAt: draft.updatedAt }];
@@ -486,7 +507,8 @@ export function Workspace() {
         return [];
       }
     });
-    setLocalDrafts(local);
+    localImport.current = undefined;
+    setLocalDrafts({ available, invalid: entries.length - available.length });
     setDialog('local');
   });
 
@@ -524,19 +546,25 @@ export function Workspace() {
           </button>
           <AppVersion />
         </div>
-        <span className="workspace-nav-divider" />
-        <a href="/?local=1" className="workspace-link">로컬 편집기</a>
       </div>
       <div className="actions project-account">
         <ThemeToggle />
         {identity?.user && <>
-          <ShareCode key={identity.user.id} code={identity.user.shareCode} />
+          <DirectorySettings key={identity.user.id} profile={identity.user.directory} csrf={csrf} onSave={updateDirectory} />
+          {identity.user.isAdmin && <AdminUsers key={identity.user.id + ':admin'} csrf={csrf} />}
           <span className="account-name" title={identity.user.displayName}>{identity.user.displayName}</span>
           <button type="button" className="quiet" disabled={busy} onClick={logOut}>로그아웃</button>
         </>}
       </div>
     </header>
     <div className="project-content">
+      {(legacyLink || legacyCount > 0) && !documentId && <section className="local-migration" aria-label="로컬 작업 이전">
+        <div>
+          <h2>로컬 작업 이전</h2>
+          <p>로컬 편집기가 종료되었습니다. 이 브라우저에 저장된 작업은 편집 가능한 프로젝트에서 새 ERD로 가져올 수 있습니다.</p>
+        </div>
+        {writable && <button type="button" disabled={busy} onClick={openLocal}>로컬 작업 옮기기</button>}
+      </section>}
       {problem && <p role="alert">{problem}</p>}
       {!identity && <><p role="status">{busy ? '로그인 상태 확인 중' : '로그인 상태를 확인하지 못했습니다.'}</p>
         {!busy && <button type="button" onClick={() => void act(async () => { await refreshIdentity(); })}>다시 시도</button>}</>}
@@ -670,16 +698,26 @@ export function Workspace() {
         {problem && <p role="alert">{problem}</p>}
       </Form>
     </Modal>}
-    {dialog === 'local' && writable && <Modal title="로컬 복구본을 새 ERD로 저장" close={() => setDialog(undefined)}>
-      {localDrafts.length ? <Form button="새 ERD로 저장" disabled={busy} cancel={() => setDialog(undefined)} submit={form => void act(async () => {
-        const { document: local } = restoreDraft(await readDraft(field(form, 'draft')));
-        const name = field(form, 'name').trim() || local.name.slice(0, 200);
-        const document = duplicateDocument(local, crypto.randomUUID(), name);
-        const saved = await apiRequest<ServerDocument>('/projects/' + project.id + '/erds', { method: 'POST', csrf, body: { document } });
-        setDialog(undefined);
-        go({ projectId, documentId: saved.document.id });
+    {dialog === 'local' && writable && <Modal title="로컬 복구본을 새 ERD로 저장" close={() => { if (!busy) setDialog(undefined); }}>
+      {localDrafts.invalid > 0 && <p role="alert">읽을 수 없는 복구본이 {localDrafts.invalid}개 있습니다. 브라우저에 원본을 보관합니다.</p>}
+      {localDrafts.available.length ? <Form button="새 ERD로 저장" disabled={busy} cancel={() => setDialog(undefined)} submit={form => void act(async () => {
+        const key = field(form, 'draft');
+        const name = field(form, 'name').trim();
+        if (localImport.current?.key !== key || localImport.current.name !== name) {
+          const { document: local } = restoreDraft(await readDraft(key));
+          localImport.current = { key, name, document: duplicateDocument(local, crypto.randomUUID(), name || local.name.slice(0, 200)) };
+        }
+        const { document } = localImport.current;
+        try {
+          await apiRequest<ServerDocument>('/projects/' + project.id + '/erds', { method: 'POST', csrf, body: { document } });
+        } catch (error) {
+          if (!(error instanceof ApiFailure && error.code === 'DOCUMENT_ID_CONFLICT')) throw error;
+          // A previous attempt may have committed before its response reached the browser.
+          await apiRequest<ServerDocument>('/erds/' + document.id);
+        }
+        if (currentLocation.current.projectId === project.id) go({ projectId, documentId: document.id });
       })}>
-        <label>로컬 복구본<select name="draft" required>{localDrafts.map(draft =>
+        <label>로컬 복구본<select name="draft" required>{localDrafts.available.map(draft =>
           <option key={draft.key} value={draft.key}>{draft.name} · {date(draft.updatedAt)}</option>)}</select></label>
         <label>새 ERD 이름<input name="name" maxLength={200} placeholder="복구본 이름 사용" /></label>
         {problem && <p role="alert">{problem}</p>}

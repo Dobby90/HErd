@@ -1,9 +1,15 @@
 import type { ErdDocument, SqlTarget } from '@erd/model';
 
+export interface DirectoryProfile {
+  publicName: string;
+  alias: string;
+}
+
 export interface User {
   id: string;
   displayName: string;
-  shareCode: string;
+  directory: DirectoryProfile | null;
+  isAdmin: boolean;
 }
 
 export interface Identity {
@@ -25,6 +31,8 @@ export type ProjectRole = Project['role'];
 export interface ProjectMember {
   id: string;
   displayName: string;
+  alias: string | null;
+  disabled: boolean;
   role: ProjectRole;
 }
 

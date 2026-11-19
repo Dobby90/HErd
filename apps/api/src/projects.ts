@@ -4,6 +4,7 @@ import type { ErdDocument } from '@erd/model';
 import type { SqlService } from '@erd/sql-service';
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
+import { lockMembershipChanges, requireActiveAccount } from './account-access.js';
 import { ApiError, objectBody, revisionNumber, uuid } from './api-error.js';
 import type { Authenticate } from './auth.js';
 import type { CheckpointSettings, DocumentLimits } from './config.js';
@@ -228,6 +229,8 @@ export function registerProjects(api: FastifyInstance, pool: Pool, authenticate:
     const name = title(objectBody(request.body).name);
     const id = randomUUID();
     const project = await transaction(pool, async client => {
+      await lockMembershipChanges(client);
+      await requireActiveAccount(client, user.id);
       await client.query('INSERT INTO projects (id, name, created_by) VALUES ($1, $2, $3)', [id, name, user.id]);
       await client.query("INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'owner')", [id, user.id]);
       return findProject(client, user.id, id);

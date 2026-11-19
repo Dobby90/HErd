@@ -1,11 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { sampleDocument } from '@erd/test-fixtures';
 import { expect, it } from 'vitest';
 import { createApi } from '../apps/api/src/app.js';
-import { Editor } from '../apps/web/src/editor.js';
+import { DocumentEditor } from '../apps/web/src/editor.js';
 
 it('opens the editor on the validated sample with both views and all four tables', () => {
-  const html = renderToStaticMarkup(<Editor />);
-  for (const text of ['새 문서', '속성', '구조 검증 통과', 'users', 'orders', 'order_items', 'products', '주문 전체', '상품 연결']) {
+  const html = renderToStaticMarkup(<DocumentEditor readOnly session={{ document: sampleDocument, diagnostics: [],
+    status: { text: '읽기 전용' }, canUndo: false, canRedo: false, run: () => false, step: () => undefined }} />);
+  for (const text of ['읽기 전용', '속성', '구조 검증 통과', 'users', 'orders', 'order_items', 'products', '주문 전체', '상품 연결']) {
     expect(html).toContain(text);
   }
 });

@@ -4,15 +4,18 @@ import type { CookieSerializeOptions } from '@fastify/cookie';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import * as oidc from 'openid-client';
 import type { Pool, PoolClient } from 'pg';
+import { requireActiveAccount } from './account-access.js';
 import { ApiError } from './api-error.js';
 import type { AuthSettings } from './config.js';
 import { transaction } from './database.js';
 import { registerLocalAuth } from './local-auth.js';
+import type { DirectoryProfile } from './user-directory.js';
 
 interface User {
   id: string;
   displayName: string;
-  shareCode: string;
+  directory: DirectoryProfile | null;
+  isAdmin: boolean;
 }
 
 interface Session {
@@ -26,7 +29,7 @@ const loginLifetime = 60 * 10;
 const token = () => randomBytes(32).toString('base64url');
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const callbackPath = '/api/auth/callback';
-const workspacePath = '/?workspace=1';
+const workspacePath = '/';
 
 export async function registerAuth(api: FastifyInstance, pool: Pool, settings: AuthSettings) {
   await api.register(cookie);
@@ -60,8 +63,11 @@ export async function registerAuth(api: FastifyInstance, pool: Pool, settings: A
   async function session(request: FastifyRequest): Promise<Session | undefined> {
     const raw = request.cookies[sessionCookie];
     if (!raw) return;
-    const { rows } = await pool.query<User>(`SELECT u.id, u.display_name AS "displayName", u.share_code AS "shareCode"
-      FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now()`, [hash(raw)]);
+    const { rows } = await pool.query<User>(`SELECT u.id, u.display_name AS "displayName", u.is_admin AS "isAdmin",
+      CASE WHEN u.directory_alias IS NOT NULL THEN
+        json_build_object('publicName', u.directory_name, 'alias', u.directory_alias) END AS directory
+      FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = $1 AND s.expires_at > now() AND u.disabled_at IS NULL`, [hash(raw)]);
     if (rows[0]) return { user: rows[0], token: raw, csrfToken: hash('herd:csrf:' + raw) };
   }
 
@@ -83,6 +89,7 @@ export async function registerAuth(api: FastifyInstance, pool: Pool, settings: A
     const raw = token();
     await transaction(pool, async client => {
       const userId = await user(client);
+      await requireActiveAccount(client, userId);
       const previous = request.cookies[sessionCookie];
       await client.query('DELETE FROM sessions WHERE expires_at <= now() OR token_hash = $1', [previous ? hash(previous) : null]);
       await client.query("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + $3 * interval '1 second')",
@@ -121,7 +128,7 @@ export async function registerAuth(api: FastifyInstance, pool: Pool, settings: A
     if (typeof request.query.returnTo === 'string') {
       try {
         const requested = new URL(request.query.returnTo, settings.origin);
-        if (requested.origin === settings.origin && requested.pathname === '/' && requested.searchParams.has('workspace')) {
+        if (requested.origin === settings.origin && requested.pathname === '/') {
           returnTo = requested.pathname + requested.search;
         }
       } catch {

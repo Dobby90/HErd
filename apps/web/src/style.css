@@ -463,8 +463,6 @@ dialog:has(.deletion-preview) { width: min(32rem, calc(100% - 2rem)); }
 .destructive { background: #a32f40; border-color: #a32f40; color: white; }
 .destructive:hover:not(:disabled) { background: #8c2534; border-color: #8c2534; }
 
-.workspace-link { color: var(--muted); font-size: .83rem; text-underline-offset: .2em; }
-.workspace-link:hover { color: var(--accent-ink); }
 .project-page { min-height: 100dvh; }
 .project-page .topbar {
   min-height: 64px;
@@ -474,11 +472,12 @@ dialog:has(.deletion-preview) { width: min(32rem, calc(100% - 2rem)); }
 .workspace-navigation, .workspace-project-title { display: flex; align-items: center; gap: .85rem; min-width: 0; }
 .brand-home { color: var(--ink); gap: .54rem; padding: 0; font-size: .91rem; letter-spacing: .05em; }
 .brand-home:hover:not(:disabled) { background: transparent; color: var(--accent-ink); }
-.workspace-nav-divider { height: 20px; border-inline-start: 1px solid var(--border); }
-.workspace-navigation .workspace-link { text-decoration: none; white-space: nowrap; }
 .project-account { margin-left: auto; gap: .55rem; font-size: .82rem; }
 .account-name { max-width: 10rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-content { width: min(100% - 2.5rem, 62rem); margin: clamp(1.7rem, 4vw, 3.4rem) auto; display: grid; gap: 1.1rem; }
+.local-migration { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .65rem; padding: .75rem 1rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.local-migration h2 { font-size: .95rem; }
+.local-migration p { margin-top: .2rem; color: var(--muted); font-size: .85rem; }
 .project-panel { padding: clamp(1.2rem, 4vw, 2rem); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; display: grid; gap: 1.15rem; }
 .login-panel { width: min(100%, 27rem); justify-self: center; margin-top: clamp(0rem, 4vh, 2rem); }
 .login-panel h1 { font-size: 1.5rem; }
@@ -540,8 +539,26 @@ dialog:has(.sql-export, .sql-import, .image-options, .version-list) { width: min
 .version-list li { display: grid; gap: .3rem; border-top: 1px solid var(--line); padding: .6rem 0; overflow-wrap: anywhere; }
 .version-list li > button { justify-self: start; text-align: left; }
 .version-list li > span { font-size: .86rem; color: var(--muted); }
-.project-account details { position: relative; }
-.project-account details > div { position: absolute; z-index: 11; top: calc(100% + 12px); right: 0; width: min(16rem, 70vw); padding: .65rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 7px 24px var(--shadow); }
+.management-dialog { width: min(43rem, calc(100% - 1.5rem)); }
+.management-dialog[open] { display: flex; flex-direction: column; gap: .6rem; }
+.management-dialog > header { margin-bottom: .25rem; }
+.management-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
+.management-section { display: grid; gap: .6rem; margin-block: .35rem; }
+.management-search { display: flex; align-items: end; flex-wrap: wrap; gap: .55rem; }
+.management-search > label { flex: 1 1 13rem; min-width: 0; }
+.management-search > button { white-space: nowrap; }
+.management-list { min-height: 2.8rem; max-height: 52dvh; overflow: auto; list-style: none; margin: 0; padding: 0; }
+.management-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .55rem; border-top: 1px solid var(--line); padding: .65rem .15rem; }
+.management-name { display: grid; gap: .15rem; min-width: 0; overflow-wrap: anywhere; }
+.management-name small { color: var(--muted); font-size: .8rem; }
+.management-row-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; }
+.management-row-actions select { width: auto; }
+.candidate-list { max-height: 28dvh; }
+.candidate-list > label { display: flex; align-items: center; gap: .55rem; border-top: 1px solid var(--line); padding: .5rem .15rem; cursor: pointer; }
+.candidate-list input { width: auto; flex: none; }
+.management-confirm { border-top: 1px solid var(--line); padding-top: .65rem; }
+.account-status { color: var(--muted); font-size: .82rem; }
+.project-account > .action-menu > .action-menu-panel { right: 0; }
 .image-options { grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
 .image-selection { max-height: 10rem; overflow: auto; margin: .6rem 0; }
 .image-preview { display: block; max-width: 100%; max-height: 48vh; object-fit: contain; border: 1px solid var(--border); border-radius: 6px; margin-top: .5rem; }

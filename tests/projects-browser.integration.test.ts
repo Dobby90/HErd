@@ -1,4 +1,6 @@
 import type { Page } from 'playwright-core';
+import { serializeDocument } from '@erd/model';
+import { sampleDocument } from '@erd/test-fixtures';
 import { expect, it } from 'vitest';
 import { createApi } from '../apps/api/src/app.js';
 import { createDatabase, migrate } from '../apps/api/src/database.js';
@@ -45,23 +47,59 @@ it('creates and restores server ERDs, preserves later edits across delayed respo
       await withBrowser(async (context, origin) => {
         const page = context.pages()[0] ?? await context.newPage();
         page.setDefaultTimeout(8_000);
-        await page.goto(origin);
-        await status(page, '브라우저 임시 저장 대기');
-        await rename(page, '오프라인 주문 샘플');
-        await status(page, '브라우저 저장 완료');
-        await page.getByRole('link', { name: '프로젝트', exact: true }).click();
+        await page.goto(origin + '/?local=1');
+        await heading(page, '로컬 작업 이전');
+        const local = { ...sampleDocument, name: '오프라인 주문 샘플' };
+        const owner = 'anonymous:local';
+        const key = JSON.stringify([owner, local.id]);
+        const branchKey = JSON.stringify([owner, local.id, 'old-tab', 'branch']);
+        const metadata = { owner, documentId: local.id, updatedAt: '2026-01-01T00:00:00.000Z',
+          formatVersion: local.formatVersion, baseRevision: null, generation: 2 };
+        await page.evaluate(records => new Promise<void>((resolve, reject) => {
+          const opening = indexedDB.open('erd-local-recovery', 1);
+          opening.onupgradeneeded = () => opening.result.createObjectStore('drafts', { keyPath: 'key' });
+          opening.onerror = () => reject(opening.error);
+          opening.onsuccess = () => {
+            const db = opening.result;
+            const tx = db.transaction('drafts', 'readwrite');
+            for (const record of records) tx.objectStore('drafts').put(record);
+            tx.oncomplete = () => { db.close(); resolve(); };
+            tx.onabort = () => { db.close(); reject(tx.error); };
+          };
+        }), [
+          { ...metadata, key, serialized: serializeDocument(local) },
+          { ...metadata, key: branchKey, tabId: 'old-tab', branchId: 'branch', serialized: serializeDocument({ ...local, name: '탭 분기' }) },
+          { key: 'damaged', owner, serialized: 'invalid' },
+        ]);
+        expect(await action(page, '새 문서').count()).toBe(0);
         await action(page, '개발 계정으로 로그인').click();
         await page.getByRole('button', { name: '새 프로젝트', exact: true }).click();
         await page.getByLabel('새 프로젝트 이름').fill('주문 프로젝트');
         await action(page, '프로젝트 생성').click();
         await heading(page, '주문 프로젝트');
-        await page.getByRole('button', { name: '가져오기', exact: true }).click();
-        await action(page, '로컬 복구본 가져오기').click();
+        await action(page, '로컬 작업 옮기기').click();
         const importDialog = page.getByRole('dialog', { name: '로컬 복구본을 새 ERD로 저장' });
         await importDialog.getByLabel('로컬 복구본').waitFor();
-        expect(await importDialog.getByLabel('로컬 복구본').locator('option').allTextContents()).toEqual([expect.stringContaining('오프라인 주문 샘플')]);
+        const draftOptions = await importDialog.getByLabel('로컬 복구본').locator('option').allTextContents();
+        expect(draftOptions).toHaveLength(2);
+        expect(draftOptions).toEqual(expect.arrayContaining([expect.stringContaining('오프라인 주문 샘플'), expect.stringContaining('탭 분기')]));
+        await importDialog.getByText(/읽을 수 없는 복구본이 1개/).waitFor();
+        await importDialog.getByLabel('로컬 복구본').selectOption(key);
+        const projectUrl = '/api/projects/' + new URL(page.url()).searchParams.get('project') + '/erds';
+        let droppedImport = false;
+        await page.route('**' + projectUrl, async route => {
+          if (droppedImport || route.request().method() !== 'POST') return route.continue();
+          const response = await route.fetch();
+          expect(response.status()).toBe(201);
+          droppedImport = true;
+          return route.abort('failed');
+        });
+        await action(page, '새 ERD로 저장').click();
+        await importDialog.getByText(/서버에 연결하지 못했습니다/).waitFor();
         await action(page, '새 ERD로 저장').click();
         await heading(page, '오프라인 주문 샘플');
+        await page.unroute('**' + projectUrl);
+        expect(await page.request.get(projectUrl).then(response => response.json())).toHaveLength(1);
         const imported = new URL(page.url()).searchParams.get('erd')!;
         expect(imported).not.toBe('shop-sample');
         expect((await getErd(page, imported)).document.catalog.tables).toHaveLength(4);

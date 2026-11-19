@@ -67,7 +67,7 @@ it('uses DB-backed accounts and starts at the current user’s projects', async 
         expect(importButton && importButton.x >= 0 && importButton.x + importButton.width <= 390).toBe(true);
         await page.keyboard.press('Escape');
         await button('로그아웃').click();
-        await signup('shared-owner', '두 번째 사용자');
+        const secondId = await signup('shared-owner', '두 번째 사용자');
         const sharedId = await create('공유 설계');
         await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)', [sharedId, firstId, 'viewer']);
         await button('로그아웃').click();
@@ -90,8 +90,30 @@ it('uses DB-backed accounts and starts at the current user’s projects', async 
         await owned.getByRole('button', { name: '내 설계' }).waitFor();
         expect(await owned.getByRole('button', { name: '공유 설계' }).count()).toBe(0);
         await page.getByRole('region', { name: '공유받은 프로젝트' }).getByRole('button', { name: '공유 설계' }).waitFor();
+        expect(await button('관리자').count()).toBe(0);
+        await pool.query('UPDATE users SET is_admin = true WHERE id = $1', [firstId]);
         await page.goto(base);
         await owned.getByRole('button', { name: '내 설계' }).waitFor();
+        await button('관리자').click();
+        await button('사용자 관리').click();
+        const management = page.getByRole('dialog', { name: '사용자 관리' });
+        await management.getByLabel('사용자 검색').fill('shared-owner');
+        await management.getByRole('button', { name: '검색', exact: true }).click();
+        const second = management.getByRole('listitem').filter({ hasText: '두 번째 사용자' });
+        await second.getByRole('button', { name: '비활성화' }).click();
+        await button('비활성화 확인').click();
+        await management.getByText(/유일한 활성 소유자/).waitFor();
+        await pool.query("UPDATE project_members SET role = 'owner' WHERE project_id = $1 AND user_id = $2", [sharedId, firstId]);
+        await button('비활성화 확인').click();
+        await second.getByText('비활성', { exact: true }).waitFor();
+        const disabledLogin = await post('password', { username: 'shared-owner', password });
+        expect(disabledLogin.status()).toBe(403);
+        expect((await disabledLogin.json()).code).toBe('ACCOUNT_DISABLED');
+        await second.getByRole('button', { name: '재활성화' }).click();
+        await button('재활성화 확인').click();
+        await second.getByText('활성', { exact: true }).waitFor();
+        expect(await pool.query('SELECT 1 FROM users WHERE id = $1 AND disabled_at IS NULL', [secondId]).then(result => result.rowCount)).toBe(1);
+        await management.getByRole('button', { name: '닫기' }).click();
 
         const { rows } = await pool.query<{ username: string; password_salt: Buffer; password_hash: Buffer }>(
           'SELECT username, password_salt, password_hash FROM password_credentials WHERE username = $1', ['first.user']);
