@@ -98,6 +98,7 @@ export interface EditorDialect {
   typeProblem(type: Catalog['columns'][number]['type']): string | undefined;
   actions: readonly NonNullable<ForeignKey['onDelete']>[];
   referenceKeys(document: ErdDocument, tableId: string): ReferenceKey[];
+  compatibleForeignKeyTypes(source: Catalog['columns'][number]['type'], target: Catalog['columns'][number]['type']): boolean;
   validateForeignKey(document: ErdDocument, key: ForeignKey): Diagnostic[];
   validate(document: ErdDocument, context: ValidationContext): Diagnostic[];
   cardinality(document: ErdDocument, key: ForeignKey): { parentOptional: boolean; childMax: 1 | 'many' } | undefined;

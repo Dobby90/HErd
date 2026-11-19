@@ -27,6 +27,7 @@ export const CanvasEditing = createContext<{
   resizeGroup?(id: string, bounds: ResizeParams): void;
   remove?(id: string): void;
   link?(instanceId: string): void;
+  linkColumn?(instanceId: string, columnId: string): void;
   reorder?(instanceId: string, columnId: string, targetId: string, after: boolean): void;
 }>({});
 

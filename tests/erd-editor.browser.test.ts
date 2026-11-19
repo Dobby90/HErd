@@ -328,7 +328,7 @@ it('aligns column metadata, restores automatic width, and moves only overlapping
   });
 }, 60_000);
 
-it('folds table columns from the card and reveals only connected handles while idle', async () => {
+it('folds table columns and exposes relationship handles only on the active row', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
@@ -337,17 +337,24 @@ it('folds table columns from the card and reveals only connected handles while i
     const products = page.locator('[data-id="overview-products"] .canvas-table');
     const unused = products.getByLabel('name 연결점', { exact: true });
     const opacity = () => unused.evaluate(node => Number(getComputedStyle(node).opacity));
-    const connected = orders.locator('.connected-handle').first();
-    expect(await connected.evaluate(node => Number(getComputedStyle(node).opacity))).toBeGreaterThan(0);
+    const idHandle = products.getByLabel('id 연결점', { exact: true });
+    const idOpacity = () => idHandle.evaluate(node => Number(getComputedStyle(node).opacity));
     expect(await opacity()).toBe(0);
-    await products.hover();
+    await products.locator('strong').hover();
+    expect(await opacity()).toBe(0);
+    expect(await idOpacity()).toBe(0);
+    await products.getByRole('button', { name: 'name 이름 편집' }).hover();
     expect(await opacity()).toBe(1);
+    expect(await idOpacity()).toBe(0);
     await page.mouse.move(6, 6);
     expect(await opacity()).toBe(0);
-    await action(page, '관계 연결').click();
-    await action(page, '논리 관계').click();
+    await products.getByRole('button', { name: 'name 이름 편집' }).click();
+    await page.mouse.move(6, 6);
     expect(await opacity()).toBe(1);
-    await page.getByRole('button', { name: '취소', exact: true }).click();
+    expect(await idOpacity()).toBe(0);
+    await products.getByRole('button', { name: 'id 이름 편집' }).hover();
+    expect(await idOpacity()).toBe(1);
+    expect(await opacity()).toBe(0);
 
     await orders.locator(':scope > strong > svg').first().click();
     const names = () => orders.locator('.canvas-name-text').allTextContents();
@@ -783,8 +790,8 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
     });
     // React Flow applies fitView after layout. A visible DOM handle can still
     // be clipped by the canvas and its current coordinates can hit the sidebar.
+    await tableOnCanvas(page, 'children').getByRole('button', { name: 'parent_region 이름 편집' }).hover();
     await expect.poll(() => reachable(source)).toBe(true);
-    await expect.poll(() => reachable(destination)).toBe(true);
     await source.hover();
     const destinationBox = await destination.boundingBox();
     if (!destinationBox) throw new Error('Cannot locate the FK destination handle.');
@@ -792,12 +799,13 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
     await page.mouse.move(destinationBox.x + destinationBox.width / 2, destinationBox.y + destinationBox.height / 2, { steps: 15 });
     await page.mouse.up();
 
-    const relationship = page.getByRole('dialog', { name: '외래 키 설정' });
+    const relationship = page.getByRole('dialog', { name: '관계 설정' });
     await relationship.waitFor();
+    await relationship.getByText('상세 설정', { exact: true }).click();
     await relationship.getByLabel('물리명', { exact: true }).fill('children_parent_fk');
-    await relationship.getByLabel('2. number에 대응할 원본 컬럼').selectOption({ label: 'parent_number' });
+    await relationship.getByLabel('2. number에 대응할 자식 컬럼').selectOption({ label: 'parent_number' });
     await relationship.getByLabel('ON DELETE').selectOption('cascade');
-    await action(page, '외래 키 적용').click();
+    await action(page, '관계 적용').click();
     await page.locator('.fk-edge').waitFor();
     await action(page, '실행 취소').click();
     await page.locator('.fk-edge').waitFor({ state: 'detached' });
@@ -1014,6 +1022,66 @@ it('commits schema form values and reloads server documents with object-specific
   });
 }, 90_000);
 
+it('reverses a relationship to reuse a child column and adds a unique foreign key for 1:1', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    const document = structuredClone(sampleDocument);
+    const { catalog } = document;
+    const names = ['alarm_config_composite', 'alarm_config_composite_target', 'alarm_settings'];
+    const foreignName = 'alarm_config_composite_id';
+    const primary = [foreignName, 'alarm_config_composite_target_id', 'id'];
+    const type = { reference: { kind: 'native' as const, name: 'bigint' }, arguments: [], arrayDimensions: 0 };
+    catalog.tables = names.map((physicalName, index) => ({ id: physicalName, namespaceId: 'public-schema', physicalName,
+      columnIds: [physicalName + '-pk', ...(index === 1 ? ['reuse-fk'] : [])] }));
+    catalog.columns = [...names.map((tableId, index) => ({ id: tableId + '-pk', tableId, physicalName: primary[index], type, nullable: false })),
+      { id: 'reuse-fk', tableId: names[1], physicalName: foreignName, type, nullable: false }];
+    catalog.constraints = names.map(tableId => ({ id: tableId + '-pkey', tableId, physicalName: tableId + '_pkey', kind: 'pk', columnIds: [tableId + '-pk'] }));
+    catalog.indexes = [];
+    document.relationships = [];
+    document.views = [{ id: 'alarms', name: '알람', notes: [], groups: [], instances: names.map((tableId, index) => ({ id: tableId + '-view', tableId, x: index * 300, y: 0 })) }];
+    await openEditor(page, origin, document);
+
+    const dialog = page.getByRole('dialog', { name: '관계 설정' });
+    const columnName = (table: string, column: string) => tableOnCanvas(page, table).locator('.canvas-column').getByText(column, { exact: true });
+    await action(page, '관계 추가').click();
+    await action(page, '1:N').click();
+    await columnName(names[1], foreignName).click();
+    await columnName(names[0], foreignName).click();
+    await dialog.getByText('선택한 부모 컬럼에 PK 또는 UNIQUE가 필요합니다.', { exact: true }).waitFor();
+    await dialog.getByRole('button', { name: '방향 바꾸기' }).click();
+    const mapping = dialog.getByLabel('1. ' + foreignName + '에 대응할 자식 컬럼');
+    expect(await mapping.inputValue()).toBe('reuse-fk');
+    expect(await dialog.getByLabel('참조 후보키').count()).toBe(0);
+    await dialog.getByText('외래 키 1개', { exact: true }).waitFor();
+    await action(page, '관계 적용').click();
+    await page.locator('.fk-edge').getByText('FK · 1:N', { exact: true }).waitFor();
+
+    await action(page, '관계 추가').click();
+    await action(page, '1:1').click();
+    await columnName(names[0], foreignName).click();
+    await tableOnCanvas(page, names[2]).locator('strong > svg').first().click();
+    expect(await mapping.locator('option:checked').textContent()).toBe('새 컬럼 · ' + foreignName);
+    await dialog.getByText('생성 · bigint', { exact: true }).waitFor();
+    await dialog.getByText('새 컬럼 1개 · 외래 키 1개 · UNIQUE 1개', { exact: true }).waitFor();
+    await action(page, '관계 적용').click();
+    await page.locator('.fk-edge').getByText('FK · 1:1', { exact: true }).waitFor();
+    await waitSaved(page);
+    const saved = (await savedDocument(page)).document;
+    expect(saved.catalog.tables.find(table => table.id === names[1])?.columnIds).toEqual(catalog.tables[1].columnIds);
+    expect(saved.catalog.constraints).toContainEqual(expect.objectContaining({ kind: 'fk', tableId: names[1], targetTableId: names[0],
+      pairs: [{ sourceColumnId: 'reuse-fk', targetColumnId: names[0] + '-pk' }] }));
+    const generated = saved.catalog.columns.find(column => column.tableId === names[2] && column.physicalName === foreignName);
+    expect(generated).toMatchObject({ type });
+    expect(saved.catalog.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'pk', tableId: names[2], columnIds: [names[2] + '-pk'] }),
+      expect.objectContaining({ kind: 'unique', tableId: names[2], columnIds: [generated!.id] }),
+    ]));
+    const ddl = await new SqlService(createSqlRegistry()).generate({ document: saved, target: saved.target });
+    expect(ddl).toMatchObject({ status: 'generated', sql: expect.stringContaining('UNIQUE ("alarm_config_composite_id")') });
+  });
+}, 60_000);
+
 it('qualifies same-named FK targets so the intended schema can be selected', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
@@ -1033,7 +1101,7 @@ it('qualifies same-named FK targets so the intended schema can be selected', asy
   });
 });
 
-it('adds reciprocal and self foreign keys and edits an independent logical relationship', async () => {
+it('adds reciprocal and self foreign keys and preserves legacy relationship lines', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(8_000);
@@ -1047,35 +1115,31 @@ it('adds reciprocal and self foreign keys and edits an independent logical relat
       await addColumn(page, name.replace('_fk', '_id'));
       await tab(page, '제약').click();
       await action(page, '외래 키 추가').click();
-      const dialog = page.getByRole('dialog', { name: '외래 키 설정' });
-      await dialog.getByLabel('물리명', { exact: true }).fill(name);
+      const dialog = page.getByRole('dialog', { name: '관계 설정' });
       await dialog.getByLabel('참조 테이블').selectOption({ label: target });
-      await dialog.getByLabel('1. id에 대응할 원본 컬럼').selectOption({ label: name.replace('_fk', '_id') });
+      await dialog.getByText('상세 설정', { exact: true }).click();
+      await dialog.getByLabel('물리명', { exact: true }).fill(name);
+      await dialog.getByLabel('1. id에 대응할 자식 컬럼').selectOption({ label: name.replace('_fk', '_id') });
       await dialog.getByLabel('ON DELETE').selectOption(onDelete);
       await dialog.getByLabel('ON UPDATE').selectOption(onUpdate);
-      await action(page, '외래 키 적용').click();
+      await action(page, '관계 적용').click();
     }
     await nav(page).getByRole('button', { name: 'products', exact: true }).click();
     await addColumn(page, 'owner_id');
     await tab(page, '제약').click();
     await action(page, '외래 키 추가').click();
-    const dialog = page.getByRole('dialog', { name: '외래 키 설정' });
-    await dialog.getByLabel('물리명', { exact: true }).fill('products_owner_fk');
+    const dialog = page.getByRole('dialog', { name: '관계 설정' });
     await dialog.getByLabel('참조 테이블').selectOption({ label: 'users' });
-    await dialog.getByLabel('1. id에 대응할 원본 컬럼').selectOption({ label: 'owner_id' });
-    await action(page, '외래 키 적용').click();
+    await dialog.getByText('상세 설정', { exact: true }).click();
+    await dialog.getByLabel('물리명', { exact: true }).fill('products_owner_fk');
+    await dialog.getByLabel('1. id에 대응할 자식 컬럼').selectOption({ label: 'owner_id' });
+    await action(page, '관계 적용').click();
 
-    await action(page, '관계 추가').click();
-    await inspector(page).getByLabel('관계 이름').fill('상품과 고객');
-    await inspector(page).getByLabel('원본 테이블').selectOption({ label: 'products' });
-    await inspector(page).getByLabel('대상 테이블').selectOption({ label: 'users' });
-    await inspector(page).getByLabel('카디널리티').selectOption('many-to-many');
-    await action(page, '논리 관계 적용').click();
-    await action(page, '상품과 고객').click();
-    expect(await inspector(page).getByLabel('카디널리티').inputValue()).toBe('many-to-many');
-    await page.locator('.logical-edge').getByText('상품과 고객 · 논리 · N:M', { exact: true }).waitFor();
+    await action(page, '고객별 상품 집계').click();
+    await inspector(page).getByText('users → products · N:M', { exact: true }).waitFor();
+    await page.locator('.logical-edge').getByText('고객별 상품 집계 · 논리 · N:M', { exact: true }).waitFor();
     await expect.poll(() => page.locator('.fk-edge').count()).toBe(6);
-    await page.locator('.fk-edge').filter({ hasText: '자식 0..N · 부모 0..1' }).first().waitFor();
+    await page.locator('.fk-edge').filter({ hasText: 'FK · 1:N' }).first().waitFor();
     await waitSaved(page);
     const { catalog, relationships } = (await savedDocument(page)).document;
     expect(catalog.constraints.slice(-3)).toMatchObject([
@@ -1083,7 +1147,11 @@ it('adds reciprocal and self foreign keys and edits an independent logical relat
       { kind: 'fk', physicalName: 'users_product_fk', tableId: 'users', targetTableId: 'products', onDelete: 'restrict', onUpdate: 'no-action' },
       { kind: 'fk', physicalName: 'products_owner_fk', tableId: 'products', targetTableId: 'users' },
     ]);
-    expect(relationships.at(-1)).toMatchObject({ name: '상품과 고객', sourceTableId: 'products', targetTableId: 'users', cardinality: 'many-to-many' });
+    expect(relationships).toEqual(sampleDocument.relationships);
+    await action(page, '관계선 삭제').click();
+    await page.locator('.logical-edge').waitFor({ state: 'detached' });
+    await waitSaved(page);
+    expect((await savedDocument(page)).document.relationships).toEqual([]);
   });
 }, 90_000);
 

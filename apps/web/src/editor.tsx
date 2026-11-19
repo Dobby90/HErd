@@ -9,7 +9,7 @@ import { EditorCanvas } from './editor-canvas.js';
 import type { CanvasFocus, CanvasPosition, LayoutSizes } from './editor-canvas.js';
 import { CanvasEditing, dragType, QuickAnnotationForm, QuickColumnForm, QuickTableForm } from './canvas-edit.js';
 import type { QuickAnnotationEdit, QuickEdit, QuickRun } from './canvas-edit.js';
-import { canvasDisplay, displayFields, logicalCardinalities } from './canvas-display.js';
+import { canvasDisplay, displayFields, foreignKeyLabel, logicalCardinalities } from './canvas-display.js';
 import { ActionMenu, AppVersion, ColumnBadges, Icon } from './editor-controls.js';
 import { DiagnosticList } from './editor-diagnostics.js';
 import type { DiagnosticTarget } from './editor-diagnostics.js';
@@ -21,8 +21,9 @@ import {
 import type { Table, View } from './editor-fields.js';
 import { EditorPanels } from './editor-panels.js';
 import { ImageExport } from './image-export.js';
-import { ColumnForm, DeleteSchema, ForeignKeyForm, IndexForm, KeyForm } from './schema-inspector.js';
-import type { FkDialog, PhysicalRelation } from './schema-inspector.js';
+import { ColumnForm, DeleteSchema, IndexForm, KeyForm } from './schema-inspector.js';
+import { RelationshipEditor } from './relationship-editor.js';
+import type { FkDialog, RelationshipSize } from './relationship-editor.js';
 import { arrangeView } from './view-grid.js';
 
 const dialects = new Map<string, EditorDialect>([[postgresqlEditor.metadata.id, postgresqlEditor]]);
@@ -34,15 +35,13 @@ type TableTab = keyof typeof tableTabs;
 const tabOrder = Object.keys(tableTabs) as TableTab[];
 const mobilePanes = { canvas: '다이어그램', schema: '스키마', properties: '속성' } as const;
 type MobilePane = keyof typeof mobilePanes;
-type LogicalSeed = Pick<ErdDocument['relationships'][number], 'sourceTableId' | 'targetTableId'>;
 type CanvasTool = { kind: 'place'; at?: CanvasPosition } | {
-  kind: 'relation'; mode: PhysicalRelation | 'logical'; origin?: View['instances'][number]; problem?: string;
+  kind: 'relation'; size: RelationshipSize; origin?: View['instances'][number]; columnId?: string;
 };
 type Inspector = (
   | { type: 'object'; id: string; tab?: TableTab; diagnosticField?: string }
   | { type: 'namespace' | 'table'; namespaceId?: string }
   | { type: 'column' | 'pk' | 'unique' | 'check' | 'index'; tableId: string; id?: string }
-  | { type: 'relationship'; id?: string }
 ) & { instanceId?: string };
 
 function TableDetails({ name, namespace, logicalName, initialTab, panels }: {
@@ -145,36 +144,18 @@ function GroupField({ view, groupId }: { view: View; groupId?: string }) {
   </select></label>;
 }
 
-function RelationshipForm({ document, relation, seed, run, close }: {
-  document: ErdDocument; relation?: ErdDocument['relationships'][number]; seed?: LogicalSeed; run: Run; close(): void;
+function LegacyRelationship({ document, relation, run, close, readOnly }: {
+  document: ErdDocument; relation: ErdDocument['relationships'][number]; run: Run; close(): void; readOnly: boolean;
 }) {
-  const endpoints = relation ?? seed;
-  const defaultName = seed && [seed.sourceTableId, seed.targetTableId].map(id =>
-    label(document.catalog.tables.find(table => table.id === id) ?? { physicalName: '' })).join(' → ');
-  return <Form button="논리 관계 적용" cancel={close} submit={form => {
-    const cardinality = (Object.keys(logicalCardinalities) as Array<keyof typeof logicalCardinalities>)
-      .find(item => item === field(form, 'cardinality'));
-    if (!cardinality) return;
-    if (run({ kind: 'put-relationship', value: {
-      id: relation?.id ?? id(), name: field(form, 'name'), description: field(form, 'description') || undefined,
-      sourceTableId: field(form, 'source'), targetTableId: field(form, 'target'), cardinality,
-    } })) close();
-  }}>
-    <label>관계 이름<input name="name" defaultValue={relation?.name ?? defaultName} required /></label>
-    <label>설명<textarea name="description" defaultValue={relation?.description} /></label>
-    {(['source', 'target'] as const).map(key => <label key={key}>{key === 'source' ? '원본 테이블' : '대상 테이블'}
-      <select name={key} defaultValue={key === 'source' ? endpoints?.sourceTableId : endpoints?.targetTableId} required>
-        {document.catalog.tables.map(table => <option key={table.id} value={table.id}>{label(table)}</option>)}
-      </select>
-    </label>)}
-    <label>카디널리티<select name="cardinality" defaultValue={relation?.cardinality ?? 'one-to-many'}>
-      {Object.entries(logicalCardinalities).map(([value, { label, notation }]) =>
-        <option key={value} value={value}>{label}({notation})</option>)}
-    </select></label>
-    {relation && <button type="button" onClick={() => {
+  const names = [relation.sourceTableId, relation.targetTableId].map(id => document.catalog.tables.find(table => table.id === id)?.physicalName);
+  return <>
+    <h3>{relation.name}</h3>
+    <p>{names.join(' → ')} · {logicalCardinalities[relation.cardinality].notation}</p>
+    {relation.description && <p>{relation.description}</p>}
+    {!readOnly && <button type="button" className="danger" onClick={() => {
       if (run({ kind: 'remove-relationship', id: relation.id })) close();
-    }}>논리 관계 삭제</button>}
-  </Form>;
+    }}>관계선 삭제</button>}
+  </>;
 }
 
 function Properties({ document, view, dialect, selection, run, inspect, fk, remove, readOnly }: {
@@ -225,7 +206,7 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
     </Form>
     {!readOnly && <button type="button" className="danger" onClick={() => remove(group.id)}><Icon name="trash" />그룹 삭제</button>}
   </>;
-  if (relationship || selection.type === 'relationship') return <RelationshipForm key={JSON.stringify(relationship) ?? 'new'} document={document} relation={relationship} run={run} close={() => inspect(null)} />;
+  if (relationship) return <LegacyRelationship document={document} relation={relationship} readOnly={readOnly} run={run} close={() => inspect(null)} />;
   if (namespace || selection.type === 'namespace') return <>
     <h3>{namespace ? '스키마' : '새 스키마'}</h3>
     <Form key={JSON.stringify(namespace) ?? 'new'} disabled={capability?.namespace.edit !== 'supported'}
@@ -241,7 +222,7 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
       {column && removeButton}</>;
     if (constraint?.kind === 'fk') return <>{back}
       <h3>외래 키</h3><p>{label(constraint)}</p>
-      <p className="muted">{isIdentifyingForeignKey(constraint, primaryColumnsByTable(document)) ? '식별 관계' : '비식별 관계'}</p>
+      <p className="muted">{foreignKeyLabel(isIdentifyingForeignKey(constraint, primaryColumnsByTable(document)), dialect.cardinality(document, constraint))}</p>
       <p>{constraint.pairs.map(pair => {
         const source = catalog.columns.find(item => item.id === pair.sourceColumnId);
         const target = catalog.columns.find(item => item.id === pair.targetColumnId);
@@ -249,7 +230,7 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
       }).join(', ')}</p>
       <button type="button" disabled={readOnly} onClick={() => fk({
         tableId: table.id, targetTableId: constraint.targetTableId, existing: constraint,
-      })}>외래 키 편집</button>{removeButton}</>;
+      })}>관계 편집</button>{!readOnly && <button type="button" className="danger" onClick={() => remove(constraint.id)}>외래 키 삭제</button>}</>;
     const keyKind = constraint?.kind ?? selection.type;
     if (keyKind === 'pk' || keyKind === 'unique' || keyKind === 'check') return <>{back}
       <h3>{keyKind.toUpperCase()} 제약</h3>
@@ -401,7 +382,6 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
   const mapId = useId();
   const [dialog, setDialog] = useState<'title' | 'view' | 'view-settings' | 'display' | null>(null);
   const [fk, setFk] = useState<FkDialog | null>(null);
-  const [logical, setLogical] = useState<LogicalSeed | ErdDocument['relationships'][number]>();
   const [tool, setTool] = useState<CanvasTool>();
   const [canvasMode, setCanvasMode] = useState<'select' | 'pan'>('select');
   const [quickEdit, setQuickEdit] = useState<QuickEdit | QuickAnnotationEdit>();
@@ -501,7 +481,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
     setQuickEdit(undefined);
   }
 
-  function chooseCanvasObject(instanceId: string) {
+  function chooseCanvasObject(instanceId: string, columnId?: string) {
     if (!canEdit || tool?.kind !== 'relation') {
       selectObject(instanceId);
       if (quickEdit?.instanceId !== instanceId) setQuickEdit(undefined);
@@ -511,15 +491,10 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
     if (!instance) return;
     const origin = view?.instances.find(item => item.id === tool.origin?.id);
     if (!origin) {
-      if (tool.mode !== 'logical' && !dialect?.referenceKeys(document, instance.tableId).some(key => !key.unavailable)) {
-        setTool({ ...tool, origin: undefined, problem: '선택한 부모 테이블에 참조 가능한 PK 또는 고유 키가 없습니다.' });
-        return;
-      }
-      setTool({ ...tool, origin: instance, problem: undefined });
+      setTool({ ...tool, origin: instance, columnId });
       return;
     }
-    if (tool.mode === 'logical') setLogical({ sourceTableId: origin.tableId, targetTableId: instance.tableId });
-    else setFk({ mode: tool.mode, tableId: instance.tableId, targetTableId: origin.tableId });
+    setFk({ size: tool.size, tableId: instance.tableId, targetTableId: origin.tableId, targetColumnId: tool.columnId, sourceColumnId: columnId });
     setTool(undefined);
   }
 
@@ -736,11 +711,11 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
         <ul className="object-list">{document.views.filter(item => matches(item.name)).map(item => <li key={item.id}>
           <button type="button" aria-pressed={view?.id === item.id} onClick={() => selectView(item.id)}><Icon name="view" /><span>{item.name}</span></button>
         </li>)}</ul>
-        <div className="section-heading nav-heading section-separated"><h2>논리 관계</h2>
-          {!readOnly && <button type="button" className="quiet icon-button" aria-label="관계 추가" title="관계 추가"
-            disabled={!document.catalog.tables.length} onClick={() => openProperties({ type: 'relationship' })}><Icon name="plus" /></button>}</div>
-        <ul className="object-list">{document.relationships.map(item => <li key={item.id}>
-          <button type="button" onClick={() => openProperties({ type: 'object', id: item.id })}>{item.name}</button></li>)}</ul>
+        {document.relationships.length > 0 && <>
+          <div className="section-heading nav-heading section-separated"><h2>기존 논리 관계</h2></div>
+          <ul className="object-list">{document.relationships.map(item => <li key={item.id}>
+            <button type="button" onClick={() => openProperties({ type: 'object', id: item.id })}>{item.name}</button></li>)}</ul>
+        </>}
         <details className="sql-support">
           <summary>SQL 지원</summary>
           <ul className="support-list">
@@ -775,13 +750,9 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
                     event.dataTransfer.setData(dragType.newTable, 'table');
                     event.dataTransfer.effectAllowed = 'copy';
                   }} onClick={() => chooseTool({ kind: 'place' })}><Icon name="plus" />테이블</button>
-                <ActionMenu label="관계 연결" icon="link">
-                  <button type="button" disabled={!dialect || !view.instances.length}
-                    onClick={() => chooseTool({ kind: 'relation', mode: 'identifying' })}>식별 관계</button>
-                  <button type="button" disabled={!dialect || !view.instances.length}
-                    onClick={() => chooseTool({ kind: 'relation', mode: 'non-identifying' })}>비식별 관계</button>
-                  <button type="button" disabled={!view.instances.length}
-                    onClick={() => chooseTool({ kind: 'relation', mode: 'logical' })}>논리 관계</button>
+                <ActionMenu label="관계 추가" icon="link">
+                  {(['1:N', '1:1', 'N:N'] as const).map(size => <button key={size} type="button" disabled={!dialect || !view.instances.length}
+                    onClick={() => chooseTool({ kind: 'relation', size })}>{size}</button>)}
                 </ActionMenu>
               </>}
               <label><span className="sr-only">이름 표시</span><select disabled={readOnly} value={view.nameDisplay ?? 'physical'} onChange={event => {
@@ -824,6 +795,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
             resizeGroup: canEditCanvas && !tool && !inline && !annotationForm ? resizeGroup : undefined,
             remove: canEditCanvas && !tool && !inline && !annotationForm ? id => setDeletion(id) : undefined,
             link: canEditCanvas && tool?.kind === 'relation' ? chooseCanvasObject : undefined,
+            linkColumn: canEditCanvas && tool?.kind === 'relation' && tool.size !== 'N:N' ? chooseCanvasObject : undefined,
             reorder: canEditCanvas && !tool && !inline ? reorderColumn : undefined,
           }}>
             <EditorCanvas key={document.id + view.id} document={document} view={view} dialect={dialect} select={chooseCanvasObject}
@@ -834,19 +806,16 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
               showMap={showMap} mapId={mapId} placing={canPlace && tool?.kind === 'place'}
               picking={canEdit && tool?.kind === 'relation'} pickId={canEdit && tool?.kind === 'relation' ? tool.origin?.id : undefined}
               editRelation={canEdit ? id => {
-                const relation = document.relationships.find(item => item.id === id);
                 const key = document.catalog.constraints.find(item => item.id === id);
                 setQuickEdit(undefined);
-                if (relation) setLogical(relation);
                 if (key?.kind === 'fk' && dialect) {
                   setFk({ tableId: key.tableId, targetTableId: key.targetTableId, existing: key });
                 }
               } : undefined}
               instruction={tool && canEdit && !(tool.kind === 'place' && tool.at) && <div className="canvas-instruction">
-                <p role="status">{tool.kind === 'place' ? '새 테이블을 놓을 위치를 클릭하세요.' : tool.origin
-                  ? (tool.mode === 'logical' ? '도착 테이블을 선택하세요.' : '자식 테이블을 선택하세요.')
-                  : (tool.mode === 'logical' ? '출발 테이블을 선택하세요.' : '부모 테이블을 선택하세요.')}</p>
-                {tool.kind === 'relation' && tool.problem && <p role="alert">{tool.problem}</p>}
+                <p role="status">{tool.kind === 'place' ? '새 테이블을 놓을 위치를 클릭하세요.' : tool.size === 'N:N'
+                  ? (tool.origin ? '두 번째 테이블을 선택하세요.' : '첫 번째 테이블을 선택하세요.')
+                  : (tool.origin ? '자식 테이블 또는 컬럼을 선택하세요.' : '부모 테이블 또는 참조할 컬럼을 선택하세요.')}</p>
                 <button type="button" className="quiet" onClick={() => setTool(undefined)}>취소</button>
               </div>}
               place={canPlace ? at => chooseTool({ kind: 'place', at }) : undefined}
@@ -917,11 +886,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
     }} />}
     {view && dialog === 'view-settings' && <ViewSettings key={view.id + view.name} view={view} run={run}
       choose={selectView} close={() => setDialog(null)} />}
-    {canEdit && fk && dialect && <ForeignKeyForm document={document} dialect={dialect} seed={fk} run={run} close={() => setFk(null)} />}
-    {canEdit && logical && <Modal title={'id' in logical ? '논리 관계 편집' : '논리 관계 연결'} close={() => setLogical(undefined)}>
-      <RelationshipForm document={document} seed={logical} relation={'id' in logical ? logical : undefined}
-        run={run} close={() => setLogical(undefined)} />
-    </Modal>}
+    {canEdit && fk && dialect && <RelationshipEditor document={document} view={view} dialect={dialect} seed={fk} run={run} close={() => setFk(null)} />}
     {deletion && canEdit && (view && viewObjectToDelete
       ? <DeleteViewObject view={view} object={viewObjectToDelete} run={run} close={() => setDeletion('')} removed={removed} />
       : <DeleteSchema document={document} objectId={deletion} run={run} close={() => setDeletion('')} removed={removed} />)}

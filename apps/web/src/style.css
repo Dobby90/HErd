@@ -416,6 +416,13 @@ summary { cursor: pointer; }
 .quick-form .actions button { font-size: .73rem; min-height: 26px; }
 .quick-form .actions button .ui-icon { width: 12px; height: 12px; }
 .fk-summary { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .55rem; margin-bottom: .7rem; font-size: .87rem; }
+.fk-summary strong { overflow-wrap: anywhere; min-width: 0; }
+.relationship-settings { display: grid; gap: .65rem; }
+.relationship-settings .fk-summary { margin: 0; }
+.relationship-changes { padding: .55rem .65rem; border: 1px solid var(--line); border-radius: 5px; }
+.relationship-details { display: grid; gap: .5rem; }
+.relationship-details > label { margin-top: .45rem; }
+.relationship-join-side { border-top: 1px solid var(--line); padding-top: .45rem; overflow-wrap: anywhere; }
 .canvas-column {
   position: relative;
   display: grid;
@@ -442,10 +449,13 @@ summary { cursor: pointer; }
 .column-badges .badge-pk { color: var(--accent-ink); background: var(--accent-soft); }
 .column-badges .badge-fk { color: var(--shared-ink); background: var(--shared-soft); }
 .canvas .react-flow__handle { width: 10px; height: 10px; background: var(--edge); border-color: var(--surface); opacity: 0; }
-.canvas .react-flow__handle.connected-handle { opacity: .85; }
-.canvas .react-flow__node-table:is(:hover, :focus-within) .react-flow__handle:not(.table-handle, .route-handle),
-.canvas[data-connecting="true"] .react-flow__handle:not(.table-handle, .route-handle) { opacity: 1; }
-.canvas .react-flow__handle:is(:hover, .connectingfrom, .connectingto) { background: var(--accent); opacity: 1; }
+.canvas .react-flow__handle.table-handle.connected-handle { opacity: .85; }
+.canvas .canvas-column .react-flow__handle:not(.route-handle) { pointer-events: none; }
+.canvas .canvas-column:hover .react-flow__handle:not(.route-handle),
+.canvas:not(:has(.canvas-column:hover)) .canvas-column:is(:focus-within, [data-column-selected]) .react-flow__handle:not(.route-handle),
+.canvas .canvas-column .react-flow__handle:is(.connectingfrom, .connectingto):not(.route-handle) { opacity: 1; pointer-events: auto; }
+.canvas[data-connecting="true"] .canvas-column .react-flow__handle.target:not(.route-handle) { pointer-events: auto; }
+.canvas .react-flow__handle:is(:hover, .connectingfrom, .connectingto) { background: var(--accent); }
 .canvas .react-flow__handle.table-handle { top: 17px; width: 6px; height: 6px; }
 .canvas .react-flow__handle.route-handle { visibility: hidden; pointer-events: none; }
 .canvas .react-flow__handle.route-handle.connected-handle { visibility: visible; }

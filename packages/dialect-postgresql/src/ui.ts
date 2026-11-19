@@ -172,6 +172,7 @@ export const postgresqlEditor: EditorDialect = {
   },
   actions: ['no-action', 'restrict', 'cascade', 'set-null', 'set-default'],
   referenceKeys,
+  compatibleForeignKeyTypes: compatible,
   inspectForeignKeys,
   validateForeignKey: (document, key) => inspectForeignKeys(document).validate(key),
   cardinality: (document, key) => inspectForeignKeys(document).cardinality(key),

@@ -27,8 +27,9 @@ export function logicalRelationshipLabel(relation: LogicalRelationship) {
   return `${relation.name} · 논리 · ${logicalCardinalities[relation.cardinality].notation}`;
 }
 
-export function foreignKeyLabel(identifying: boolean, meaning: ReturnType<EditorDialect['cardinality']>) {
+export function foreignKeyLabel(identifying: boolean, meaning: ReturnType<EditorDialect['cardinality']>, compact = false) {
   if (!meaning) return 'FK · 검토 필요';
+  if (compact) return 'FK · ' + (meaning.childMax === 1 ? '1:1' : '1:N');
   return `${identifying ? '식별 관계' : '비식별 관계'} · 자식 0..${meaning.childMax === 1 ? '1' : 'N'} · 부모 ${meaning.parentOptional ? '0..1' : '1'}`;
 }
 

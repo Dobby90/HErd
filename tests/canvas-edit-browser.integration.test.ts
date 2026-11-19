@@ -74,36 +74,37 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         expect(await shipment.getByRole('button', { name: 'tracking_code 이름 편집' }).count()).toBe(1);
 
         const connect = async (menu: string, parent: string, child: string) => {
-          await button('관계 연결').click();
+          await button('관계 추가').click();
           await button(menu).click();
           await card(parent).locator('strong').click();
           await card(child).locator('strong').click();
         };
-        const fk = page.getByRole('dialog', { name: '외래 키 설정' });
-        await connect('비식별 관계', 'users', 'shipment_records');
-        await fk.getByLabel(/에 대응할 원본 컬럼/).selectOption({ label: 'customer_id' });
-        await button('외래 키 적용').click();
+        const fk = page.getByRole('dialog', { name: '관계 설정' });
+        await connect('1:N', 'users', 'shipment_records');
+        await fk.getByLabel(/에 대응할 자식 컬럼/).selectOption({ label: 'customer_id' });
+        await button('관계 적용').click();
         await fk.waitFor({ state: 'hidden' });
-        await connect('식별 관계', 'orders', 'shipment_records');
+        await connect('1:1', 'orders', 'shipment_records');
+        await fk.getByText('상세 설정', { exact: true }).click();
+        await fk.getByLabel('자식 기본키에 포함').check();
         await expect.poll(() => fk.locator('select').evaluateAll(nodes =>
           nodes.filter(node => (node as HTMLSelectElement).selectedOptions[0]?.text.startsWith('새 컬럼')).length)).toBe(2);
-        await button('외래 키 적용').click();
+        await button('관계 적용').click();
         await fk.waitFor({ state: 'hidden' });
-        await connect('논리 관계', 'products', 'shipment_records');
-        const relation = page.getByRole('dialog', { name: '논리 관계 연결' });
-        await relation.getByLabel('카디널리티').selectOption('many-to-many');
-        await button('논리 관계 적용').click();
-        await relation.waitFor({ state: 'hidden' });
-        await expect.poll(() => page.locator('.identifying-edge').count()).toBe(4);
+        await connect('N:N', 'users', 'shipment_records');
+        await fk.getByLabel('연결 테이블 이름').fill('users_shipments');
+        await fk.getByText('연결 테이블 1개 · 외래 키 2개 · 연결 컬럼으로 구성한 복합 기본키', { exact: true }).waitFor();
+        await button('관계 적용').click();
+        await fk.waitFor({ state: 'hidden' });
+        await expect.poll(() => page.locator('.identifying-edge').count()).toBe(6);
         expect(await page.locator('.non-identifying-edge').count()).toBe(1);
-        expect(await page.locator('.logical-edge').count()).toBe(2);
+        expect(await page.locator('.logical-edge').count()).toBe(1);
         await shipment.getByRole('button', { name: 'integer 자료형 편집', exact: true }).first().dblclick();
         await edit.getByLabel('자료형').fill('text');
         await edit.getByLabel('자료형').press('Enter');
         await edit.getByRole('alert').getByText(/FK 자료형이 호환되지 않습니다/).waitFor();
         await edit.getByLabel('자료형').press('Escape');
-        await expect.poll(async () => (await read()).document.relationships.some(item =>
-          item.name === 'products → shipment_records' && item.cardinality === 'many-to-many')).toBe(true);
+        await expect.poll(async () => (await read()).document.catalog.tables.some(item => item.physicalName === 'users_shipments')).toBe(true);
         const saved = (await read()).document;
         const table = saved.catalog.tables.find(table => table.physicalName === 'shipment_records')!;
         const columns = table.columnIds.map(id => saved.catalog.columns.find(column => column.id === id)!);
@@ -115,10 +116,14 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         const keys = saved.catalog.constraints.filter(key => key.tableId === table.id);
         expect(keys.find(key => key.kind === 'pk')).toMatchObject({ columnIds: columns.slice(2).map(column => column.id) });
         expect(keys.filter(key => key.kind === 'fk')).toHaveLength(2);
-        expect(saved.relationships.at(-1)).toMatchObject({ sourceTableId: 'products', targetTableId: table.id, cardinality: 'many-to-many' });
+        expect(saved.relationships).toEqual(document.relationships);
+        const join = saved.catalog.tables.find(item => item.physicalName === 'users_shipments')!;
+        const joinKeys = saved.catalog.constraints.filter(key => key.tableId === join.id);
+        expect(joinKeys.find(key => key.kind === 'pk')).toMatchObject({ columnIds: join.columnIds });
+        expect(joinKeys.filter(key => key.kind === 'fk').map(key => key.targetTableId)).toEqual(['users', table.id]);
         const generated = await page.request.post('/api/projects/' + projectId + '/sql/jobs', {
           headers: { origin, 'x-csrf-token': me.csrfToken },
-          data: { kind: 'generate', erdId: document.id, revision: (await read()).revision, mutationId: randomUUID(), options: { tableIds: [table.id] } },
+          data: { kind: 'generate', erdId: document.id, revision: (await read()).revision, mutationId: randomUUID(), options: { tableIds: [join.id] } },
         });
         expect(generated.status()).toBe(202);
         const jobId = (await generated.json()).id;
@@ -128,6 +133,10 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         expect(sql).toContain('PRIMARY KEY ("orders_user_id", "orders_number")');
         expect(sql).toContain('FOREIGN KEY ("customer_id")');
         expect(sql).toContain('FOREIGN KEY ("orders_user_id", "orders_number")');
+        expect(sql).toContain('CREATE TABLE "public"."users_shipments"');
+        cluster.query('CREATE DATABASE relationship_ddl');
+        cluster.query(sql, 'relationship_ddl');
+        expect(cluster.query("SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND conrelid = 'public.users_shipments'::regclass", 'relationship_ddl')).toBe('2');
         await button('상품 연결').click();
         await page.getByRole('complementary', { name: '문서 탐색' }).getByRole('button', { name: 'shipment_records', exact: true })
           .dragTo(blank, { targetPosition: { x: 28, y: 370 } });
@@ -172,7 +181,7 @@ it('edits and arranges the canvas, connects each relation type, and persists val
           .toMatchObject({ logicalName: '운송장 번호', description: '택배사의 연동 식별자' });
         const exportMetadata = await page.request.post('/api/projects/' + projectId + '/sql/jobs', {
           headers: { origin, 'x-csrf-token': me.csrfToken },
-          data: { kind: 'generate', erdId: document.id, revision: withMetadata.revision, mutationId: randomUUID(), options: { tableIds: [table.id] } },
+          data: { kind: 'generate', erdId: document.id, revision: withMetadata.revision, mutationId: randomUUID(), options: { tableIds: [join.id] } },
         });
         expect(exportMetadata.status()).toBe(202);
         const metadataJobId = (await exportMetadata.json()).id;
@@ -232,7 +241,8 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         await button('shipment_records 테이블 삭제').click();
         await impact.getByRole('heading', { name: 'public.shipment_records' }).waitFor();
         await impact.getByRole('heading', { name: '영향받는 다이어그램 2개' }).waitFor();
-        await impact.getByText('논리 관계 1개 삭제', { exact: true }).waitFor();
+        await impact.getByText('다른 테이블의 외래 키 1개 삭제', { exact: true }).waitFor();
+        await impact.getByText(/users_shipments.*_fk/).waitFor();
         expect(await impact.getByText(table.id, { exact: true }).count()).toBe(0);
         await impact.getByRole('button', { name: '실제 삭제 확인' }).click();
         await shipment.waitFor({ state: 'detached' });

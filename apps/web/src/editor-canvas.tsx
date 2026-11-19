@@ -76,8 +76,9 @@ function CanvasDeleteButton({ label, title = label, remove }: {
 }
 
 const TableNode = memo(function TableNode({ id, data, selected }: NodeProps<CanvasNode>) {
-  const { activeId, edit, form, change, toggleColumns, remove, reorder, link } = useContext(CanvasEditing);
+  const { activeId, edit, form, change, toggleColumns, remove, reorder, link, linkColumn } = useContext(CanvasEditing);
   const [dropTarget, setDropTarget] = useState('');
+  const [selectedColumn, setSelectedColumn] = useState('');
   const editing = edit?.instanceId === id ? edit : undefined;
   const active = activeId === id || (!activeId && selected);
   const tableId = data.tableId;
@@ -92,6 +93,8 @@ const TableNode = memo(function TableNode({ id, data, selected }: NodeProps<Canv
   const showCount = data.columnCount && (data.columnsCollapsed || (active && toggleColumns));
   const addColumn = active && change && data.columns && !data.columnsCollapsed;
   const editText = (value: string, field: 'table' | 'name' | 'type', columnId?: string) => {
+    if (linkColumn && field === 'name') return <button type="button" className="canvas-text canvas-name-text nodrag nopan"
+      aria-label={value + ' 관계 컬럼으로 선택'} title={value}>{value}</button>;
     const open = (event: MouseEvent) => {
       event.stopPropagation();
       change?.({ instanceId: id, field, columnId });
@@ -103,7 +106,7 @@ const TableNode = memo(function TableNode({ id, data, selected }: NodeProps<Canv
       onDoubleClick={open}>{value}</button> : <span className={'canvas-' + field + '-text'} title={value}>{value}</span>;
   };
   return <article className={'canvas-table' + (data.highlighted ? ' search-match' : '') + (stacked ? ' stacked-columns' : '')}>
-    <strong><Icon name="table" /><span className="canvas-names">{editText(data.label, 'table')}
+    <strong onClick={() => setSelectedColumn('')}><Icon name="table" /><span className="canvas-names">{editText(data.label, 'table')}
       {data.logicalName && <span className="canvas-logical-name" title={data.logicalName}>{data.logicalName}</span>}
     </span>
       {active && remove && tableId && <CanvasDeleteButton label={data.label + ' 테이블 삭제'}
@@ -119,6 +122,11 @@ const TableNode = memo(function TableNode({ id, data, selected }: NodeProps<Canv
     {editing?.field === 'table' && form}
     {data.columns?.map((column, index, rows) => <div className="canvas-column-slot" key={column.id}>
       <div className={'canvas-column' + (column.highlighted ? ' search-match' : '') + (dropTarget === column.id ? ' column-drop-target' : '')}
+        data-column-selected={(active && selectedColumn === column.id) || undefined}
+        onClick={event => {
+          setSelectedColumn(column.id);
+          if (linkColumn) { event.stopPropagation(); linkColumn(id, column.id); }
+        }}
         onDragOver={event => {
           if (!reorder || !event.dataTransfer.types.includes(dragType.column)) return;
           event.preventDefault();
@@ -297,7 +305,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
     const pair = key.pairs[0];
     const identifying = isIdentifyingForeignKey(key, primary);
     const label = display.relationshipLabels
-      ? foreignKeyLabel(identifying, foreignKeys ? foreignKeys.cardinality(key) : dialect?.cardinality(document, key)) : undefined;
+      ? foreignKeyLabel(identifying, foreignKeys ? foreignKeys.cardinality(key) : dialect?.cardinality(document, key), true) : undefined;
     for (const source of instances.get(key.tableId) ?? []) {
       const targets = key.tableId === key.targetTableId ? [source] : instances.get(key.targetTableId) ?? [];
       for (const target of targets) {
@@ -425,7 +433,7 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
   };
   return <ReactFlowProvider initialNodes={projected.nodes} initialEdges={projected.edges} initialMinZoom={0.15} initialMaxZoom={2.5}>
     <div ref={canvas} className="canvas" tabIndex={0} aria-label="캔버스 탐색"
-      data-mode={panMode ? 'pan' : 'select'} data-tool={placing ? 'place' : picking ? 'connect' : undefined} data-connecting={connecting || picking || undefined}
+      data-mode={panMode ? 'pan' : 'select'} data-tool={placing ? 'place' : picking ? 'connect' : undefined} data-connecting={connecting || undefined}
       onDragOver={event => {
         if (readOnly || panMode || !event.dataTransfer.types.some(type => type === dragType.table || type === dragType.newTable)) return;
         event.preventDefault();

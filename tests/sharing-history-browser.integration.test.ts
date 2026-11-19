@@ -228,7 +228,7 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         await page.evaluate(() => window.dispatchEvent(new Event('focus')));
         await status('읽기 전용 · 리비전 ' + after.revision);
         expect(await button('DDL로 모델 교체').count()).toBe(0);
-        expect(await button('관계 연결').count()).toBe(0);
+        expect(await button('관계 추가').count()).toBe(0);
         expect(await button('캔버스에 테이블 추가').count()).toBe(0);
         expect(await button('실행 취소').count()).toBe(0);
         expect(await button('이름순 재배치').count()).toBe(0);
