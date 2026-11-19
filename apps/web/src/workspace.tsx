@@ -38,8 +38,7 @@ function PasswordAccess({ busy, signIn, reauthenticate = false }: {
       <label>아이디<input name="username" autoComplete="username" minLength={3} maxLength={64} required /></label>
       {registration && <label>표시 이름<input name="displayName" autoComplete="name" maxLength={100} required /></label>}
       <label>비밀번호<input name="password" type="password" autoComplete={registration ? 'new-password' : 'current-password'}
-        minLength={registration ? 15 : undefined} maxLength={256} required /></label>
-      {registration && <p className="muted">비밀번호는 15~128자로 입력하세요.</p>}
+        required /></label>
     </Form>
     {!reauthenticate && <button type="button" className="quiet accent" disabled={busy} onClick={() => setRegistration(value => !value)}>
       {registration ? '로그인으로 돌아가기' : '계정 만들기'}

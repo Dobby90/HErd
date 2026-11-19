@@ -23,7 +23,7 @@ it('uses DB-backed accounts and starts at the current user’s projects', async 
         const page = context.pages()[0] ?? await context.newPage();
         await page.goto(base);
         const button = (name: string) => page.getByRole('button', { name, exact: true });
-        const password = 'test password / 계정 확인';
+        const password = 'a';
         async function signup(username: string, displayName: string) {
           await button('계정 만들기').click();
           await page.getByLabel('아이디').fill(username);
@@ -51,7 +51,7 @@ it('uses DB-backed accounts and starts at the current user’s projects', async 
         const post = (path: string, data: unknown, requestOrigin = origin) => page.request.post('/api/auth/' + path,
           { data, headers: { origin: requestOrigin } });
         expect((await post('register', { username: 'FIRST.USER', password, displayName: '중복' })).status()).toBe(409);
-        expect((await post('register', { username: 'new-user', password: 'short', displayName: '짧음' })).status()).toBe(400);
+        expect((await post('register', { username: 'new-user', password: '', displayName: '빈 비밀번호' })).status()).toBe(400);
         expect((await post('password', { username: 'first.user', password }, 'https://other.test')).status()).toBe(403);
         const wrong = await post('password', { username: 'first.user', password: 'wrong password' });
         const unknown = await post('password', { username: 'unknown-user', password });

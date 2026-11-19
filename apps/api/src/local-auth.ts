@@ -51,9 +51,8 @@ export function registerLocalAuth(api: FastifyInstance, pool: Pool, assertOrigin
     const body = objectBody(request.body);
     const input = credentials(body);
     const displayName = typeof body.displayName === 'string' ? body.displayName.trim() : '';
-    if (!input || [...input.password].length < 15 || [...input.password].length > 128 ||
-        !displayName || displayName.length > 100 || displayName.includes('\0')) {
-      throw new ApiError(400, 'INVALID_ACCOUNT', '아이디는 영문 소문자·숫자로 시작하는 3~64자, 표시 이름은 1~100자, 비밀번호는 15~128자로 입력하세요.');
+    if (!input || !displayName || displayName.length > 100 || displayName.includes('\0')) {
+      throw new ApiError(400, 'INVALID_ACCOUNT', '아이디는 영문 소문자·숫자로 시작하는 3~64자, 표시 이름은 1~100자로 입력하고 비밀번호를 입력하세요.');
     }
     await countAttempt('register', 60, 3600);
     const existing = await pool.query('SELECT 1 FROM password_credentials WHERE username = $1', [input.username]);
