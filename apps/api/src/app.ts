@@ -84,7 +84,7 @@ export function createApi(persistence: {
     });
   } else {
     api.get('/api/me', async (_request, reply) => {
-      return reply.header('Cache-Control', 'no-store').send({ user: null, csrfToken: null, auth: { oidc: false, development: false } });
+      return reply.header('Cache-Control', 'no-store').send({ user: null, csrfToken: null, auth: { oidc: false, development: false, local: false } });
     });
   }
   return { api, sql };

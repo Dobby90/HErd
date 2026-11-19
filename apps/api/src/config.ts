@@ -8,6 +8,7 @@ export interface OidcSettings {
 export interface AuthSettings {
   origin: string;
   devLogin: boolean;
+  localAuth?: boolean;
   oidc?: OidcSettings;
 }
 
@@ -33,10 +34,11 @@ export function readConfig(env: NodeJS.ProcessEnv) {
   const production = env.NODE_ENV === 'production';
   const local = env.NODE_ENV === 'development' || env.NODE_ENV === 'test';
   const devLogin = env.ERD_DEV_LOGIN === '1';
+  const localAuth = env.ERD_LOCAL_AUTH === '1';
   if (devLogin && !local) throw new Error('ERD_DEV_LOGIN requires NODE_ENV=development or test.');
   const configuredOidc = env.OIDC_ISSUER || env.OIDC_CLIENT_ID || env.OIDC_CLIENT_SECRET;
   if (!env.DATABASE_URL) {
-    if (devLogin || configuredOidc || production) throw new Error('DATABASE_URL is required for server authentication.');
+    if (devLogin || localAuth || configuredOidc || production) throw new Error('DATABASE_URL is required for server authentication.');
     return undefined;
   }
   if (production && !env.APP_ORIGIN) throw new Error('APP_ORIGIN is required in production.');
@@ -57,7 +59,7 @@ export function readConfig(env: NodeJS.ProcessEnv) {
     }
     oidc = { issuer, clientId: env.OIDC_CLIENT_ID, clientSecret: env.OIDC_CLIENT_SECRET, allowHttp };
   }
-  if (production && !oidc) throw new Error('OIDC configuration is required in production.');
+  if (production && !oidc && !localAuth) throw new Error('Local authentication or OIDC is required in production.');
   const limits = {
     bytes: readLimit(env, 'ERD_MAX_DOCUMENT_BYTES', defaultDocumentLimits.bytes),
     tables: readLimit(env, 'ERD_MAX_TABLES', defaultDocumentLimits.tables),
@@ -77,5 +79,5 @@ export function readConfig(env: NodeJS.ProcessEnv) {
     intervalMs: readLimit(env, 'ERD_CHECKPOINT_INTERVAL_MS', defaultCheckpointSettings.intervalMs),
     keep: readLimit(env, 'ERD_CHECKPOINT_KEEP', defaultCheckpointSettings.keep),
   };
-  return { databaseUrl: env.DATABASE_URL, auth: { origin: webOrigin.origin, devLogin, oidc }, limits, jobs, checkpoints };
+  return { databaseUrl: env.DATABASE_URL, auth: { origin: webOrigin.origin, devLogin, localAuth, oidc }, limits, jobs, checkpoints };
 }

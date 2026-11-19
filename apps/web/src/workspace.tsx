@@ -28,6 +28,25 @@ const message = (error: unknown) => error instanceof Error ? error.message : '�
 const date = (value: string) => new Date(value).toLocaleString();
 const textMatch = (text: string, query: string) => text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
 
+function PasswordAccess({ busy, signIn, reauthenticate = false }: {
+  busy: boolean; signIn(registration: boolean, values: FormData): void; reauthenticate?: boolean;
+}) {
+  const [registration, setRegistration] = useState(false);
+  return <div className="account-access">
+    <Form key={String(registration)} button={registration ? '가입하고 로그인' : '로그인'} disabled={busy}
+      submit={values => signIn(registration, values)}>
+      <label>아이디<input name="username" autoComplete="username" minLength={3} maxLength={64} required /></label>
+      {registration && <label>표시 이름<input name="displayName" autoComplete="name" maxLength={100} required /></label>}
+      <label>비밀번호<input name="password" type="password" autoComplete={registration ? 'new-password' : 'current-password'}
+        minLength={registration ? 15 : undefined} maxLength={256} required /></label>
+      {registration && <p className="muted">비밀번호는 15~128자로 입력하세요.</p>}
+    </Form>
+    {!reauthenticate && <button type="button" className="quiet accent" disabled={busy} onClick={() => setRegistration(value => !value)}>
+      {registration ? '로그인으로 돌아가기' : '계정 만들기'}
+    </button>}
+  </div>;
+}
+
 function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActions, onImported, openVersion, onRestored, preview, fork, discard, logIn }: {
   entry: OpenDocument; projectId: string; csrf: string | null | undefined; readOnly: boolean; suspended: boolean; topActions: ReactNode;
   onImported(result: ImportApplied): void; openVersion(snapshot: SnapshotDetail): void; onRestored(result: SavedRevision, synchronize?: boolean): void;
@@ -174,7 +193,7 @@ export function Workspace() {
       await action();
     } catch (error) {
       setProblem(message(error));
-      if (error instanceof ApiFailure && error.status === 401) setLoginPrompt(true);
+      if (error instanceof ApiFailure && error.code === 'LOGIN_REQUIRED') setLoginPrompt(true);
     } finally {
       setBusy(false);
       running.current = false;
@@ -323,6 +342,27 @@ export function Workspace() {
     });
   }
 
+  function logInWithPassword(registration: boolean, values: FormData) {
+    void act(async () => {
+      await protectWork();
+      const reauthenticate = loginPrompt && Boolean(owner);
+      await apiRequest(registration ? '/auth/register' : '/auth/password', { method: 'POST', body: {
+        username: field(values, 'username'), password: field(values, 'password'),
+        ...(registration && { displayName: field(values, 'displayName') }),
+      } });
+      const signedIn = await refreshIdentity();
+      setLoginPrompt(false);
+      if (!reauthenticate || signedIn.user?.id !== owner) {
+        go({});
+        return;
+      }
+      for (const editor of editors.current.values()) {
+        if (editor.owner === owner && editor.snapshot().phase === 'login') editor.retry();
+      }
+      refresh();
+    });
+  }
+
   function logOut() {
     void act(async () => {
       await protectWork();
@@ -339,6 +379,11 @@ export function Workspace() {
     {identity?.auth.oidc && <button type="button" disabled={busy} onClick={() => logIn(false)}>OIDC 로그인</button>}
     {identity?.auth.development && <button type="button" disabled={busy} onClick={() => logIn(true)}>개발 계정으로 로그인</button>}
   </div>;
+  const reauth = <>
+    {identity?.auth.local && <PasswordAccess busy={busy} signIn={logInWithPassword} reauthenticate />}
+    {problem && <p role="alert">{problem}</p>}
+    {loginButtons}
+  </>;
 
   if (owner && project && open && open.id === documentId) {
     const editorIsCurrent = () => currentIdentity.current?.user?.id === owner &&
@@ -396,7 +441,7 @@ export function Workspace() {
           discard={discard} logIn={() => setLoginPrompt(true)} />}
       {problem && <p className="workspace-notice" role="alert">{problem}</p>}
       {!problem && notice && <p className="workspace-notice" role="status">{notice}</p>}
-      {loginPrompt && <Modal title="다시 로그인" close={() => setLoginPrompt(false)}>{loginButtons}</Modal>}
+      {loginPrompt && <Modal title="다시 로그인" close={() => setLoginPrompt(false)}>{reauth}</Modal>}
     </>;
   }
 
@@ -415,12 +460,21 @@ export function Workspace() {
     setDialog('local');
   });
 
+  function projectList(items: Project[], empty: string) {
+    if (!items.length) return <p className="muted">{empty}</p>;
+    const matching = items.filter(item => textMatch(item.name, query));
+    return matching.length ? <ul className="project-list">{matching.map(item =>
+      <li key={item.id}><button type="button" onClick={() => go({ projectId: item.id })}>{item.name}</button>
+        <span>{item.role} · ERD {item.documentCount}개</span><time dateTime={item.updatedAt}>{date(item.updatedAt)}</time></li>)}</ul>
+      : <p className="muted">검색 결과가 없습니다.</p>;
+  }
+
   return <main className="project-page">
     <header className="topbar">
       <span className="brand-mark"><Icon name="brand" /></span>
       <h1>ERD 프로젝트</h1>
       {owner && projectId && <button type="button" onClick={() => go({})}>프로젝트 목록</button>}
-      <a href="/" className="workspace-link">로컬 편집기</a>
+      <a href="/?local=1" className="workspace-link">로컬 편집기</a>
       {identity?.user && <div className="actions project-account"><span>{identity.user.displayName}</span>
         <ShareCode key={identity.user.id} code={identity.user.shareCode} />
         <button type="button" disabled={busy} onClick={logOut}>로그아웃</button></div>}
@@ -431,20 +485,23 @@ export function Workspace() {
         {!busy && <button type="button" onClick={() => void act(async () => { await refreshIdentity(); })}>다시 시도</button>}</>}
       {identity && !identity.user && <section className="project-panel">
         <h2>프로젝트에 로그인</h2>
+        {identity.auth.local && <PasswordAccess busy={busy} signIn={logInWithPassword} />}
         {loginButtons}
-        {!identity.auth.oidc && !identity.auth.development && <p>프로젝트 저장을 사용하려면 서비스 DB와 로그인 공급자를 설정하세요.</p>}
+        {!identity.auth.local && !identity.auth.oidc && !identity.auth.development && <p>프로젝트 저장을 사용하려면 서비스 DB와 로그인을 설정하세요.</p>}
       </section>}
       {owner && !projectId && <section className="project-panel" aria-label="프로젝트 목록">
-        <h2>프로젝트</h2>
+        <h2>내가 만든 프로젝트</h2>
         <Form disabled={busy} button="프로젝트 생성" submit={form => void act(async () => {
           const created = await apiRequest<Project>('/projects', { method: 'POST', csrf, body: { name: field(form, 'name') } });
           go({ projectId: created.id });
         })}><label>새 프로젝트 이름<input name="name" required maxLength={200} /></label></Form>
         <label>프로젝트 검색<input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>
-        {!projects ? <p role="status">프로젝트 불러오는 중</p> : projects.length === 0 ? <p>프로젝트가 없습니다.</p> :
-          <ul className="project-list">{projects.filter(item => textMatch(item.name, query)).map(item =>
-            <li key={item.id}><button type="button" onClick={() => go({ projectId: item.id })}>{item.name}</button>
-              <span>{item.role} · ERD {item.documentCount}개</span><time dateTime={item.updatedAt}>{date(item.updatedAt)}</time></li>)}</ul>}
+        {projects ? projectList(projects.filter(item => item.createdBy === owner), '만든 프로젝트가 없습니다.')
+          : <p role="status">프로젝트 불러오는 중</p>}
+      </section>}
+      {owner && !projectId && projects?.some(item => item.createdBy !== owner) && <section className="project-panel" aria-label="공유받은 프로젝트">
+        <h2>공유받은 프로젝트</h2>
+        {projectList(projects.filter(item => item.createdBy !== owner), '')}
       </section>}
       {owner && projectId && !project && !problem && <p role="status">프로젝트 불러오는 중</p>}
       {project && <section className="project-panel" aria-label="ERD 목록">
@@ -499,7 +556,7 @@ export function Workspace() {
             </li>)}</ul>}
       </section>}
     </div>
-    {loginPrompt && owner && <Modal title="다시 로그인" close={() => setLoginPrompt(false)}>{loginButtons}</Modal>}
+    {loginPrompt && owner && <Modal title="다시 로그인" close={() => setLoginPrompt(false)}>{reauth}</Modal>}
     {dialog === 'new' && writable && <Modal title="새 서버 ERD" close={() => setDialog(undefined)}>
       <Form button="ERD 생성" disabled={busy} cancel={() => setDialog(undefined)} submit={form => void act(async () => {
         const choice = editorTargets[Number(field(form, 'target'))];

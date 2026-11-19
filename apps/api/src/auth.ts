@@ -3,10 +3,11 @@ import cookie from '@fastify/cookie';
 import type { CookieSerializeOptions } from '@fastify/cookie';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import * as oidc from 'openid-client';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { ApiError } from './api-error.js';
 import type { AuthSettings } from './config.js';
 import { transaction } from './database.js';
+import { registerLocalAuth } from './local-auth.js';
 
 interface User {
   id: string;
@@ -78,18 +79,25 @@ export async function registerAuth(api: FastifyInstance, pool: Pool, settings: A
     return current;
   }
 
-  async function createSession(request: FastifyRequest, reply: FastifyReply, issuer: string, subject: string, displayName: string) {
+  async function issueSession(request: FastifyRequest, reply: FastifyReply, user: (client: PoolClient) => Promise<string>) {
     const raw = token();
     await transaction(pool, async client => {
-      const { rows: [user] } = await client.query<{ id: string }>(`INSERT INTO users (id, issuer, subject, display_name)
-        VALUES ($1, $2, $3, $4) ON CONFLICT (issuer, subject) DO UPDATE SET display_name = EXCLUDED.display_name RETURNING id`,
-      [randomUUID(), issuer, subject, displayName]);
+      const userId = await user(client);
       const previous = request.cookies[sessionCookie];
       await client.query('DELETE FROM sessions WHERE expires_at <= now() OR token_hash = $1', [previous ? hash(previous) : null]);
       await client.query("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + $3 * interval '1 second')",
-        [hash(raw), user.id, sessionLifetime]);
+        [hash(raw), userId, sessionLifetime]);
     });
     reply.setCookie(sessionCookie, raw, { ...options, maxAge: sessionLifetime });
+  }
+
+  async function createSession(request: FastifyRequest, reply: FastifyReply, issuer: string, subject: string, displayName: string) {
+    await issueSession(request, reply, async client => {
+      const { rows: [user] } = await client.query<{ id: string }>(`INSERT INTO users (id, issuer, subject, display_name)
+        VALUES ($1, $2, $3, $4) ON CONFLICT (issuer, subject) DO UPDATE SET display_name = EXCLUDED.display_name RETURNING id`,
+      [randomUUID(), issuer, subject, displayName]);
+      return user.id;
+    });
   }
 
   api.addHook('onRequest', (_request, reply, done) => {
@@ -100,7 +108,7 @@ export async function registerAuth(api: FastifyInstance, pool: Pool, settings: A
   api.get('/api/me', async request => {
     const current = await session(request);
     return { user: current?.user ?? null, csrfToken: current?.csrfToken ?? null,
-      auth: { oidc: Boolean(settings.oidc), development: settings.devLogin } };
+      auth: { oidc: Boolean(settings.oidc), development: settings.devLogin, local: Boolean(settings.localAuth) } };
   });
 
   api.get<{ Querystring: { returnTo?: string } }>('/api/auth/login', async (request, reply) => {
@@ -162,6 +170,7 @@ export async function registerAuth(api: FastifyInstance, pool: Pool, settings: A
       return reply.code(204).send();
     });
   }
+  if (settings.localAuth) registerLocalAuth(api, pool, assertOrigin, issueSession);
 
   api.post('/api/auth/logout', async (request, reply) => {
     const current = await requireUser(request, true);

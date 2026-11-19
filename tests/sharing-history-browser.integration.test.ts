@@ -29,7 +29,7 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         const me = () => page.request.get('/api/me').then(response => response.json());
         await page.goto(origin + '/?workspace=1');
         await button('OIDC 로그인').click();
-        await heading('프로젝트');
+        await heading('내가 만든 프로젝트');
         await page.getByText('내 공유 코드', { exact: true }).click();
         const code = await page.getByLabel('내 공유 코드').inputValue();
         const alice = (await me()).user;

@@ -336,6 +336,9 @@ dialog dd { margin: 0 0 .65rem; overflow-wrap: anywhere; }
 .project-panel { padding: clamp(1rem, 3vw, 1.8rem); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; display: grid; gap: 1rem; box-shadow: 0 2px 10px #27324606; }
 .project-panel h2 { font-size: 1.15rem; }
 .project-panel form, .project-panel > label { width: min(100%, 28rem); }
+.account-access { display: grid; justify-items: start; gap: .65rem; }
+.account-access form { width: min(100%, 24rem); }
+.account-access > button { padding-inline: 0; }
 .project-tools { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .75rem; }
 .project-list { margin: 0; padding: 0; list-style: none; }
 .project-list li { display: flex; align-items: center; flex-wrap: wrap; padding: .7rem 0; gap: .65rem; border-top: 1px solid var(--line); }

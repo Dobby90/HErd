@@ -18,8 +18,9 @@ curl -fsS http://127.0.0.1:8080/api/ready
 | 설정 | 운영 값과 기본 동작 |
 | --- | --- |
 | `HERD_NODE_ENV`, `HERD_DEV_LOGIN` | Compose 운영값은 `production`과 `0`입니다. 자체 실행은 각각 `NODE_ENV`, `ERD_DEV_LOGIN`을 사용합니다. |
+| `HERD_LOCAL_AUTH` | `1`이면 HERD 자체 계정 가입과 로그인을 켭니다. 자체 실행은 `ERD_LOCAL_AUTH=1`을 사용합니다. |
 | `APP_ORIGIN` | 브라우저가 여는 HTTPS origin 전체입니다. 경로를 빼고 스킴과 호스트, 필요한 포트를 포함합니다. 쓰기 요청의 Origin과 CSRF 토큰을 확인합니다. |
-| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | HTTPS issuer와 기밀 클라이언트 자격 증명을 설정합니다. 공급자에 `<APP_ORIGIN>/api/auth/callback`을 등록하고 Authorization Code, PKCE S256, `client_secret_basic`을 사용합니다. |
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | OIDC 로그인을 사용할 때 HTTPS issuer와 기밀 클라이언트 자격 증명을 설정합니다. 공급자에 `<APP_ORIGIN>/api/auth/callback`을 등록합니다. |
 | `DATABASE_URL` | 서비스 테이블을 읽고 쓰는 DB 계정입니다. URL의 자격 증명에는 퍼센트 인코딩을 적용합니다. 운영의 원격 DB는 검증 가능한 TLS 구성을 사용합니다. |
 | `HERD_MIGRATION_DATABASE_URL`, `HERD_DB_PASSWORD` | 마이그레이션 계정을 분리할 수 있습니다. 번들 DB의 초기 비밀번호와 접속 URI는 함께 설정합니다. 이미 초기화한 볼륨의 비밀번호는 DB에서 변경합니다. |
 | `API_HOST`, `API_PORT`, `HERD_HTTP_PORT`, `HERD_DB_PORT` | API 자체 실행 기본은 `127.0.0.1:3001`입니다. Compose API는 내부 네트워크를 사용합니다. 호스트에는 웹·DB의 loopback 포트만 게시합니다. |
@@ -31,6 +32,10 @@ curl -fsS http://127.0.0.1:8080/api/ready
 | `VITE_ERD_PNG_MAX_SIDE`, `VITE_ERD_PNG_MAX_PIXELS` | 웹 빌드 시 PNG 한 변 4,096px, 총 16,000,000px를 기본 적용합니다. |
 
 운영 쿠키는 `__Host-` 접두어, `Secure`, `HttpOnly`, `SameSite=Lax`를 사용합니다. OIDC와 서비스 DB는 앱의 인증·저장 인프라입니다. 편집기의 PostgreSQL 17 target은 설계 모델과 DDL에 적용됩니다. [환경 예시](../.env.example), [Compose 구성](../compose.yaml)
+
+자체 계정 모드를 사용하면 루트 주소에서 로그인과 가입을 제공하고 로그인 후 내가 만든 프로젝트를 먼저 표시합니다. 비밀번호는 사용자별 솔트와 scrypt 해시로 저장합니다. 가입과 로그인 요청에는 만료되는 DB 카운터를 적용합니다. OIDC와 개발 계정의 사용자 ID는 각자의 기존 식별자를 사용합니다.
+
+웹 컨테이너가 직접 HTTPS를 제공할 때는 [TLS 설정](../deploy/herd-tls.conf)을 `/etc/nginx/herd-tls/herd.conf`에 마운트합니다. 인증서와 키는 `/etc/nginx/herd-cert/server.crt`와 `/etc/nginx/herd-cert/server.key`에 마운트하고 웹 컨테이너의 실행 사용자가 읽을 수 있게 지정합니다. 웹의 게시 포트는 TLS 포트 `8443`에 연결하고 `APP_ORIGIN`을 브라우저가 접속하는 HTTPS 주소와 일치시킵니다. IP로 접속할 때는 인증서에 IP SAN을 추가하고 접속 기기에 신뢰 인증서를 배포합니다.
 
 ## 버전별 릴리스
 

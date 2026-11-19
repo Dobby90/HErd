@@ -7,7 +7,17 @@ import './style.css';
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing application root');
 const Workspace = lazy(() => import('./workspace.js').then(module => ({ default: module.Workspace })));
-const workspace = new URLSearchParams(window.location.search).has('workspace');
-createRoot(root).render(workspace
-  ? <Suspense fallback={<p role="status">프로젝트 불러오는 중</p>}><Workspace /></Suspense>
-  : <Editor topActions={<a className="workspace-link" href="/?workspace=1">프로젝트</a>} />);
+const app = createRoot(root);
+const parameters = new URLSearchParams(window.location.search);
+const loading = <p role="status">프로젝트 불러오는 중</p>;
+
+async function openHome() {
+  const workspace = parameters.has('workspace') || (!parameters.has('local') && await fetch('/api/me', {
+    cache: 'no-store', signal: AbortSignal.timeout(3000),
+  }).then(async response => response.ok && (await response.json()).auth?.local === true).catch(() => false));
+  app.render(workspace ? <Suspense fallback={loading}><Workspace /></Suspense>
+    : <Editor topActions={<a className="workspace-link" href="/?workspace=1">프로젝트</a>} />);
+}
+
+app.render(loading);
+void openHome();

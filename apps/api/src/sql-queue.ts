@@ -106,6 +106,7 @@ export class SqlQueue {
     await this.pool.query('DELETE FROM erd_mutations WHERE expires_at <= clock_timestamp()');
     await this.pool.query('DELETE FROM sessions WHERE expires_at <= clock_timestamp()');
     await this.pool.query('DELETE FROM oidc_logins WHERE expires_at <= clock_timestamp()');
+    await this.pool.query('DELETE FROM password_attempts WHERE expires_at <= clock_timestamp()');
   }
 
   wake() {

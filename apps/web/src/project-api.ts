@@ -9,11 +9,12 @@ export interface User {
 export interface Identity {
   user: User | null;
   csrfToken: string | null;
-  auth: { oidc: boolean; development: boolean };
+  auth: { oidc: boolean; development: boolean; local: boolean };
 }
 
 export interface Project {
   id: string;
+  createdBy: string;
   name: string;
   role: 'owner' | 'editor' | 'viewer';
   documentCount: number;

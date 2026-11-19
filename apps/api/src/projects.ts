@@ -21,6 +21,7 @@ interface Saved {
 
 interface Project {
   id: string;
+  createdBy: string;
   name: string;
   role: Role;
   documentCount: number;
@@ -34,7 +35,7 @@ interface DocumentRow extends Saved {
   payload: unknown;
 }
 
-const projectFields = `p.id, p.name, m.role, p.updated_at AS "updatedAt",
+const projectFields = `p.id, p.name, m.role, p.created_by AS "createdBy", p.updated_at AS "updatedAt",
   (SELECT count(*)::integer FROM erds WHERE project_id = p.id) AS "documentCount"`;
 const documentFields = 'e.updated_at AS "updatedAt", e.revision';
 const projectNotFound = () => new ApiError(404, 'PROJECT_NOT_FOUND', '프로젝트를 찾을 수 없습니다.');
