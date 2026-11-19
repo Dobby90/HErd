@@ -93,7 +93,7 @@ CREATE VIEW skip_me AS SELECT * FROM "최신 문서";`;
         let dialog = await prepareReplacement();
         await dialog.getByText(/기준 리비전 2/).waitFor();
         const saved = await document();
-        const canvasDisplay = { columnComments: true, grid: false };
+        const canvasDisplay = { columnComments: true, columnNullability: true, grid: false };
         const me = await page.request.get('/api/me').then(response => response.json());
         expect((await page.request.put('/api/erds/' + erdId, {
           headers: { origin, 'x-csrf-token': me.csrfToken },

@@ -26,7 +26,7 @@ it('creates valid documents, removes only the view instance, and supports undo',
 });
 
 it('round-trips optional canvas display settings and keeps legacy documents readable', () => {
-  const value = { columnComments: true, columnTypes: false };
+  const value = { columnComments: true, columnTypes: false, columnNullability: true };
   const result = applyCommand(sampleDocument, { kind: 'set-canvas-display', value });
   expect(result).toMatchObject({ applied: true, document: { canvasDisplay: value }, undo: { previous: sampleDocument } });
   expect(deserializeDocument(serializeDocument(result.document))).toEqual({ ...sampleDocument, canvasDisplay: value });

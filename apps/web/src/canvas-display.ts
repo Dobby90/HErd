@@ -5,6 +5,7 @@ const defaults: CanvasDisplay = {
   columns: true,
   columnTypes: true,
   columnBadges: true,
+  columnNullability: false,
   columnDefaults: true,
   columnComments: false,
   relationships: true,

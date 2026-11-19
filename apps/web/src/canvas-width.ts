@@ -31,7 +31,7 @@ export function measureTableWidths() {
   return (label: string, logicalName: string | undefined, rows: WidthRow[]) => {
     let width = Math.max(widthOf(label, title), widthOf(logicalName, logical)) + headerSpace;
     for (const row of rows) {
-      const badges = row.badges.reduce((sum, text) => sum + widthOf(text, badge) + 8, 0)
+      const badges = row.badges.reduce((sum, text) => sum + widthOf(text.toUpperCase(), badge) + 8, 0)
         + Math.max(0, row.badges.length - 1) * .16 * rem;
       const typeWidth = Math.min(widthOf(row.type, type), 8 * rem);
       const rowWidth = Math.max(widthOf(row.name, name), widthOf(row.logicalName, logical)) + typeWidth + badges + rowSpace;

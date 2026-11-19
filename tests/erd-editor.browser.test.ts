@@ -159,6 +159,50 @@ it('saves canvas display options across views independently of the name mode', a
   });
 }, 60_000);
 
+it('shows persisted NULL and NOT NULL badges independently of key badges', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    const document = structuredClone(sampleDocument);
+    const column = document.catalog.columns.find(item => item.id === 'product-name')!;
+    column.physicalName = 'external_customer_subscription_reference_id';
+    column.nullable = true;
+    await openEditor(page, origin, document);
+
+    const products = tableOnCanvas(page, 'products');
+    const nullable = products.locator('.canvas-column').filter({ hasText: column.physicalName });
+    const primary = products.locator('.canvas-column').filter({ has: page.getByText('id', { exact: true }) });
+    const width = () => products.evaluate(node => (node as HTMLElement).offsetWidth);
+    const initialWidth = await width();
+    expect(await products.getByText(/^(NOT )?NULL$/).count()).toBe(0);
+    await primary.getByText('PK', { exact: true }).waitFor();
+
+    const options = page.getByRole('dialog', { name: 'ERD 표시 옵션' });
+    const nullability = options.getByRole('checkbox', { name: 'NULL 허용 여부', exact: true });
+    await action(page, 'ERD 표시 옵션').click();
+    expect(await nullability.isChecked()).toBe(false);
+    await nullability.check();
+    await options.getByRole('checkbox', { name: 'PK·FK·UNIQUE 배지' }).uncheck();
+    await action(page, '표시 옵션 적용').click();
+    await nullable.getByText('NULL', { exact: true }).waitFor();
+    await primary.getByText('NOT NULL', { exact: true }).waitFor();
+    expect(await primary.getByText('PK', { exact: true }).count()).toBe(0);
+    expect(await width()).toBeGreaterThan(initialWidth);
+    expect(await nullable.locator('.canvas-name-text').evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await expect.poll(async () => (await savedDocument(page)).document.canvasDisplay, { timeout: 5_000 })
+      .toMatchObject({ columnNullability: true, columnBadges: false });
+
+    await page.reload();
+    await nullable.getByText('NULL', { exact: true }).waitFor();
+    await primary.getByText('NOT NULL', { exact: true }).waitFor();
+    await action(page, 'ERD 표시 옵션').click();
+    await nullability.uncheck();
+    await action(page, '표시 옵션 적용').click();
+    await nullable.getByText('NULL', { exact: true }).waitFor({ state: 'detached' });
+    await primary.getByText('NOT NULL', { exact: true }).waitFor({ state: 'detached' });
+  });
+}, 60_000);
+
 it('fits visible names, reuses canvas widths for arrangement, and keeps inspector actions accessible', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();

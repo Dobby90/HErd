@@ -218,6 +218,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   const columns = new Map(document.catalog.columns.map(column => [column.id, column]));
   const enums = new Map(document.catalog.enums.map(item => [item.id, item.physicalName]));
   const badges = display.columnBadges ? columnBadgesById(document) : undefined;
+  const primary = primaryColumnsByTable(document);
   const measureWidth = measureTableWidths();
   const full = view.nameDisplay === 'both';
   const titleMode = full ? 'physical' : view.nameDisplay;
@@ -241,12 +242,17 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
     const label = viewLabel(table, titleMode);
     const logicalName = secondaryName(table, view.nameDisplay);
     const description = display.tableComments ? table.description : undefined;
+    const primaryColumns = primary.get(table.id);
     const rows = visible.flatMap(id => {
       const column = columns.get(id);
-      return column ? [{ id, name: viewLabel(column, titleMode),
-        type: display.columnTypes ? columnTypeLabel(column.type, enums) : undefined, badges: badges?.get(id) ?? [],
+      if (!column) return [];
+      const keyBadges = badges?.get(id) ?? [];
+      const nullability = column.nullable && !primaryColumns?.has(id) ? 'null' : 'not null';
+      return [{ id, name: viewLabel(column, titleMode),
+        type: display.columnTypes ? columnTypeLabel(column.type, enums) : undefined,
+        badges: display.columnNullability ? [...keyBadges, nullability] : keyBadges,
         logicalName: secondaryName(column, view.nameDisplay), description: display.columnComments ? column.description : undefined,
-        defaultSql: display.columnDefaults ? column.default?.sql : undefined }] : [];
+        defaultSql: display.columnDefaults ? column.default?.sql : undefined }];
     });
     const width = instance.size?.width ?? measureWidth(label, logicalName, rows);
     const node: CanvasNode = {
@@ -264,7 +270,6 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   }
   const edges: Edge[] = [];
   if (!display.relationships) return { nodes, edges };
-  const primary = primaryColumnsByTable(document);
   const foreignKeys = display.relationshipLabels ? dialect?.inspectForeignKeys?.(document) : undefined;
   for (const key of physicalRelationships(document)) {
     const meaning = display.relationshipLabels && (foreignKeys ? foreignKeys.cardinality(key) : dialect?.cardinality(document, key));

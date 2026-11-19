@@ -49,7 +49,7 @@ export function Icon({ name }: { name: keyof typeof icons }) {
 
 export function ColumnBadges({ values }: { values: string[] }) {
   return values.length > 0 && <span className="column-badges">{values.map(value =>
-    <small key={value} className={'badge-' + value}>{value.toUpperCase()}</small>)}</span>;
+    <small key={value} className={'badge-' + value.replaceAll(' ', '-')}>{value.toUpperCase()}</small>)}</span>;
 }
 
 export function ActionMenu({ label, icon, primary, iconOnly, children }: {

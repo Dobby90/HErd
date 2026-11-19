@@ -77,6 +77,7 @@ const canvasDisplay = z.object({
   columns: z.boolean(),
   columnTypes: z.boolean(),
   columnBadges: z.boolean(),
+  columnNullability: z.boolean(),
   columnDefaults: z.boolean(),
   columnComments: z.boolean(),
   relationships: z.boolean(),

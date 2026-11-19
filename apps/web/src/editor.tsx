@@ -99,6 +99,7 @@ const displayFields = [
   ['columns', '컬럼 목록'],
   ['columnTypes', '컬럼 자료형'],
   ['columnBadges', 'PK·FK·UNIQUE 배지'],
+  ['columnNullability', 'NULL 허용 여부'],
   ['columnDefaults', '컬럼 기본값'],
   ['columnComments', '컬럼 코멘트'],
   ['relationships', '관계선'],
