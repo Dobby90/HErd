@@ -13,7 +13,7 @@ type Destination = { id: string; target: SqlTarget; savedRevision(): Promise<num
 type Profile = DialectProfile & { maxInputBytes?: number };
 
 const labels: Record<StatementResult['status'], string> = {
-  converted: '변환', 'ignored-nonstructural': '제어문·설정', unsupported: '제외', error: '오류',
+  converted: '변환', 'ignored-nonstructural': '제어문·설정', 'skipped-existing': '건너뜀', unsupported: '제외', error: '오류',
 };
 const stateLabels: Record<ParseSqlJob['state'], string> = {
   queued: '대기 중', running: '분석 중', succeeded: '분석 완료', failed: '분석 실패', cancelled: '분석 취소됨',
@@ -61,6 +61,9 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
   const maxBytes = profiles?.find(profile => profile.metadata.id === selected?.dialectId)?.maxInputBytes ?? 5 * 1024 * 1024;
   const catalog = job?.output?.catalog;
   const losses = job?.output?.losses ?? [];
+  const diagnostics = job?.output?.diagnostics ?? [];
+  const notices = diagnostics.filter(item => item.severity === 'info');
+  const problems = diagnostics.filter(item => item.severity !== 'info');
   const working = pending || applying;
   const canApply = !working && !expired && job?.state === 'succeeded' && catalog && (!losses.length || confirmed) &&
     (destination ? baseRevision !== undefined : Boolean(name.trim()));
@@ -269,7 +272,9 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
         {expired && <p>분석 보관 기간이 지났습니다.</p>}
         {error && <p role="alert">{error}</p>}
         {pollError && <p role="alert">{pollError} <button type="button" onClick={() => setPollError('')}>상태 다시 조회</button></p>}
-        {!expired && job?.output?.diagnostics.length ? <ul aria-label="분석 오류">{job.output.diagnostics.map((item, index) =>
+        {!expired && notices.length ? <ul aria-label="분석 안내">{notices.map((item, index) =>
+          <li key={index}>{sourcePosition(item.location)} {item.message}</li>)}</ul> : null}
+        {!expired && problems.length ? <ul aria-label="분석 오류">{problems.map((item, index) =>
           <li key={index}>{sourcePosition(item.location)} {item.message}</li>)}</ul> : null}
         {!expired && catalog && <>
           <h3>{append ? '추가할 모델 객체' : '변환 및 이름 해석'}</h3>

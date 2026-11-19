@@ -19,6 +19,7 @@ interface Entry {
   creation: string;
   result?: Omit<StatementResult, 'ordinal'>;
 }
+type Conversion = string | { skipped: string } | undefined;
 type Table = Catalog['tables'][number];
 type Column = Catalog['columns'][number];
 type Sequence = Catalog['sequences'][number];
@@ -115,6 +116,7 @@ class ImportCatalog {
   private readonly extensionScopes = new Set<string>();
   private readonly originalIds: Set<string>;
   private readonly ambiguous = new WeakMap<object, Set<string>>();
+  private readonly skippedBaseTables = new Set<string>();
 
   constructor(readonly target: SqlTarget, readonly defaultNamespace: string, private readonly base?: Catalog) {
     this.catalog = base ? structuredClone(base) : blankCatalog();
@@ -310,9 +312,20 @@ class ImportCatalog {
 
   createTable(entry: Entry) {
     const node = entry.body;
-    requireOption(only(node, 'relation tableElts oncommit accessMethod') && ast(node.relation).relpersistence === 'p' &&
+    requireOption(only(node, 'relation tableElts oncommit accessMethod if_not_exists') && ast(node.relation).relpersistence === 'p' &&
       (!node.accessMethod || node.accessMethod === 'heap') && node.oncommit === 'ONCOMMIT_NOOP',
     '임시·비로그·상속·분할 테이블과 추가 테이블 옵션은 지원하지 않습니다.');
+    const path = rangeName(node.relation);
+    const namespace = path.length === 2 ? path[0] : entry.creation;
+    const name = path.at(-1)!;
+    const key = relationKey(namespace, name);
+    if (node.if_not_exists) {
+      const existing = this.unique(this.tables, key, namespace + '.' + name);
+      if (existing) {
+        if (!this.isNew(existing.id)) this.skippedBaseTables.add(existing.id);
+        return { skipped: namespace + '.' + name + ' 테이블이 이미 있습니다.' };
+      }
+    }
     const elements = nodes(node.tableElts);
     for (const item of elements) {
       if (item.Constraint) { plainConstraint(ast(item.Constraint)); continue; }
@@ -321,9 +334,7 @@ class ImportCatalog {
         'LIKE, COLLATE 및 추가 컬럼 옵션은 지원하지 않습니다.');
       for (const definition of nodes(column.constraints)) plainConstraint(ast(definition.Constraint));
     }
-    const path = rangeName(node.relation);
-    const { schema, name } = this.address(path, entry);
-    const key = relationKey(schema.physicalName, name);
+    const { schema } = this.address(path, entry);
     if (this.tables.has(key)) throw new Error('테이블 정의가 중복됩니다 (' + name + ').');
     const table: Table = { id: this.id(entry), namespaceId: schema.id, physicalName: name, columnIds: [] };
     this.catalog.tables.push(table);
@@ -525,8 +536,19 @@ class ImportCatalog {
     let item;
     switch (node.objtype) {
       case 'OBJECT_SCHEMA': item = this.schema(text(ast(object.String).sval), entry); break;
-      case 'OBJECT_TABLE': item = this.table(path, entry); break;
-      case 'OBJECT_COLUMN': item = this.column(this.table(path.slice(0, -1), entry), tail); break;
+      case 'OBJECT_TABLE':
+      case 'OBJECT_COLUMN':
+      case 'OBJECT_TABCONSTRAINT': {
+        const table = this.table(node.objtype === 'OBJECT_TABLE' ? path : path.slice(0, -1), entry);
+        if (this.skippedBaseTables.has(table.id)) {
+          const schema = this.schemaNames.get(table.namespaceId);
+          return { skipped: `${schema}.${table.physicalName}의 기존 코멘트를 유지합니다.` };
+        }
+        if (node.objtype === 'OBJECT_TABLE') item = table;
+        else if (node.objtype === 'OBJECT_COLUMN') item = this.column(table, tail);
+        else item = this.catalog.constraints.find(key => key.tableId === table.id && key.physicalName === tail);
+        break;
+      }
       case 'OBJECT_TYPE': item = this.find(this.enums, names(ast(object.TypeName).names), entry); break;
       case 'OBJECT_SEQUENCE': item = this.find(this.sequences, path, entry); break;
       case 'OBJECT_INDEX': {
@@ -546,11 +568,6 @@ class ImportCatalog {
             item = index;
           }
         }
-        break;
-      }
-      case 'OBJECT_TABCONSTRAINT': {
-        const table = this.table(path.slice(0, -1), entry);
-        item = this.catalog.constraints.find(key => key.tableId === table.id && key.physicalName === tail);
         break;
       }
       default: throw new UnsupportedDdl('이 종류의 COMMENT 대상은 모델에서 지원하지 않습니다.');
@@ -636,12 +653,17 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
       diagnostics.push(issue('invalid-ddl-definition', message, entry.location));
     }
   }
-  function run(entry: Entry, convert: () => string | undefined) {
+  function run(entry: Entry, convert: () => Conversion) {
     try {
       signal?.throwIfAborted();
-      const id = convert();
-      if (id === 'owner') record(entry, 'ignored-nonstructural', '소유자 설정은 ERD 구조에 영향을 주지 않습니다.');
-      else record(entry, 'converted', undefined, id);
+      const result = convert();
+      if (typeof result === 'object') {
+        record(entry, 'skipped-existing', result.skipped);
+        if (entry.kind === 'CreateStmt') diagnostics.push({
+          code: 'existing-table-skipped', severity: 'info', message: result.skipped, location: entry.location,
+        });
+      } else if (result === 'owner') record(entry, 'ignored-nonstructural', '소유자 설정은 ERD 구조에 영향을 주지 않습니다.');
+      else record(entry, 'converted', undefined, result);
     } catch (error) {
       signal?.throwIfAborted();
       reject(entry, error);
@@ -734,7 +756,7 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
       try { model.captureOmittedDefinition(entry); } catch (error) { reject(entry, error); }
     }
   }
-  const phases: Record<string, (entry: Entry) => string | undefined> = {
+  const phases: Record<string, (entry: Entry) => Conversion> = {
     CreateEnumStmt: entry => model.createEnum(entry),
     CreateSeqStmt: entry => model.createSequence(entry),
     CreateStmt: entry => model.createTable(entry),
@@ -770,12 +792,13 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
   }
   const catalog = model.catalog;
   const output = baseCatalog ? model.additions() : catalog;
-  if (baseCatalog && !output.tables.length && !diagnostics.length) {
-    diagnostics.push(issue('no-new-tables', '현재 다이어그램에 추가할 CREATE TABLE 정의가 필요합니다.'));
+  if (baseCatalog && !output.tables.length && !diagnostics.some(item => item.severity === 'error')) {
+    diagnostics.push(issue('no-new-tables', diagnostics.some(item => item.code === 'existing-table-skipped')
+      ? '현재 다이어그램에 추가할 새 테이블이 없습니다.' : '현재 다이어그램에 추가할 CREATE TABLE 정의가 필요합니다.'));
   } else if (!baseCatalog && !catalog.tables.length && !catalog.sequences.length && !catalog.enums.length && !catalog.namespaces.length) {
     diagnostics.push(issue('no-importable-objects', '변환할 스키마 또는 테이블 관련 객체가 없습니다.'));
   }
-  if (!diagnostics.length) {
+  if (!diagnostics.some(item => item.severity === 'error')) {
     const validation = erdDocumentSchema.safeParse({ id: 'analysis', name: 'DDL', formatVersion: 1,
       target, catalog, relationships: [], views: [], extensions: [] });
     if (!validation.success) diagnostics.push(issue('invalid-import-model', '변환한 구조가 ERD 모델 형식에 맞지 않습니다.'));

@@ -38,7 +38,7 @@ export interface ParseRequest {
 }
 export interface StatementResult {
   ordinal: number;
-  status: 'converted' | 'ignored-nonstructural' | 'unsupported' | 'error';
+  status: 'converted' | 'ignored-nonstructural' | 'skipped-existing' | 'unsupported' | 'error';
   kind?: string;
   objectId?: string;
   message?: string;

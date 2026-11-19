@@ -7,7 +7,7 @@ import { renameDocument } from './support/editor-ui.js';
 import { withPostgres } from './support/postgres.js';
 import { freePort } from './support/tcp.js';
 
-it('loads UTF-8 SQL, resets loss confirmation, ignores an older analysis, and applies a replacement at the saved revision', async () => {
+it('loads UTF-8 SQL, applies a replacement, and appends conditional CREATE TABLE imports', async () => {
   await withPostgres(async cluster => {
     const pool = createDatabase(cluster.connectionString);
     await migrate(pool);
@@ -137,8 +137,21 @@ CREATE VIEW skip_me AS SELECT * FROM "최신 문서";`;
         await input.fill('CREATE TABLE public.shipments (id bigint); COMMENT ON TABLE public.imported IS \'changed\';');
         await analyze.click();
         await addition.getByText(/기존 객체를 변경할 수 없습니다/).first().waitFor();
-        await input.fill('CREATE TABLE public.shipments (id bigint PRIMARY KEY, order_id integer REFERENCES imported(id)); CREATE TABLE public.packages (shipment_id bigint REFERENCES shipments(id));');
+        const existingSql = `CREATE TABLE IF NOT EXISTS public.imported (id integer);
+COMMENT ON TABLE public.imported IS 'changed';
+COMMENT ON COLUMN public.imported.id IS 'changed';`;
+        const alreadyExists = addition.getByRole('list', { name: '분석 안내' }).getByText(/public\.imported 테이블이 이미 있습니다/);
+        await input.fill(existingSql);
         await analyze.click();
+        await alreadyExists.waitFor();
+        await addition.getByText(/추가할 새 테이블이 없습니다/).waitFor();
+        expect(await addition.getByRole('button', { name: '현재 다이어그램에 테이블 추가' }).count()).toBe(0);
+        await input.fill(existingSql + `
+CREATE TABLE IF NOT EXISTS public.shipments (id bigint PRIMARY KEY, order_id integer REFERENCES imported(id));
+COMMENT ON TABLE public.shipments IS '배송';
+CREATE TABLE public.packages (shipment_id bigint REFERENCES shipments(id));`);
+        await analyze.click();
+        await alreadyExists.waitFor();
         await addition.getByText('public.packages', { exact: true }).waitFor();
         await addition.getByRole('button', { name: '현재 다이어그램에 테이블 추가' }).click();
         await page.getByText('서버 저장됨 · 리비전 6', { exact: true }).waitFor();
@@ -146,6 +159,8 @@ CREATE VIEW skip_me AS SELECT * FROM "최신 문서";`;
         const appended = (await document()).document;
         expect(appended.canvasDisplay).toEqual(canvasDisplay);
         expect(appended.catalog.tables[0]).toEqual(sourceTable);
+        expect(appended.catalog.columns[0]).toEqual(original.catalog.columns[0]);
+        expect(appended.catalog.tables[1].description).toBe('배송');
         expect(appended.catalog.tables.slice(1).map((table: { physicalName: string }) => table.physicalName)).toEqual(['shipments', 'packages']);
         expect(appended.catalog.constraints.filter((key: { kind: string }) => key.kind === 'fk'))
           .toMatchObject([{ targetTableId: sourceTable.id }, { targetTableId: appended.catalog.tables[1].id }]);
