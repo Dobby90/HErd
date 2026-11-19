@@ -81,6 +81,38 @@ async function addColumn(page: Page, name: string) {
   await action(page, '컬럼 만들기').click();
 }
 
+it('lists full view first and shows table comments in the inspector', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    const document = structuredClone(sampleDocument);
+    const tableComment = document.catalog.tables.find(table => table.id === 'users')!.description!;
+    const columnComment = '고객 식별자';
+    document.catalog.columns.find(column => column.id === 'user-id')!.description = columnComment;
+    await openEditor(page, origin, document);
+
+    const mode = page.getByLabel('이름 표시');
+    const nameOptions = ['전체 보기', '논리명', '물리명'];
+    expect(await mode.inputValue()).toBe('physical');
+    expect(await mode.locator('option').allTextContents()).toEqual(nameOptions);
+    await mode.selectOption('both');
+    const card = tableOnCanvas(page, 'users');
+    await card.getByText('고객', { exact: true }).waitFor();
+    await card.getByText(columnComment, { exact: true }).waitFor();
+    expect(await card.getByText(tableComment, { exact: true }).count()).toBe(0);
+
+    await card.locator(':scope > strong > svg').first().click();
+    await tab(page, '이름·배치').click();
+    expect(await inspector(page).getByRole('textbox', { name: '설명', exact: true }).inputValue()).toBe(tableComment);
+
+    await action(page, '내보내기').click();
+    await action(page, '이미지 내보내기').click();
+    const imageNames = page.getByRole('dialog', { name: '뷰 이미지 내보내기' }).getByLabel('표시할 이름');
+    expect(await imageNames.inputValue()).toBe('both');
+    expect(await imageNames.locator('option').allTextContents()).toEqual(nameOptions);
+  });
+}, 60_000);
+
 it('fits visible names, reuses canvas widths for arrangement, and keeps inspector actions accessible', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();

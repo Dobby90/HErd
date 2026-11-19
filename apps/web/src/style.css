@@ -379,7 +379,6 @@ summary { cursor: pointer; }
 .canvas-names { min-width: 0; flex: 1; display: grid; }
 .canvas-logical-name, .canvas-metadata-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: .69rem/1.35 system-ui, sans-serif; color: var(--muted); }
 .canvas-logical-name { color: var(--accent-ink); font-size: .69rem; }
-.canvas-table-comment { padding: .27rem .57rem; }
 .canvas-column-meta { display: grid; gap: .12rem; padding: 0 .57rem .28rem; }
 .canvas-default { font: .62rem/1.4 var(--mono); }
 .canvas-default span { color: var(--accent-ink); }

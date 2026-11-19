@@ -15,7 +15,6 @@ type View = ErdDocument['views'][number];
 type CanvasNode = Node<Record<string, unknown> & {
   label: string;
   logicalName?: string;
-  description?: string;
   tableId?: string;
   highlighted?: boolean;
   columns?: Array<{
@@ -77,8 +76,7 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
   const handles = data.columns?.map(column =>
     [column.id, Boolean(column.logicalName), Boolean(column.description), Boolean(column.defaultSql)].join(':')).join('|');
   const hasLogicalName = Boolean(data.logicalName);
-  const hasDescription = Boolean(data.description);
-  useEffect(() => refresh(id), [handles, hasLogicalName, hasDescription, id, refresh, editing, active]);
+  useEffect(() => refresh(id), [handles, hasLogicalName, id, refresh, editing, active]);
   const editText = (value: string, field: 'table' | 'name' | 'type', columnId?: string) => {
     const open = (event: MouseEvent) => {
       event.stopPropagation();
@@ -103,7 +101,6 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
     <Handle id="table-out" type="source" position={Position.Right} className="table-handle" isConnectable={false} />
     <Handle id="reverse-table-in" type="target" position={Position.Right} className="table-handle route-handle" isConnectable={false} />
     <Handle id="reverse-table-out" type="source" position={Position.Left} className="table-handle route-handle" isConnectable={false} />
-    {data.description && <p className="canvas-table-comment canvas-metadata-line" title={data.description}>{data.description}</p>}
     {editing?.field === 'table' && form}
     {data.columns?.map((column, index, rows) => <div className="canvas-column-slot" key={column.id}>
       <div className={'canvas-column' + (column.highlighted ? ' search-match' : '') + (dropTarget === column.id ? ' column-drop-target' : '')}
@@ -217,7 +214,6 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
     const visible = viewColumnIds(table, instance);
     const label = viewLabel(table, titleMode);
     const logicalName = secondaryName(table, view.nameDisplay);
-    const description = full ? table.description : undefined;
     const rows = visible.flatMap(id => {
       const column = columns.get(id);
       return column ? [{ id, name: viewLabel(column, titleMode), type: columnTypeLabel(column.type, enums), badges: badges.get(id) ?? [],
@@ -230,8 +226,8 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
       style: { width }, zIndex: 2,
       ...(viewportOnly && { initialWidth: width, initialHeight: rows.reduce((height, row) =>
         height + 25 + (row.logicalName ? 15 : 0) + (row.description ? 16 : 0) + (row.defaultSql ? 16 : 0),
-      36 + (logicalName ? 15 : 0) + (description ? 20 : 0)) }),
-      data: { tableId: table.id, label, logicalName, description, columns: rows },
+      36 + (logicalName ? 15 : 0)) }),
+      data: { tableId: table.id, label, logicalName, columns: rows },
     };
     nodes.push(node);
     const copies = instances.get(table.id) ?? [];

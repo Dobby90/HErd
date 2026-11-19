@@ -157,7 +157,7 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         await rename.getByLabel('코멘트').fill('물류 작업의 배송 기록');
         await rename.getByLabel('코멘트').press('Control+Enter');
         await shipment.getByText('배송 기록', { exact: true }).waitFor();
-        await shipment.getByText('물류 작업의 배송 기록', { exact: true }).waitFor();
+        expect(await shipment.getByText('물류 작업의 배송 기록', { exact: true }).count()).toBe(0);
         await button('tracking_code 이름 편집').dblclick();
         await edit.getByLabel('논리명').fill('운송장 번호');
         await edit.getByLabel('코멘트').fill('택배사의 연동 식별자');

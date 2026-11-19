@@ -34,7 +34,7 @@ export function arrangeView(document: ErdDocument, view: View, measured: Readonl
         const extra = full ? visible.reduce((height, id) => {
           const column = columnsById.get(id);
           return height + (column?.logicalName ? 15 : 0) + (column?.description ? 16 : 0) + (column?.default ? 16 : 0);
-        }, (table?.logicalName ? 15 : 0) + (table?.description ? 22 : 0)) : 0;
+        }, table?.logicalName ? 15 : 0) : 0;
         height = Math.max(height, measured.get(item.id)?.height ?? 0, item.size?.height ?? 0,
           42 + 28 * visible.length + extra);
       });
