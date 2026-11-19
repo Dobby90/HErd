@@ -202,11 +202,13 @@ summary { cursor: pointer; }
 
 .editor { display: flex; flex-direction: column; height: 100dvh; min-height: 480px; }
 .editor-layout {
+  --schema-width: minmax(170px, 205px);
   display: grid;
-  grid-template-columns: minmax(170px, 205px) minmax(0, 1fr) minmax(238px, 282px);
+  grid-template-columns: var(--schema-width) minmax(0, 1fr) minmax(238px, 282px);
   flex: 1;
   min-height: 0;
 }
+.editor-layout[data-schema-collapsed="true"] { --schema-width: 42px; }
 .navigator, .inspector { background: var(--surface); min-width: 0; min-height: 0; }
 .navigator {
   display: flex;
@@ -221,6 +223,11 @@ summary { cursor: pointer; }
 .nav-heading { min-height: 30px; padding-left: .3rem; color: var(--muted); }
 .nav-heading h2 { font-size: .81rem; }
 .nav-heading button { color: var(--muted); width: 28px; min-height: 28px; }
+.navigator-header { justify-content: space-between; }
+.navigator-header-actions { flex-wrap: nowrap; gap: .16rem; }
+[data-schema-collapsed="true"] > .navigator { padding-inline: .34rem; }
+[data-schema-collapsed="true"] .navigator-header { justify-content: center; padding-inline: 0; }
+[data-schema-collapsed="true"] > .navigator > :not(.navigator-header) { display: none; }
 .section-separated { margin-top: .45rem; padding-top: .36rem; border-top: 1px solid var(--line); }
 .schema-search { position: relative; margin: .12rem .1rem .52rem; color: var(--muted); }
 .schema-search .ui-icon { position: absolute; left: .52rem; top: 50%; transform: translateY(-50%); pointer-events: none; }
@@ -573,7 +580,7 @@ dialog:has(.sql-export, .sql-import, .image-options, .version-list) { width: min
 .image-preview { display: block; max-width: 100%; max-height: 48vh; object-fit: contain; border: 1px solid var(--border); border-radius: 6px; margin-top: .5rem; }
 
 @media (max-width: 1100px) {
-  .editor-layout { grid-template-columns: minmax(167px, 18%) minmax(0, 1fr) minmax(228px, 24%); }
+  .editor-layout { --schema-width: minmax(167px, 18%); grid-template-columns: var(--schema-width) minmax(0, 1fr) minmax(228px, 24%); }
   .topbar { gap: .45rem; padding-inline: .62rem; }
   .document-actions { gap: .18rem; }
   .canvas-tools .checkbox { margin-inline: 0; }
@@ -585,7 +592,7 @@ dialog:has(.sql-export, .sql-import, .image-options, .version-list) { width: min
 }
 @media (max-width: 780px) {
   .editor { height: auto; min-height: 100dvh; }
-  .editor-layout { grid-template-columns: minmax(145px, 25%) minmax(0, 1fr); }
+  .editor-layout { --schema-width: minmax(145px, 25%); grid-template-columns: var(--schema-width) minmax(0, 1fr); }
   .navigator { max-height: 72dvh; }
   .inspector { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
   .canvas { min-height: 53dvh; }

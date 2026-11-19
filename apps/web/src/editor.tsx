@@ -352,6 +352,8 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
   const [chosenView, chooseView] = useState(initialPlacement?.viewId ?? '');
   const [selection, inspect] = useState<Inspector | null>(null);
   const [mobilePane, setMobilePane] = useState<MobilePane>('canvas');
+  const [schemaCollapsed, setSchemaCollapsed] = useState(false);
+  const mobileCanvasTab = useRef<HTMLButtonElement>(null);
   const mobilePanesId = useId();
   const [query, setQuery] = useState('');
   const [searchFocus, setSearchFocus] = useState<CanvasFocus | undefined>(initialPlacement);
@@ -428,6 +430,14 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
     setTool(undefined);
     inspect(value);
     setMobilePane('properties');
+  }
+
+  function toggleSchema() {
+    setSchemaCollapsed(!schemaCollapsed);
+    if (!schemaCollapsed && window.matchMedia('(max-width: 520px)').matches) {
+      setMobilePane('canvas');
+      mobileCanvasTab.current?.focus();
+    }
   }
 
   function chooseTool(next: CanvasTool) {
@@ -603,14 +613,26 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
       {saveActions}
     </div>
     <div className="mobile-panes" role="group" aria-label="편집기 영역">
-      {(Object.keys(mobilePanes) as MobilePane[]).map(pane => <button key={pane} type="button" aria-pressed={mobilePane === pane}
-        aria-controls={`${mobilePanesId}-${pane}`} onClick={() => setMobilePane(pane)}>{mobilePanes[pane]}</button>)}
+      {(Object.keys(mobilePanes) as MobilePane[]).map(pane => <button key={pane} ref={pane === 'canvas' ? mobileCanvasTab : undefined}
+        type="button" aria-pressed={mobilePane === pane}
+        aria-controls={`${mobilePanesId}-${pane}`} onClick={() => {
+          if (pane === 'schema') setSchemaCollapsed(false);
+          setMobilePane(pane);
+        }}>{mobilePanes[pane]}</button>)}
     </div>
-    <div className="editor-layout" data-mobile-pane={mobilePane}>
+    <div className="editor-layout" data-mobile-pane={mobilePane} data-schema-collapsed={schemaCollapsed}>
       <aside className="navigator" id={`${mobilePanesId}-schema`} aria-label="문서 탐색">
-        <div className="section-heading nav-heading"><h2>스키마</h2>{!readOnly && <button type="button" className="quiet icon-button"
-          aria-label="네임스페이스 추가" title="네임스페이스 추가"
-          onClick={() => openProperties({ type: 'namespace' })}><Icon name="plus" /></button>}</div>
+        <div className="section-heading nav-heading navigator-header">
+          {!schemaCollapsed && <h2>스키마</h2>}
+          <div className="actions navigator-header-actions">
+            {!schemaCollapsed && !readOnly && <button type="button" className="quiet icon-button"
+              aria-label="네임스페이스 추가" title="네임스페이스 추가"
+              onClick={() => openProperties({ type: 'namespace' })}><Icon name="plus" /></button>}
+            <button type="button" className="quiet icon-button" aria-expanded={!schemaCollapsed} aria-controls={`${mobilePanesId}-schema`}
+              aria-label={schemaCollapsed ? '스키마 펼치기' : '스키마 접기'} title={schemaCollapsed ? '스키마 펼치기' : '스키마 접기'}
+              onClick={toggleSchema}><Icon name={schemaCollapsed ? 'right' : 'back'} /></button>
+          </div>
+        </div>
         <label className="schema-search"><Icon name="search" /><span className="sr-only">스키마 및 뷰 검색</span>
           <input type="search" placeholder="스키마 및 뷰 검색" value={query} onChange={event => {
             setQuery(event.target.value);

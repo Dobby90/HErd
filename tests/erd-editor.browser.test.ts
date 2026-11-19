@@ -180,6 +180,44 @@ it('deletes selected canvas notes and groups with confirmation and keeps grouped
   });
 }, 60_000);
 
+it('folds and reopens the schema panel on desktop and mobile', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    await openEditor(page, origin);
+    const canvas = page.locator('.canvas');
+    const canvasWidth = () => canvas.evaluate(element => element.getBoundingClientRect().width);
+    const search = nav(page).getByRole('searchbox');
+    const collapse = nav(page).getByRole('button', { name: '스키마 접기' });
+    const expand = nav(page).getByRole('button', { name: '스키마 펼치기' });
+    const expandedWidth = await canvasWidth();
+    await search.fill('orders');
+    await collapse.press('Enter');
+    await search.waitFor({ state: 'hidden' });
+    expect(await expand.getAttribute('aria-expanded')).toBe('false');
+    expect(await expand.evaluate(element => element === document.activeElement)).toBe(true);
+    expect(await canvasWidth()).toBeGreaterThan(expandedWidth);
+    await expand.press('Enter');
+    await search.waitFor();
+    expect(await collapse.getAttribute('aria-expanded')).toBe('true');
+    expect(await search.inputValue()).toBe('orders');
+    expect(await canvasWidth()).toBe(expandedWidth);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const panes = page.getByRole('group', { name: '편집기 영역' });
+    const schema = panes.getByRole('button', { name: '스키마' });
+    const diagram = panes.getByRole('button', { name: '다이어그램' });
+    await schema.click();
+    await collapse.click();
+    await nav(page).waitFor({ state: 'hidden' });
+    expect(await diagram.getAttribute('aria-pressed')).toBe('true');
+    expect(await diagram.evaluate(element => element === document.activeElement)).toBe(true);
+    await schema.click();
+    await search.waitFor();
+    expect(await search.inputValue()).toBe('orders');
+  });
+});
+
 it('fits the view on first open and exposes table tabs and export with the keyboard', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
