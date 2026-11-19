@@ -1,5 +1,5 @@
 import type { ErdDocument } from '@erd/model';
-import { physicalRelationships } from '@erd/model';
+import { isIdentifyingForeignKey, physicalRelationships, primaryColumnsByTable } from '@erd/model';
 import type { View } from './editor-fields.js';
 import { viewColumnIds, viewLabel } from './editor-fields.js';
 import fontUrl from './fonts/noto-sans-kr.woff2?url';
@@ -21,7 +21,7 @@ type Box = Point & { width: number; height: number };
 type Shape =
   | ({ kind: 'rect'; fill: string; stroke?: string } & Box)
   | ({ kind: 'text'; value: string; size: number; color: string } & Point)
-  | { kind: 'line'; points: Point[]; color: string; dashed?: boolean; fill?: boolean };
+  | { kind: 'line'; points: Point[]; color: string; dash?: [number, number]; fill?: boolean };
 type TableBox = Box & { rows: Map<string, number> };
 type Scene = { bounds: Box; shapes: Shape[]; omitted: number; tables: number };
 
@@ -70,11 +70,11 @@ function connection(source: TableBox, target: TableBox, sourceColumn?: string, t
   return [{ x: sourceRight, y: sourceY }, { x: right, y: sourceY }, { x: right, y: targetAnchor }, { x: targetRight, y: targetAnchor }];
 }
 
-function edgeShapes(points: Point[], color: string, dashed: boolean): Shape[] {
+function edgeShapes(points: Point[], color: string, dash?: [number, number]): Shape[] {
   const end = points[points.length - 1];
   const before = points[points.length - 2];
   const base = end.x + (before.x > end.x ? 8 : -8);
-  return [{ kind: 'line', points, color, dashed },
+  return [{ kind: 'line', points, color, dash },
     { kind: 'line', points: [end, { x: base, y: end.y - 4 }, { x: base, y: end.y + 4 }], color, fill: true }];
 }
 
@@ -167,7 +167,7 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
   }
 
   let omitted = 0;
-  function relate(from: string, to: string, logical: boolean, fromColumn?: string, toColumn?: string) {
+  function relate(from: string, to: string, kind: 'identifying' | 'non-identifying' | 'logical', fromColumn?: string, toColumn?: string) {
     const sources = instances.get(from) ?? [];
     const targets = instances.get(to) ?? [];
     if (ids && (sources.length === 0) !== (targets.length === 0)) omitted++;
@@ -175,14 +175,17 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
       for (const target of from === to ? [source] : targets) {
         if (relations.length >= 100_000) throw new Error('관계선이 너무 많습니다. 뷰를 나누어 출력하세요.');
         const line = connection(source, target, fromColumn, toColumn);
-        for (const shape of edgeShapes(line, logical ? '#8e7fa7' : '#7d8aa2', logical)) add(relations, shape);
+        const dash: [number, number] | undefined = kind === 'logical' ? [2, 4] : kind === 'non-identifying' ? [6, 3] : undefined;
+        for (const shape of edgeShapes(line, kind === 'logical' ? '#8e7fa7' : '#7d8aa2', dash)) add(relations, shape);
       }
     }
   }
+  const primary = primaryColumnsByTable(document);
   for (const key of physicalRelationships(document)) {
-    relate(key.tableId, key.targetTableId, false, key.pairs[0]?.sourceColumnId, key.pairs[0]?.targetColumnId);
+    relate(key.tableId, key.targetTableId, isIdentifyingForeignKey(key, primary) ? 'identifying' : 'non-identifying',
+      key.pairs[0]?.sourceColumnId, key.pairs[0]?.targetColumnId);
   }
-  for (const link of document.relationships) relate(link.sourceTableId, link.targetTableId, true);
+  for (const link of document.relationships) relate(link.sourceTableId, link.targetTableId, 'logical');
   const shapes = [...background, ...relations, ...foreground];
   if (!shapes.length) throw new Error('이 뷰에 출력할 객체가 없습니다.');
   const width = Math.ceil(right - left + margin * 2);
@@ -202,7 +205,7 @@ function svg(scene: Scene, name: string, background: boolean, fontData: string) 
     if (shape.kind === 'rect') return `<rect x="${shape.x}" y="${shape.y}" width="${shape.width}" height="${shape.height}" fill="${shape.fill}"${shape.stroke ? ` stroke="${shape.stroke}"` : ''}/>`;
     const points = shape.points.map(point => `${point.x},${point.y}`).join(' ');
     if (shape.fill) return `<polygon points="${points}" fill="${shape.color}"/>`;
-    return `<polyline points="${points}" fill="none" stroke="${shape.color}" stroke-width="1.6" stroke-linejoin="round"${shape.dashed ? ' stroke-dasharray="5 4"' : ''}/>`;
+    return `<polyline points="${points}" fill="none" stroke="${shape.color}" stroke-width="1.6" stroke-linejoin="round"${shape.dash ? ' stroke-dasharray="' + shape.dash.join(' ') + '"' : ''}/>`;
   }).join('\n');
   return new Blob([`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${x} ${y} ${width} ${height}">
 <title>${xml(singleLine(name))}</title>
@@ -241,7 +244,7 @@ function draw(context: CanvasRenderingContext2D, shape: Shape) {
       context.strokeStyle = shape.color;
       context.lineWidth = 1.6;
       context.lineJoin = 'round';
-      context.setLineDash(shape.dashed ? [5, 4] : []);
+      context.setLineDash(shape.dash ?? []);
       context.stroke();
     }
   }

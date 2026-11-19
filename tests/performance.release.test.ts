@@ -36,6 +36,7 @@ it('measures both release models through the built browser, API and PostgreSQL',
         await session.send('Network.setCacheDisabled', { cacheDisabled: true });
         await page.goto(origin + '/?workspace=1');
         await button('개발 계정으로 로그인').click();
+        await button('새 프로젝트').click();
         await page.getByLabel('새 프로젝트 이름').fill('릴리스 성능');
         await button('프로젝트 생성').click();
         await heading('릴리스 성능');

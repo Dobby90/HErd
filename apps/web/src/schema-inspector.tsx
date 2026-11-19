@@ -1,15 +1,22 @@
 import { useState } from 'react';
 import type { Catalog, DocumentCommand, ErdDocument, ForeignKey } from '@erd/model';
-import { deletionImpact } from '@erd/model';
+import { deletionImpact, isIdentifyingForeignKey, primaryColumnsByTable } from '@erd/model';
+import { Icon } from './editor-controls.js';
 import type { EditorDialect } from '@erd/sql-contract';
 import { columnsOf, field, Form, id, label, Modal, moveItem, named, NameFields, OrderedColumns, OrderedItems, sqlExpression } from './editor-fields.js';
 import type { Column, Table } from './editor-fields.js';
+import { availableName, putColumn, schemaRelationNames, validPhysicalName } from './schema-edits.js';
+import type { QuickRun } from './canvas-edit.js';
 
 type Constraint = Catalog['constraints'][number];
 type Index = Catalog['indexes'][number];
 type KeyPart = Index['keys'][number];
 type Run = (command: DocumentCommand) => boolean;
-export type FkDialog = { tableId: string; targetTableId?: string; sourceColumnId?: string; targetColumnId?: string; existing?: ForeignKey };
+export type PhysicalRelation = 'identifying' | 'non-identifying';
+export type FkDialog = {
+  tableId: string; targetTableId?: string; sourceColumnId?: string; targetColumnId?: string;
+  existing?: ForeignKey; mode?: PhysicalRelation;
+};
 
 export function DeleteSchema({ document, objectId, run, close }: { document: ErdDocument; objectId: string; run: Run; close(): void }) {
   const impact = deletionImpact(document, objectId);
@@ -68,12 +75,7 @@ export function ColumnForm({ document, table, column, dialect, run, close }: {
     };
     const typeProblem = changed || !column ? dialect.typeProblem(next.type) : undefined;
     if (typeProblem) { setError(typeProblem); return; }
-    const order = table.columnIds.filter(id => id !== next.id);
-    order.splice(Number(field(form, 'order')) - 1, 0, next.id);
-    if (run({ kind: 'batch', commands: [
-      { kind: 'put-catalog', collection: 'columns', value: next },
-      { kind: 'put-catalog', collection: 'tables', value: { ...table, columnIds: order } },
-    ] })) close();
+    if (run(putColumn(table, next, Number(field(form, 'order')) - 1))) close();
   }}>
     <NameFields value={column ?? { physicalName: '' }} />
     <label>자료형<select name="type" defaultValue={native} disabled={type.reference.kind === 'enum'}>
@@ -145,55 +147,152 @@ export function IndexForm({ document, table, existing, run, close }: {
   </Form>;
 }
 
+function eligibleKeys(document: ErdDocument, dialect: EditorDialect, tableId: string, columnId?: string) {
+  const primary = document.catalog.constraints.find(key => key.tableId === tableId && key.kind === 'pk');
+  const eligible = dialect.referenceKeys(document, tableId).filter(item => !item.unavailable && (!columnId || item.columnIds.includes(columnId)));
+  const first = eligible.findIndex(item => item.key.id === primary?.id && item.key.kind === 'constraint');
+  if (first > 0) eligible.unshift(eligible.splice(first, 1)[0]);
+  return eligible;
+}
+
 export function ForeignKeyForm({ document, dialect, seed, run, close }: {
-  document: ErdDocument; dialect: EditorDialect; seed: FkDialog; run: Run; close(): void;
+  document: ErdDocument; dialect: EditorDialect; seed: FkDialog; run: QuickRun; close(): void;
 }) {
   const [keyId] = useState(() => seed.existing?.id ?? id());
   const [target, setTarget] = useState(seed.targetTableId ?? '');
+  const [mode, setMode] = useState<PhysicalRelation | ''>(seed.mode ?? '');
+  const [error, setError] = useState('');
   const candidates = dialect.referenceKeys(document, target);
-  const eligible = candidates.filter(item => !item.unavailable && (!seed.targetColumnId || item.columnIds.includes(seed.targetColumnId)));
+  const eligible = eligibleKeys(document, dialect, target, seed.targetColumnId);
   const [chosen, setChosen] = useState(seed.existing?.targetKey.id ?? eligible[0]?.key.id ?? '');
   const [pairs, setPairs] = useState<Record<string, string>>(() => Object.fromEntries(seed.existing?.pairs.map(pair =>
     [pair.targetColumnId, pair.sourceColumnId]) ?? (seed.targetColumnId && seed.sourceColumnId ? [[seed.targetColumnId, seed.sourceColumnId]] : [])));
   const candidate = eligible.find(item => item.key.id === chosen);
+  const table = document.catalog.tables.find(item => item.id === seed.tableId);
+  const parent = document.catalog.tables.find(item => item.id === target);
   const sourceColumns = columnsOf(document, seed.tableId);
-  const targetColumns = columnsOf(document, target);
+  const targetColumns = new Map(columnsOf(document, target).map(column => [column.id, column]));
   const originalOrder = seed.existing?.targetKey.id === candidate?.key.id ? seed.existing?.pairs.map(pair => pair.targetColumnId) : undefined;
   const targetOrder = originalOrder ?? candidate?.columnIds ?? [];
-  const mapping = targetOrder.map(targetColumnId => ({ targetColumnId, sourceColumnId: pairs[targetColumnId] ?? '' }));
-  const complete = mapping.length > 0 && mapping.every(pair => pair.sourceColumnId);
-  const validation = complete && candidate ? dialect.validateForeignKey(document, {
-    id: keyId, kind: 'fk', physicalName: '', tableId: seed.tableId, targetTableId: target, targetKey: candidate.key, pairs: mapping,
-  }) : [];
+  const newColumnChoice = keyId + ':new';
+  const defaultMapping = seed.mode ? newColumnChoice : '';
+  const usedNames = new Set(sourceColumns.map(column => column.physicalName));
+  const added: Column[] = [];
+  const options = targetOrder.flatMap(targetColumnId => {
+    const column = targetColumns.get(targetColumnId);
+    if (!column || !parent || !table) return [];
+    const name = availableName(parent.physicalName + '_' + column.physicalName, usedNames);
+    const value = pairs[targetColumnId] ?? defaultMapping;
+    const sourceColumnId = value === newColumnChoice ? keyId + ':column:' + targetColumnId : value;
+    if (value === newColumnChoice) added.push({ id: sourceColumnId, tableId: table.id, physicalName: name,
+      type: column.type, nullable: false });
+    return [{ column, value, name, mapping: { targetColumnId, sourceColumnId } }];
+  });
+  const mapping = options.map(option => option.mapping);
+  const key: ForeignKey | undefined = table && candidate && mapping.length > 0 && mapping.length === targetOrder.length &&
+    mapping.every(pair => pair.sourceColumnId) ? {
+      id: keyId, kind: 'fk', tableId: table.id, physicalName: '', targetTableId: target, targetKey: candidate.key, pairs: mapping,
+    } : undefined;
+  const primary = primaryColumnsByTable(document);
+  const sameMapping = key && document.catalog.constraints.some(item => item.kind === 'fk' && item.id !== key.id &&
+    item.tableId === key.tableId && item.targetTableId === key.targetTableId && item.pairs.length === mapping.length &&
+    item.pairs.every(pair => mapping.some(value => value.sourceColumnId === pair.sourceColumnId && value.targetColumnId === pair.targetColumnId)));
+  const augmented = added.length ? { ...document, catalog: { ...document.catalog, columns: [...document.catalog.columns, ...added] } } : document;
+  const validation = key ? dialect.validateForeignKey(augmented, key) : [];
+  const modeProblem = key && mode === 'non-identifying' && isIdentifyingForeignKey(key, primary)
+    ? '비식별 FK에는 자식 기본키에 포함되지 않은 컬럼이 하나 이상 필요합니다.' : '';
+  const existingKeyNames = new Set(document.catalog.constraints.filter(item => item.tableId === seed.tableId).map(item => item.physicalName));
+  const suggestedName = availableName([table?.physicalName, parent?.physicalName, 'fk'].filter(Boolean).join('_'), existingKeyNames);
+  if (!table) return null;
+
   return <Modal title="외래 키 설정" close={close}>
+    {seed.mode && parent && <p className="fk-summary"><strong>{label(parent)}</strong><Icon name="right" /><strong>{label(table)}</strong>
+      <span className="muted">부모 → 자식</span></p>}
     <Form cancel={close} button="외래 키 적용" submit={form => {
-      if (!candidate || !complete || validation.length) return;
-      if (run({ kind: 'put-catalog', collection: 'constraints', value: {
-        ...named(form), id: keyId, kind: 'fk', tableId: seed.tableId, targetTableId: target, targetKey: candidate.key,
-        pairs: mapping, onDelete: dialect.actions.find(action => action === field(form, 'onDelete')),
-        onUpdate: dialect.actions.find(action => action === field(form, 'onUpdate')),
-      } })) close();
+      if (!key || validation.length || modeProblem || sameMapping) {
+        setError('후보키와 컬럼 매핑을 확인하세요.');
+        return;
+      }
+      const names = named(form);
+      const onDelete = dialect.actions.find(action => action === field(form, 'onDelete'));
+      const onUpdate = dialect.actions.find(action => action === field(form, 'onUpdate'));
+      const commands: DocumentCommand[] = [];
+      if (mode && (!validPhysicalName(names.physicalName) ||
+        document.catalog.constraints.some(item => item.id !== key.id && item.tableId === table.id && item.physicalName === names.physicalName))) {
+        setError('테이블 내에서 중복되지 않는 FK 물리명을 UTF-8 기준 1~63바이트로 입력하세요.');
+        return;
+      }
+      const useNull = onDelete === 'set-null' || onUpdate === 'set-null';
+      if (mode === 'identifying' && useNull) {
+        setError('식별 FK의 자식 컬럼은 NULL을 허용하지 않습니다. 다른 참조 동작을 선택하세요.');
+        return;
+      }
+      if (mode === 'non-identifying' && useNull && sourceColumns.some(column =>
+        mapping.some(pair => pair.sourceColumnId === column.id) && (!column.nullable || primary.get(table.id)?.has(column.id)))) {
+        setError('SET NULL을 사용하려면 매핑한 자식 컬럼에서 NULL을 허용해야 합니다.');
+        return;
+      }
+      for (const value of added) commands.push({ kind: 'put-catalog', collection: 'columns', value: { ...value, nullable: useNull } });
+      if (added.length) commands.push({ kind: 'put-catalog', collection: 'tables', value: {
+        ...table, columnIds: [...table.columnIds, ...added.map(column => column.id)],
+      } });
+      if (mode === 'identifying') {
+        const pk = document.catalog.constraints.find(item => item.kind === 'pk' && item.tableId === table.id);
+        const columnIds = [...new Set([...(pk?.kind === 'pk' ? pk.columnIds : []), ...mapping.map(pair => pair.sourceColumnId)])];
+        if (pk?.kind === 'pk' && columnIds.length !== pk.columnIds.length && (document.catalog.constraints.some(item =>
+          item.kind === 'fk' && item.targetKey.kind === 'constraint' && item.targetKey.id === pk.id) ||
+          document.catalog.indexes.some(item => item.tableId === table.id && item.physicalName === pk.physicalName))) {
+          setError('자식 기본키를 참조하는 FK 또는 같은 이름의 인덱스가 있습니다. 기존 기본키 컬럼에 매핑하거나 비식별 FK를 선택하세요.');
+          return;
+        }
+        const pkNames = schemaRelationNames(document, table.namespaceId);
+        for (const name of existingKeyNames) pkNames.add(name);
+        pkNames.add(names.physicalName);
+        commands.push({ kind: 'put-catalog', collection: 'constraints', value: {
+          ...pk, id: pk?.id ?? id(), tableId: table.id, kind: 'pk',
+          physicalName: pk?.physicalName ?? availableName(table.physicalName + '_pkey', pkNames), columnIds,
+        } });
+        for (const column of sourceColumns) {
+          if (column.nullable && mapping.some(pair => pair.sourceColumnId === column.id)) {
+            commands.push({ kind: 'put-catalog', collection: 'columns', value: { ...column, nullable: false } });
+          }
+        }
+      }
+      commands.push({ kind: 'put-catalog', collection: 'constraints', value: { ...seed.existing, ...key, ...names, onDelete, onUpdate } });
+      setError('');
+      if (run({ kind: 'batch', commands }, setError)) close();
     }}>
-      <NameFields value={seed.existing ?? { physicalName: '' }} />
+      <label>관계 유형<select value={mode} onChange={event => {
+        setMode(event.target.value === 'identifying' ? 'identifying' : event.target.value === 'non-identifying' ? 'non-identifying' : '');
+        setError('');
+      }}>
+        <option value="">기존 기본키 구성 사용</option>
+        <option value="identifying">식별 FK</option>
+        <option value="non-identifying">비식별 FK</option>
+      </select></label>
+      {mode === 'identifying' && <p className="muted">매핑한 자식 컬럼을 기본키에 포함하고 NULL을 허용하지 않습니다.</p>}
+      <NameFields value={seed.existing ?? { physicalName: seed.mode ? suggestedName : '' }} />
       <label>참조 테이블<select value={target} onChange={event => {
-        const target = event.target.value;
-        setTarget(target);
-        setChosen(dialect.referenceKeys(document, target).find(key => !key.unavailable)?.key.id ?? '');
+        const next = event.target.value;
+        setTarget(next);
+        setChosen(eligibleKeys(document, dialect, next)[0]?.key.id ?? '');
         setPairs({});
-      }} disabled={Boolean(seed.targetColumnId)}>
+        setError('');
+      }} disabled={Boolean(seed.targetColumnId || seed.mode)}>
         <option value="">테이블 선택</option>
         {document.catalog.tables.map(table => <option key={table.id} value={table.id}>{label(table)}</option>)}
       </select></label>
-      <label>참조 후보키<select value={chosen} onChange={event => setChosen(event.target.value)} required>
+      <label>참조 후보키<select value={chosen} onChange={event => { setChosen(event.target.value); setError(''); }} required>
         <option value="">후보키 선택</option>
         {eligible.map(item => <option key={item.key.id} value={item.key.id}>{item.name || '(이름 없음)'}</option>)}
       </select></label>
       {candidates.filter(item => item.unavailable).map(item => <p key={item.key.id}>{item.name} · {item.unavailable}</p>)}
       {target && !eligible.length && <p role="alert">참조할 수 있는 후보키가 없습니다.</p>}
-      {targetOrder.map((targetColumnId, index) => <label key={targetColumnId}>
-        {index + 1}. {label(targetColumns.find(item => item.id === targetColumnId) ?? { physicalName: targetColumnId })}에 대응할 원본 컬럼
-        <select required value={pairs[targetColumnId] ?? ''} onChange={event => setPairs({ ...pairs, [targetColumnId]: event.target.value })}>
+      {options.map(({ column, value, name }, index) => <label key={column.id}>
+        {index + 1}. {label(column)}에 대응할 원본 컬럼
+        <select required value={value} onChange={event => { setPairs({ ...pairs, [column.id]: event.target.value }); setError(''); }}>
           <option value="">컬럼 선택</option>
+          <option value={newColumnChoice}>새 컬럼 · {name}</option>
           {sourceColumns.map(column => <option key={column.id} value={column.id}>{label(column)}</option>)}
         </select>
       </label>)}
@@ -204,6 +303,9 @@ export function ForeignKeyForm({ document, dialect, seed, run, close }: {
         </select>
       </label>)}
       {validation.map(item => <p key={item.code} role="alert">{item.message}</p>)}
+      {sameMapping && <p role="alert">같은 컬럼 매핑으로 연결된 FK가 있습니다.</p>}
+      {modeProblem && <p role="alert">{modeProblem}</p>}
+      {error && <p role="alert">{error}</p>}
     </Form>
   </Modal>;
 }

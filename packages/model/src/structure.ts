@@ -141,6 +141,18 @@ export function physicalRelationships(document: ErdDocument): ForeignKey[] {
   return document.catalog.constraints.filter(constraint => constraint.kind === 'fk');
 }
 
+export function primaryColumnsByTable(document: ErdDocument) {
+  const primary = new Map<string, ReadonlySet<string>>();
+  for (const key of document.catalog.constraints) {
+    if (key.kind === 'pk' && !primary.has(key.tableId)) primary.set(key.tableId, new Set(key.columnIds));
+  }
+  return primary;
+}
+
+export function isIdentifyingForeignKey(key: ForeignKey, primary: ReadonlyMap<string, ReadonlySet<string>>) {
+  return key.pairs.length > 0 && key.pairs.every(pair => primary.get(key.tableId)?.has(pair.sourceColumnId));
+}
+
 type ColumnBadge = 'pk' | 'unique' | 'fk';
 
 export function columnBadgesById(document: ErdDocument) {

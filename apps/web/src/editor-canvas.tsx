@@ -1,22 +1,26 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { applyNodeChanges, Background, Controls, Handle, MiniMap, Position, ReactFlow, ReactFlowProvider, useNodesInitialized, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
-import type { Edge, Node, NodeProps, OnSelectionChangeParams, XYPosition } from '@xyflow/react';
-import { columnBadgesById, physicalRelationships } from '@erd/model';
+import type { Edge, Node, NodeProps, OnSelectionChangeParams, ReactFlowInstance, XYPosition } from '@xyflow/react';
+import { columnBadgesById, isIdentifyingForeignKey, physicalRelationships, primaryColumnsByTable } from '@erd/model';
 import type { ErdDocument } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
 import { ColumnBadges, Icon } from './editor-controls.js';
 import { viewColumnIds, viewLabel } from './editor-fields.js';
+import { CanvasEditing, dragType } from './canvas-edit.js';
+import { columnTypeLabel } from './schema-edits.js';
 
 type View = ErdDocument['views'][number];
 type CanvasNode = Node<Record<string, unknown> & {
   label: string;
   tableId?: string;
   highlighted?: boolean;
-  columns?: Array<{ id: string; name: string; badges: string[]; highlighted?: boolean }>;
+  columns?: Array<{ id: string; name: string; type: string; badges: string[]; highlighted?: boolean }>;
 }, 'table' | 'groupBox' | 'note'>;
 
 export type CanvasFocus = { instanceId: string; columnId?: string };
 export type LayoutSizes = Map<string, { width: number; height: number }>;
+export type CanvasPosition = { point: XYPosition; screen: XYPosition };
 const fitOptions = { padding: 0.18, maxZoom: 1.15 };
 const canvasLabels = {
   'controls.ariaLabel': '캔버스 확대 및 축소',
@@ -25,13 +29,14 @@ const canvasLabels = {
   'controls.fitView.ariaLabel': '전체 보기',
 };
 
-function CanvasViewport({ focus, viewportOnly }: { focus?: CanvasFocus; viewportOnly: boolean }) {
+function CanvasViewport({ focus, viewportOnly, empty }: { focus?: CanvasFocus; viewportOnly: boolean; empty: boolean }) {
   const ready = useNodesInitialized();
   const { fitView, getNode, setCenter, viewportInitialized } = useReactFlow<CanvasNode, Edge>();
   const opened = useRef(false);
   useEffect(() => {
     if (!viewportInitialized) return;
     if (!focus) {
+      if (empty) opened.current = true;
       if (!opened.current && !viewportOnly && ready) {
         opened.current = true;
         void fitView(fitOptions);
@@ -45,27 +50,84 @@ function CanvasViewport({ focus, viewportOnly }: { focus?: CanvasFocus; viewport
         node.position.y + Math.min(node.measured?.height ?? node.initialHeight ?? 36, 260) / 2,
         { zoom: 1, duration: 160 });
     } else if (ready) void fitView({ nodes: [{ id: focus.instanceId }], maxZoom: 1.15, padding: 0.35, duration: 160 });
-  }, [fitView, getNode, setCenter, viewportInitialized, ready, focus, viewportOnly]);
+  }, [fitView, getNode, setCenter, viewportInitialized, ready, focus, viewportOnly, empty]);
   return null;
 }
 
 const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
+  const { activeId, edit, form, change, attributes, reorder, link } = useContext(CanvasEditing);
+  const [dropTarget, setDropTarget] = useState('');
+  const editing = edit?.instanceId === id ? edit : undefined;
+  const active = activeId === id;
   const refresh = useUpdateNodeInternals();
   const handles = data.columns?.map(column => column.id).join(':');
-  useEffect(() => refresh(id), [handles, id, refresh]);
+  useEffect(() => refresh(id), [handles, id, refresh, editing, active]);
+  const editText = (value: string, field: 'table' | 'name' | 'type', columnId?: string) => {
+    const open = (event: MouseEvent) => {
+      event.stopPropagation();
+      change?.({ instanceId: id, field, columnId });
+    };
+    return change ? <button type="button" title={value} className={'canvas-text canvas-' + field + '-text'}
+      aria-label={value + (field === 'type' ? ' 자료형 편집' : ' 이름 편집')}
+      onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation(); }}
+      onClick={event => { if (event.detail === 0 || window.matchMedia('(pointer: coarse)').matches) open(event); }}
+      onDoubleClick={open}>{value}</button> : <span className={'canvas-' + field + '-text'} title={value}>{value}</span>;
+  };
   return <article className={'canvas-table' + (data.highlighted ? ' search-match' : '')}>
-    <strong><Icon name="table" /><span>{data.label}</span></strong>
+    <strong><Icon name="table" />{editText(data.label, 'table')}
+      {active && attributes && <button type="button" className="quiet canvas-node-action nodrag nopan" aria-label={data.label + ' 속성'}
+        title="테이블 속성" onClick={event => { event.stopPropagation(); attributes(id); }}><Icon name="settings" /></button>}
+      {link && <button type="button" className="quiet canvas-node-action nodrag nopan" aria-label={data.label + ' 관계 연결 대상 선택'}
+        title="연결할 테이블로 선택" onClick={event => { event.stopPropagation(); link(id); }}><Icon name="link" /></button>}
+    </strong>
     <Handle id="table-in" type="target" position={Position.Left} className="table-handle" isConnectable={false} />
     <Handle id="table-out" type="source" position={Position.Right} className="table-handle" isConnectable={false} />
     <Handle id="reverse-table-in" type="target" position={Position.Right} className="table-handle route-handle" isConnectable={false} />
     <Handle id="reverse-table-out" type="source" position={Position.Left} className="table-handle route-handle" isConnectable={false} />
-    {data.columns?.map(column => <div className={'canvas-column' + (column.highlighted ? ' search-match' : '')} key={column.id}>
+    {editing?.field === 'table' && form}
+    {data.columns?.map((column, index, rows) => <div className="canvas-column-slot" key={column.id}>
+      <div className={'canvas-column' + (column.highlighted ? ' search-match' : '') + (dropTarget === column.id ? ' column-drop-target' : '')}
+        onDragOver={event => {
+          if (!reorder || !event.dataTransfer.types.includes(dragType.column)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'move';
+          setDropTarget(column.id);
+        }} onDragLeave={event => {
+          if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDropTarget('');
+        }} onDrop={event => {
+          if (!reorder || !event.dataTransfer.types.includes(dragType.column)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          setDropTarget('');
+          const value = event.dataTransfer.getData(dragType.column);
+          const source = rows.find(row => JSON.stringify([id, row.id]) === value);
+          const bounds = event.currentTarget.getBoundingClientRect();
+          if (source) reorder(id, source.id, column.id, event.clientY > bounds.top + bounds.height / 2);
+        }}>
       <Handle id={'in:' + column.id} type="target" position={Position.Left} aria-label={column.name + ' 참조점'} />
-      <span className="canvas-column-name">{column.name}</span><ColumnBadges values={column.badges} />
+      {active && reorder && <button type="button" draggable className="quiet canvas-column-grip nodrag nopan" aria-label={column.name + ' 순서 이동'}
+        title="드래그 또는 Alt+↑/↓로 순서 이동" onClick={event => event.stopPropagation()} onDragStart={event => {
+          event.stopPropagation();
+          event.dataTransfer.setData(dragType.column, JSON.stringify([id, column.id]));
+          event.dataTransfer.effectAllowed = 'move';
+        }} onDragEnd={() => setDropTarget('')} onKeyDown={event => {
+          if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const after = event.key === 'ArrowDown';
+          const target = rows[index + (after ? 1 : -1)];
+          if (target) reorder(id, column.id, target.id, after);
+        }}><Icon name="grip" /></button>}
+      {editText(column.name, 'name', column.id)}{editText(column.type, 'type', column.id)}<ColumnBadges values={column.badges} />
       <Handle id={'out:' + column.id} type="source" position={Position.Right} aria-label={column.name + ' 연결점'} />
       <Handle id={'reverse-in:' + column.id} type="target" position={Position.Right} className="route-handle" isConnectable={false} />
       <Handle id={'reverse-out:' + column.id} type="source" position={Position.Left} className="route-handle" isConnectable={false} />
+      </div>
+      {editing?.columnId === column.id && form}
     </div>)}
+    {editing && editing.field !== 'table' && !editing.columnId ? form :
+      active && change && <button type="button" className="quiet canvas-add-column nodrag nopan" aria-label={data.label + ' 컬럼 추가'}
+        onClick={event => { event.stopPropagation(); change({ instanceId: id, field: 'name' }); }}><Icon name="plus" />컬럼 추가</button>}
   </article>;
 });
 
@@ -98,7 +160,9 @@ function edgeRoute(source: CanvasNode, target: CanvasNode, fromColumn?: string, 
 function project(document: ErdDocument, view: View, dialect: EditorDialect | undefined, viewportOnly: boolean) {
   const tables = new Map(document.catalog.tables.map(table => [table.id, table]));
   const columns = new Map(document.catalog.columns.map(column => [column.id, column]));
+  const enums = new Map(document.catalog.enums.map(item => [item.id, item.physicalName]));
   const badges = columnBadgesById(document);
+  const primary = primaryColumnsByTable(document);
   const foreignKeys = dialect?.inspectForeignKeys?.(document);
   const instances = new Map<string, CanvasNode[]>();
   const nodes: CanvasNode[] = [
@@ -125,7 +189,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
         label: viewLabel(table, view.nameDisplay),
         columns: visible.flatMap(id => {
           const column = columns.get(id);
-          return column ? [{ id, name: viewLabel(column, view.nameDisplay), badges: badges.get(id) ?? [] }] : [];
+          return column ? [{ id, name: viewLabel(column, view.nameDisplay), type: columnTypeLabel(column.type, enums), badges: badges.get(id) ?? [] }] : [];
         }),
       },
     };
@@ -138,6 +202,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   for (const key of physicalRelationships(document)) {
     const meaning = foreignKeys ? foreignKeys.cardinality(key) : dialect?.cardinality(document, key);
     const pair = key.pairs[0];
+    const identifying = isIdentifyingForeignKey(key, primary);
     for (const source of instances.get(key.tableId) ?? []) {
       const targets = key.tableId === key.targetTableId ? [source] : instances.get(key.targetTableId) ?? [];
       for (const target of targets) {
@@ -145,8 +210,8 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
           id: JSON.stringify([key.id, source.id, target.id]), data: { objectId: key.id },
           source: source.id, target: target.id,
           ...edgeRoute(source, target, pair.sourceColumnId, pair.targetColumnId),
-          label: meaning ? `자식 0..${meaning.childMax === 1 ? '1' : 'N'} · 부모 ${meaning.parentOptional ? '0..1' : '1'}` : 'FK · 검토 필요',
-          className: 'fk-edge',
+          label: meaning ? `${identifying ? '식별' : '비식별'} · 자식 0..${meaning.childMax === 1 ? '1' : 'N'} · 부모 ${meaning.parentOptional ? '0..1' : '1'}` : 'FK · 검토 필요',
+          className: 'fk-edge ' + (identifying ? 'identifying-edge' : 'non-identifying-edge'),
         });
       }
     }
@@ -165,7 +230,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
 }
 
 export function EditorCanvas({ document, view, dialect, select, clearSelection, selectInstances, focus, activeTableId, activeRelationId,
-  connect, move, layoutSizes, snap, readOnly, showMap, mapId }: {
+  connect, move, layoutSizes, snap, readOnly, showMap, mapId, placing, picking, pickId, place, placementForm, dropTable, instruction, editRelation }: {
   document: ErdDocument; view: View; dialect?: EditorDialect;
   select(id: string): void;
   clearSelection(): void;
@@ -180,12 +245,22 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
   readOnly: boolean;
   showMap: boolean;
   mapId: string;
+  placing?: boolean;
+  picking?: boolean;
+  pickId?: string;
+  place?(position: CanvasPosition): void;
+  placementForm?: { screen: XYPosition; content: ReactNode };
+  dropTable?(tableId: string, position: XYPosition): void;
+  instruction?: ReactNode;
+  editRelation?(id: string): void;
 }) {
   const viewportOnly = view.instances.length >= 120;
   const projected = useMemo(() => project(document, view, dialect, viewportOnly), [document, view, dialect, viewportOnly]);
   const [nodes, setNodes] = useState(projected.nodes);
-  const displayNodes = useMemo(() => activeTableId ? nodes.map(node => node.data.tableId === activeTableId
-    ? { ...node, className: 'active-table' } : node) : nodes, [activeTableId, nodes]);
+  const displayNodes = useMemo(() => nodes.map(node => {
+    const className = node.id === pickId ? 'relationship-origin' : activeTableId && node.data.tableId === activeTableId ? 'active-table' : undefined;
+    return className ? { ...node, className } : node;
+  }), [activeTableId, nodes, pickId]);
   const edges = useMemo(() => {
     const active = new Set(view.instances.filter(instance => instance.tableId === activeTableId).map(instance => instance.id));
     if (!activeRelationId && !active.size) return projected.edges;
@@ -207,12 +282,36 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
     });
   }), [projected, focus]);
   const anchor = view.instances[0];
+  const flow = useRef<ReactFlowInstance<CanvasNode, Edge>>(null);
+  const canvas = useRef<HTMLDivElement>(null);
+  const position = (x: number, y: number): CanvasPosition | undefined => {
+    const bounds = canvas.current?.getBoundingClientRect();
+    if (!bounds || !flow.current) return;
+    return { point: flow.current.screenToFlowPosition({ x, y }, { snapToGrid: snap }),
+      screen: { x: Math.min(Math.max(x - bounds.left, 8), Math.max(bounds.width - 258, 8)),
+        y: Math.min(Math.max(y - bounds.top, 8), Math.max(bounds.height - 196, 8)) } };
+  };
   return <ReactFlowProvider initialNodes={projected.nodes} initialEdges={projected.edges} initialMinZoom={0.15} initialMaxZoom={2.5}>
-    <div className="canvas">
+    <div ref={canvas} className="canvas" data-tool={placing ? 'place' : picking ? 'connect' : undefined}
+      onDragOver={event => {
+        if (readOnly || !event.dataTransfer.types.some(type => type === dragType.table || type === dragType.newTable)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }} onDrop={event => {
+        if (readOnly) return;
+        const isNew = event.dataTransfer.types.includes(dragType.newTable);
+        const tableId = event.dataTransfer.getData(dragType.table);
+        if (!isNew && !tableId) return;
+        event.preventDefault();
+        const at = position(event.clientX, event.clientY);
+        if (at && isNew) place?.(at);
+        if (at && tableId) dropTable?.(tableId, at.point);
+      }}>
       <ReactFlow<CanvasNode, Edge>
         aria-label="ERD 캔버스"
         ariaLabelConfig={canvasLabels}
-        nodesDraggable={!readOnly} nodesConnectable={!readOnly}
+        onInit={instance => { flow.current = instance; }}
+        nodesDraggable={!readOnly && !picking && !placing} nodesConnectable={!readOnly && !picking && !placing}
         nodes={displayNodes} edges={edges} nodeTypes={nodeTypes}
         onNodesChange={changes => {
           setNodes(previous => applyNodeChanges(readOnly ? changes.filter(change => change.type !== 'position') : changes, previous));
@@ -227,24 +326,39 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
           if (!readOnly && positions.size) move(positions);
         }}
         onNodeClick={(_, node) => select(node.id)}
-        onPaneClick={clearSelection}
+        onPaneClick={event => {
+          if (!placing || readOnly) return clearSelection();
+          const at = position(event.clientX, event.clientY);
+          if (at) place?.(at);
+        }}
+        onPaneContextMenu={event => { if (placing || picking) event.preventDefault(); }}
         onSelectionChange={onSelection}
         onEdgeClick={(_, edge) => select(String(edge.data?.objectId ?? ''))}
+        onEdgeDoubleClick={(_, edge) => { if (!picking && !placing) editRelation?.(String(edge.data?.objectId ?? '')); }}
         isValidConnection={connection => Boolean(connection.sourceHandle?.startsWith('out:') && connection.targetHandle?.startsWith('in:'))}
         onConnect={({ sourceHandle, targetHandle }) => {
           if (!readOnly && sourceHandle?.startsWith('out:') && targetHandle?.startsWith('in:')) connect(sourceHandle.slice(4), targetHandle.slice(3));
         }}
         connectionRadius={18} snapToGrid={snap} snapGrid={[20, 20]} deleteKeyCode={null} selectionOnDrag
+        zoomOnDoubleClick={!placing && !picking}
         panOnDrag={[1, 2]} multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
         onlyRenderVisibleElements={viewportOnly}
         defaultViewport={viewportOnly && anchor ? { x: 24 - anchor.x * 0.75, y: 24 - anchor.y * 0.75, zoom: 0.75 } : undefined}
         minZoom={0.15} maxZoom={2.5}
         proOptions={{ hideAttribution: true }}
       >
-        <CanvasViewport focus={focus} viewportOnly={viewportOnly} />
+        <CanvasViewport focus={focus} viewportOnly={viewportOnly} empty={projected.nodes.length === 0} />
         <Background gap={22} size={1} color="var(--dot)" />
         <Controls showInteractive={false} orientation="horizontal" fitViewOptions={fitOptions} />
       </ReactFlow>
+      {instruction}
+      {placing && !placementForm && <button type="button" className="canvas-place-center quiet" onClick={() => {
+        const bounds = canvas.current?.getBoundingClientRect();
+        if (!bounds) return;
+        const at = position(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+        if (at) place?.(at);
+      }}>화면 중앙에 추가</button>}
+      {placementForm && <div className="canvas-placement" style={{ left: placementForm.screen.x, top: placementForm.screen.y }}>{placementForm.content}</div>}
     </div>
     <div id={mapId} className="canvas-map" hidden={!showMap}>
       {showMap && <MiniMap<CanvasNode> ariaLabel="뷰 미니맵" pannable zoomable nodeColor={mapNodeColor} maskColor="var(--map-mask)"

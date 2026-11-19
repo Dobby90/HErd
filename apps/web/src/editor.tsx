@@ -1,20 +1,22 @@
 import { useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { XYPosition } from '@xyflow/react';
-import { columnBadgesById, createDocument, deletionImpact, validateDocumentStructure } from '@erd/model';
+import { columnBadgesById, createDocument, deletionImpact, isIdentifyingForeignKey, primaryColumnsByTable, validateDocumentStructure } from '@erd/model';
 import type { Catalog, DocumentCommand, ErdDocument, ModelDiagnostic, SqlTarget } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
 import { postgresqlEditor } from '@erd/dialect-postgresql/ui';
 import { EditorCanvas } from './editor-canvas.js';
-import type { CanvasFocus, LayoutSizes } from './editor-canvas.js';
+import type { CanvasFocus, CanvasPosition, LayoutSizes } from './editor-canvas.js';
+import { CanvasEditing, dragType, QuickColumnForm, QuickTableForm } from './canvas-edit.js';
+import type { QuickEdit, QuickRun } from './canvas-edit.js';
 import { ActionMenu, ColumnBadges, Icon } from './editor-controls.js';
 import { ThemeToggle } from './theme.js';
 import { columnsOf, duplicateView, EditorReadOnly, emptyView, field, Form, id, label, Modal, named, NameFields, placement, putView } from './editor-fields.js';
-import type { View } from './editor-fields.js';
+import type { Table, View } from './editor-fields.js';
 import { useEditorSession } from './editor-session.js';
 import { ImageExport } from './image-export.js';
 import { ColumnForm, DeleteSchema, ForeignKeyForm, IndexForm, KeyForm } from './schema-inspector.js';
-import type { FkDialog } from './schema-inspector.js';
+import type { FkDialog, PhysicalRelation } from './schema-inspector.js';
 import { arrangeView } from './view-grid.js';
 
 const dialects = new Map<string, EditorDialect>([[postgresqlEditor.metadata.id, postgresqlEditor]]);
@@ -26,6 +28,10 @@ type TableTab = keyof typeof tableTabs;
 const tabOrder = Object.keys(tableTabs) as TableTab[];
 const mobilePanes = { canvas: '다이어그램', schema: '스키마', properties: '속성' } as const;
 type MobilePane = keyof typeof mobilePanes;
+type LogicalSeed = Pick<ErdDocument['relationships'][number], 'sourceTableId' | 'targetTableId'>;
+type CanvasTool = { kind: 'place'; at?: CanvasPosition } | {
+  kind: 'relation'; mode: PhysicalRelation | 'logical'; origin?: View['instances'][number]; problem?: string;
+};
 type Inspector = (
   | { type: 'object'; id: string; tab?: TableTab }
   | { type: 'namespace' | 'table'; namespaceId?: string }
@@ -91,9 +97,12 @@ function GroupField({ view, groupId }: { view: View; groupId?: string }) {
   </select></label>;
 }
 
-function RelationshipForm({ document, relation, run, close }: {
-  document: ErdDocument; relation?: ErdDocument['relationships'][number]; run: Run; close(): void;
+function RelationshipForm({ document, relation, seed, run, close }: {
+  document: ErdDocument; relation?: ErdDocument['relationships'][number]; seed?: LogicalSeed; run: Run; close(): void;
 }) {
+  const endpoints = relation ?? seed;
+  const defaultName = seed && [seed.sourceTableId, seed.targetTableId].map(id =>
+    label(document.catalog.tables.find(table => table.id === id) ?? { physicalName: '' })).join(' → ');
   return <Form button="논리 관계 적용" cancel={close} submit={form => {
     const cardinality = (['one-to-one', 'one-to-many', 'many-to-many'] as const).find(item => item === field(form, 'cardinality'));
     if (!cardinality) return;
@@ -102,10 +111,10 @@ function RelationshipForm({ document, relation, run, close }: {
       sourceTableId: field(form, 'source'), targetTableId: field(form, 'target'), cardinality,
     } })) close();
   }}>
-    <label>관계 이름<input name="name" defaultValue={relation?.name} required /></label>
+    <label>관계 이름<input name="name" defaultValue={relation?.name ?? defaultName} required /></label>
     <label>설명<textarea name="description" defaultValue={relation?.description} /></label>
     {(['source', 'target'] as const).map(key => <label key={key}>{key === 'source' ? '원본 테이블' : '대상 테이블'}
-      <select name={key} defaultValue={key === 'source' ? relation?.sourceTableId : relation?.targetTableId} required>
+      <select name={key} defaultValue={key === 'source' ? endpoints?.sourceTableId : endpoints?.targetTableId} required>
         {document.catalog.tables.map(table => <option key={table.id} value={table.id}>{label(table)}</option>)}
       </select>
     </label>)}
@@ -184,6 +193,7 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
       {column && removeButton}</>;
     if (constraint?.kind === 'fk') return <>{back}
       <h3>외래 키</h3><p>{label(constraint)}</p>
+      <p className="muted">{isIdentifyingForeignKey(constraint, primaryColumnsByTable(document)) ? '식별 FK' : '비식별 FK'}</p>
       <p>{constraint.pairs.map(pair => {
         const source = catalog.columns.find(item => item.id === pair.sourceColumnId);
         const target = catalog.columns.find(item => item.id === pair.targetColumnId);
@@ -326,11 +336,14 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
   const mapId = useId();
   const [dialog, setDialog] = useState<'document' | 'title' | 'view' | 'view-settings' | null>(null);
   const [fk, setFk] = useState<FkDialog | null>(null);
+  const [logical, setLogical] = useState<LogicalSeed | ErdDocument['relationships'][number]>();
+  const [tool, setTool] = useState<CanvasTool>();
+  const [quickEdit, setQuickEdit] = useState<QuickEdit>();
   const [deletion, setDeletion] = useState('');
   const registered = dialects.get(document.target.dialectId);
   const dialect = registered?.metadata.profiles.some(profile => profile.version === document.target.engineVersion &&
     profile.status === 'certified') ? registered : undefined;
-  const run: Run = command => !readOnly && !session.loading && session.run(command, (before, after) => {
+  const run: QuickRun = (command, report) => !readOnly && !session.loading && session.run(command, (before, after) => {
     if (!dialect) return [];
     const issues = (document: ErdDocument) => {
       const foreignKeys = dialect.inspectForeignKeys?.(document);
@@ -338,11 +351,15 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
         : foreignKeys ? foreignKeys.validate(key) : dialect.validateForeignKey(document, key));
     };
     const previous = new Set(issues(before).map(issue => issue.code + ':' + issue.objectId));
-    return issues(after).filter(issue => !previous.has(issue.code + ':' + issue.objectId))
+    const rejected = issues(after).filter(issue => !previous.has(issue.code + ':' + issue.objectId))
       .map((issue): ModelDiagnostic => ({ ...issue, severity: 'error' }));
+    if (rejected.length) report?.(rejected[0].message);
+    return rejected;
   });
   const capability = dialect?.capabilities(document.target);
   const view = document.views.find(item => item.id === chosenView) ?? document.views[0];
+  const canEdit = !readOnly && !session.loading;
+  const canPlace = canEdit && capability?.table.edit === 'supported' && document.catalog.namespaces.length > 0;
   const selectedId = selection && 'id' in selection ? selection.id : undefined;
   const selectedInstance = view?.instances.find(item => item.id === (selection?.instanceId ?? selectedId));
   const selectedRelation = document.relationships.find(item => item.id === selectedId) ??
@@ -372,11 +389,78 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
     setSearchFocus(undefined);
     setSelectedInstances([]);
     setMobilePane('canvas');
+    setTool(undefined);
+    setQuickEdit(undefined);
   };
   const selectObject = (id: string) => inspect({ type: 'object', id });
   function openProperties(value: Inspector) {
+    setQuickEdit(undefined);
+    setTool(undefined);
     inspect(value);
     setMobilePane('properties');
+  }
+
+  function chooseTool(next: CanvasTool) {
+    setQuickEdit(undefined);
+    setTool(next);
+  }
+
+  function chooseCanvasObject(instanceId: string) {
+    if (!canEdit || tool?.kind !== 'relation') {
+      selectObject(instanceId);
+      if (quickEdit?.instanceId !== instanceId) setQuickEdit(undefined);
+      return;
+    }
+    const instance = view?.instances.find(item => item.id === instanceId);
+    if (!instance) return;
+    const origin = view?.instances.find(item => item.id === tool.origin?.id);
+    if (!origin) {
+      if (tool.mode !== 'logical' && !dialect?.referenceKeys(document, instance.tableId).some(key => !key.unavailable)) {
+        setTool({ ...tool, origin: undefined, problem: '선택한 부모 테이블에 참조 가능한 PK 또는 고유 키가 없습니다.' });
+        return;
+      }
+      setTool({ ...tool, origin: instance, problem: undefined });
+      return;
+    }
+    if (tool.mode === 'logical') setLogical({ sourceTableId: origin.tableId, targetTableId: instance.tableId });
+    else setFk({ mode: tool.mode, tableId: instance.tableId, targetTableId: origin.tableId });
+    setTool(undefined);
+  }
+
+  function placeTable(table: Table, point: XYPosition, create: boolean) {
+    if (!view || !canEdit) return false;
+    const instance = { ...placement(view, table.id), ...point };
+    const commands: DocumentCommand[] = [putView({ ...view, instances: [...view.instances, instance] })];
+    if (create) commands.unshift({ kind: 'put-catalog', collection: 'tables', value: table });
+    if (!run({ kind: 'batch', commands })) return false;
+    selectObject(instance.id);
+    setTool(undefined);
+    setQuickEdit(create ? { instanceId: instance.id, field: 'name' } : undefined);
+    return true;
+  }
+
+  function reorderColumn(instanceId: string, columnId: string, targetId: string, after: boolean) {
+    const instance = view?.instances.find(item => item.id === instanceId);
+    const table = document.catalog.tables.find(item => item.id === instance?.tableId);
+    if (!table || columnId === targetId || !table.columnIds.includes(columnId) || !table.columnIds.includes(targetId)) return;
+    function move(ids: string[]) {
+      if (!ids.includes(columnId) || !ids.includes(targetId)) return ids;
+      const order = ids.filter(id => id !== columnId);
+      order.splice(order.indexOf(targetId) + Number(after), 0, columnId);
+      return order.every((id, index) => id === ids[index]) ? ids : order;
+    }
+    const columnIds = move(table.columnIds);
+    const commands: DocumentCommand[] = [];
+    if (columnIds !== table.columnIds) commands.push({ kind: 'put-catalog', collection: 'tables', value: { ...table, columnIds } });
+    for (const view of document.views) {
+      const instances = view.instances.map(item => {
+        if (item.tableId !== table.id || !item.visibleColumnIds) return item;
+        const visibleColumnIds = move(item.visibleColumnIds);
+        return visibleColumnIds === item.visibleColumnIds ? item : { ...item, visibleColumnIds };
+      });
+      if (instances.some((item, index) => item !== view.instances[index])) commands.push(putView({ ...view, instances }));
+    }
+    if (commands.length) run({ kind: 'batch', commands });
   }
 
   function locate(tableId: string, columnId?: string) {
@@ -397,6 +481,12 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
   }
 
   function keyboard(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === 'Escape' && !event.nativeEvent.isComposing && (tool || quickEdit)) {
+      event.preventDefault();
+      setTool(undefined);
+      setQuickEdit(undefined);
+      return;
+    }
     if (readOnly || session.loading || event.defaultPrevented || event.nativeEvent.isComposing ||
       !(event.target instanceof Element) ||
       event.target.closest('input, textarea, select, button, dialog, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')) return;
@@ -430,6 +520,19 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
     }
     run(putView({ ...view, instances: view.instances.map(moved), groups: view.groups.map(moved), notes: view.notes.map(moved) }));
   }
+
+  const edited = view?.instances.find(item => item.id === quickEdit?.instanceId);
+  const editedTable = document.catalog.tables.find(item => item.id === edited?.tableId);
+  const editedColumn = document.catalog.columns.find(item => item.id === quickEdit?.columnId && item.tableId === editedTable?.id);
+  const inline = canEdit && view && edited && editedTable && quickEdit && (!quickEdit.columnId || editedColumn) ? (
+    quickEdit.field === 'table' ? <QuickTableForm key={edited.id} document={document} table={editedTable}
+      logical={view.nameDisplay === 'logical'} cancel={() => setQuickEdit(undefined)} apply={(value, report) => {
+        if (run({ kind: 'put-catalog', collection: 'tables', value }, report)) setQuickEdit(undefined);
+      }} /> : dialect && <QuickColumnForm key={edited.id + ':' + (editedColumn?.id ?? 'new') + ':' + quickEdit.field}
+      document={document} table={editedTable} column={editedColumn} dialect={dialect} logical={view.nameDisplay === 'logical'}
+      focus={quickEdit.field} run={run} view={view} instance={edited}
+      cancel={() => setQuickEdit(undefined)} done={() => setQuickEdit(undefined)} />
+  ) : undefined;
 
   return <EditorReadOnly.Provider value={readOnly}><main className="editor" onKeyDown={keyboard}>
     <header className="topbar">
@@ -486,6 +589,11 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
               onClick={() => openProperties({ type: 'object', id: namespace.id })}><Icon name="schema" /><code>{label(namespace)}</code></button>
             <ul className="object-list">{tables.map(table => <li key={table.id}>
               <button type="button" aria-current={selectedTableId === table.id ? 'true' : undefined}
+                draggable={canEdit && Boolean(view)} onDragStart={event => {
+                  if (!canEdit || !view) return;
+                  event.dataTransfer.setData(dragType.table, table.id);
+                  event.dataTransfer.effectAllowed = 'copy';
+                }}
                 onClick={() => search ? locate(table.id) : openProperties({ type: 'object', id: view?.instances.find(item => item.tableId === table.id)?.id ?? table.id })}>
                 <Icon name="table" /><code>{search ? namedResult(table) : label(table)}</code>
               </button>
@@ -531,6 +639,22 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
             {!readOnly && <button type="button" className="quiet icon-button" title="뷰 설정" aria-label="뷰 설정"
               onClick={() => setDialog('view-settings')}><Icon name="settings" /></button>}
             <div className="canvas-tools">
+              {canEdit && <>
+                <button type="button" className="canvas-toolbar-primary" aria-label="캔버스에 테이블 추가" title="클릭하거나 캔버스로 드래그"
+                  disabled={!canPlace} draggable={canPlace} aria-pressed={tool?.kind === 'place'} onDragStart={event => {
+                    if (!canPlace) return;
+                    event.dataTransfer.setData(dragType.newTable, 'table');
+                    event.dataTransfer.effectAllowed = 'copy';
+                  }} onClick={() => chooseTool({ kind: 'place' })}><Icon name="plus" />테이블</button>
+                <ActionMenu label="관계 연결" icon="link">
+                  <button type="button" disabled={!dialect || !view.instances.length}
+                    onClick={() => chooseTool({ kind: 'relation', mode: 'identifying' })}>식별 FK</button>
+                  <button type="button" disabled={!dialect || !view.instances.length}
+                    onClick={() => chooseTool({ kind: 'relation', mode: 'non-identifying' })}>비식별 FK</button>
+                  <button type="button" disabled={!view.instances.length}
+                    onClick={() => chooseTool({ kind: 'relation', mode: 'logical' })}>논리 관계</button>
+                </ActionMenu>
+              </>}
               <label><span className="sr-only">이름 표시</span><select disabled={readOnly} value={view.nameDisplay ?? 'physical'} onChange={event =>
                 run(putView({ ...view, nameDisplay: event.target.value === 'logical' ? 'logical' : 'physical' }))}>
                 <option value="physical">물리명</option><option value="logical">논리명</option>
@@ -553,18 +677,70 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
               </ActionMenu>}
             </div>
           </div>
-          <EditorCanvas key={document.id + view.id} document={document} view={view} dialect={dialect} select={selectObject}
-            clearSelection={() => inspect(null)} activeTableId={selectedTableId} activeRelationId={selectedRelation?.id}
-            selectInstances={setSelectedInstances} focus={searchFocus} move={move} layoutSizes={layoutSizes.current} snap={snap} readOnly={readOnly}
-            showMap={showMap} mapId={mapId}
-            connect={(sourceColumnId, targetColumnId) => {
-              const source = document.catalog.columns.find(item => item.id === sourceColumnId);
-              const target = document.catalog.columns.find(item => item.id === targetColumnId);
-              if (dialect && source && target) setFk({ tableId: source.tableId, targetTableId: target.tableId, sourceColumnId, targetColumnId });
-            }} />
+          <CanvasEditing.Provider value={{
+            activeId: selectedInstance?.id, edit: inline ? quickEdit : undefined, form: inline,
+            change: canEdit && !tool && dialect ? edit => {
+              selectObject(edit.instanceId);
+              setQuickEdit(edit);
+            } : undefined,
+            attributes: canEdit && !tool ? id => openProperties({ type: 'object', id }) : undefined,
+            link: canEdit && tool?.kind === 'relation' ? chooseCanvasObject : undefined,
+            reorder: canEdit && !tool && !inline ? reorderColumn : undefined,
+          }}>
+            <EditorCanvas key={document.id + view.id} document={document} view={view} dialect={dialect} select={chooseCanvasObject}
+              clearSelection={() => { inspect(null); setQuickEdit(undefined); }} activeTableId={selectedTableId} activeRelationId={selectedRelation?.id}
+              selectInstances={setSelectedInstances} focus={searchFocus} move={move} layoutSizes={layoutSizes.current} snap={snap} readOnly={readOnly}
+              showMap={showMap} mapId={mapId} placing={canPlace && tool?.kind === 'place'}
+              picking={canEdit && tool?.kind === 'relation'} pickId={canEdit && tool?.kind === 'relation' ? tool.origin?.id : undefined}
+              editRelation={canEdit ? id => {
+                const relation = document.relationships.find(item => item.id === id);
+                const key = document.catalog.constraints.find(item => item.id === id);
+                setQuickEdit(undefined);
+                if (relation) setLogical(relation);
+                if (key?.kind === 'fk' && dialect) {
+                  setFk({ tableId: key.tableId, targetTableId: key.targetTableId, existing: key });
+                }
+              } : undefined}
+              instruction={tool && canEdit && !(tool.kind === 'place' && tool.at) && <div className="canvas-instruction">
+                <p role="status">{tool.kind === 'place' ? '새 테이블을 놓을 위치를 클릭하세요.' : tool.origin
+                  ? (tool.mode === 'logical' ? '도착 테이블을 선택하세요.' : '자식 테이블을 선택하세요.')
+                  : (tool.mode === 'logical' ? '출발 테이블을 선택하세요.' : '부모 테이블을 선택하세요.')}</p>
+                {tool.kind === 'relation' && tool.problem && <p role="alert">{tool.problem}</p>}
+                <button type="button" className="quiet" onClick={() => setTool(undefined)}>취소</button>
+              </div>}
+              place={canPlace ? at => chooseTool({ kind: 'place', at }) : undefined}
+              placementForm={canPlace && tool?.kind === 'place' && tool.at ? {
+                screen: tool.at.screen,
+                content: <QuickTableForm key={tool.at.point.x + ':' + tool.at.point.y} document={document}
+                  cancel={() => setTool(undefined)} apply={(table, report) => {
+                    if (tool.at && !placeTable(table, tool.at.point, true)) report('현재 뷰에 테이블을 추가하지 못했습니다.');
+                  }} />,
+              } : undefined}
+              dropTable={canEdit ? (tableId, point) => {
+                const table = document.catalog.tables.find(item => item.id === tableId);
+                if (!table) return;
+                const instance = view.instances.find(item => item.tableId === table.id);
+                if (instance) {
+                  move(new Map([[instance.id, point]]));
+                  selectObject(instance.id);
+                  setTool(undefined);
+                  setQuickEdit(undefined);
+                } else if (!placeTable(table, point, false)) return;
+                setMobilePane('canvas');
+              } : undefined}
+              connect={(sourceColumnId, targetColumnId) => {
+                const source = document.catalog.columns.find(item => item.id === sourceColumnId);
+                const target = document.catalog.columns.find(item => item.id === targetColumnId);
+                if (canEdit && dialect && source && target) {
+                  setQuickEdit(undefined);
+                  setFk({ tableId: source.tableId, targetTableId: target.tableId, sourceColumnId, targetColumnId });
+                }
+              }} />
+          </CanvasEditing.Provider>
           <div className="canvas-status">
             <span>테이블 {view.instances.length}개</span>
-            <span className="edge-legend"><span aria-hidden="true" />외래 키</span>
+            <span className="edge-legend"><span aria-hidden="true" />식별 FK</span>
+            <span className="edge-legend non-identifying"><span aria-hidden="true" />비식별 FK</span>
             <span className="edge-legend logical"><span aria-hidden="true" />논리 관계</span>
             <button type="button" className="quiet" aria-expanded={showMap} aria-controls={mapId} onClick={() => setShowMap(value => !value)}>
               <Icon name="map" />미니맵</button>
@@ -613,7 +789,11 @@ export function DocumentEditor({ session, local, readOnly = false, topActions, s
     </Modal>}
     {view && dialog === 'view-settings' && <ViewSettings key={view.id + view.name} view={view} run={run}
       choose={selectView} close={() => setDialog(null)} />}
-    {fk && dialect && <ForeignKeyForm document={document} dialect={dialect} seed={fk} run={run} close={() => setFk(null)} />}
+    {canEdit && fk && dialect && <ForeignKeyForm document={document} dialect={dialect} seed={fk} run={run} close={() => setFk(null)} />}
+    {canEdit && logical && <Modal title={'id' in logical ? '논리 관계 편집' : '논리 관계 연결'} close={() => setLogical(undefined)}>
+      <RelationshipForm document={document} seed={logical} relation={'id' in logical ? logical : undefined}
+        run={run} close={() => setLogical(undefined)} />
+    </Modal>}
     {deletion && <DeleteSchema document={document} objectId={deletion} run={run} close={() => setDeletion('')} />}
   </main></EditorReadOnly.Provider>;
 }
