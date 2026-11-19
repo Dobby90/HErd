@@ -258,6 +258,47 @@ it('deletes selected canvas notes and groups with confirmation and keeps grouped
   });
 }, 60_000);
 
+it('sets independent colors for a group and a note and restores the default color', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    await openEditor(page, origin);
+    const group = page.locator('[data-id="sales"]');
+    const note = page.locator('[data-id="overview-note"]');
+    const color = inspector(page).getByLabel('사용자 지정 색상', { exact: true });
+    const defaultColor = inspector(page).getByRole('radio', { name: '기본 색상', exact: true });
+    const border = (node: typeof group) => node.evaluate(element => getComputedStyle(element).borderTopColor);
+    const groupDefault = await border(group);
+
+    await group.locator('.group-name').click();
+    expect(await defaultColor.isChecked()).toBe(true);
+    await color.fill('#006f92');
+    expect(await inspector(page).getByRole('radio', { name: '사용자 지정', exact: true }).isChecked()).toBe(true);
+    await action(page, '그룹 적용').click();
+    await expect.poll(() => border(group)).toBe('rgb(0, 111, 146)');
+
+    await page.locator('.react-flow__pane').click({ position: { x: 12, y: 12 } });
+    await note.locator('.note-text').click();
+    await color.fill('#8640b0');
+    await action(page, '메모 적용').click();
+    await expect.poll(() => border(note)).toBe('rgb(134, 64, 176)');
+    await expect.poll(async () => (await savedDocument(page)).document.views[0].notes[0].color, { timeout: 5_000 }).toBe('#8640b0');
+    await page.reload();
+    expect(await border(group)).toBe('rgb(0, 111, 146)');
+    expect(await border(note)).toBe('rgb(134, 64, 176)');
+
+    await group.locator('.group-name').click();
+    expect(await color.inputValue()).toBe('#006f92');
+    await defaultColor.check();
+    await action(page, '그룹 적용').click();
+    await expect.poll(() => border(group)).toBe(groupDefault);
+    expect(await border(note)).toBe('rgb(134, 64, 176)');
+    await expect.poll(async () => (await savedDocument(page)).document.views[0].groups[0].color, { timeout: 5_000 }).toBeUndefined();
+    await action(page, '실행 취소').click();
+    await expect.poll(() => border(group)).toBe('rgb(0, 111, 146)');
+  });
+}, 60_000);
+
 it('folds and reopens the schema panel on desktop and mobile', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();

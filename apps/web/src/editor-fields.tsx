@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { annotationColorSchema } from '@erd/model';
 import type { Catalog, ErdDocument, SqlExpression } from '@erd/model';
 
 export type Column = Catalog['columns'][number];
@@ -35,6 +36,24 @@ export function NameFields({ value }: { value: Named }) {
     <label>논리명<input name="logicalName" defaultValue={value.logicalName} /></label>
     <label>설명<textarea name="description" defaultValue={value.description} /></label>
   </>;
+}
+
+export function annotationColor(form: FormData) {
+  return field(form, 'colorMode') === 'custom' ? annotationColorSchema.parse(field(form, 'color')) : undefined;
+}
+
+export function AnnotationColorField({ value, initialColor }: { value?: string; initialColor: string }) {
+  const custom = useRef<HTMLInputElement>(null);
+  return <fieldset className="annotation-color-field">
+    <legend>색상</legend>
+    <label className="checkbox"><input type="radio" name="colorMode" value="default" defaultChecked={!value} />기본 색상</label>
+    <div className="annotation-custom-color">
+      <label className="checkbox"><input ref={custom} type="radio" name="colorMode" value="custom" defaultChecked={Boolean(value)} />사용자 지정</label>
+      <input type="color" name="color" aria-label="사용자 지정 색상" defaultValue={value ?? initialColor} onChange={() => {
+        if (custom.current) custom.current.checked = true;
+      }} />
+    </div>
+  </fieldset>;
 }
 
 export const EditorReadOnly = createContext(false);

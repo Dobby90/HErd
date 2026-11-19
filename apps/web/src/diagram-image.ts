@@ -36,6 +36,11 @@ const detailSize = 12;
 const gutter = 14;
 const margin = 24;
 const canvasColor = '#f7f8fa';
+function annotationFill(color: string) {
+  const channels = [1, 3, 5].map(offset => Math.round(255 * .82 + Number.parseInt(color.slice(offset, offset + 2), 16) * .18));
+  return 'rgb(' + channels.join(', ') + ')';
+}
+
 // eslint-disable-next-line no-control-regex -- XML 1.0 disallows these controls.
 const clean = (value: string) => value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff\p{Surrogate}]/gu, '\ufffd');
 const singleLine = (value: string) => clean(value.replace(/[\r\n\t]/g, ' '));
@@ -168,8 +173,8 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
     const title = singleLine(group.name);
     const width = Math.max(group.size?.width ?? 480, widthOf(title, labelSize) + 2 * gutter);
     add(background, { kind: 'rect', x: group.x, y: group.y, width, height: group.size?.height ?? 250,
-      fill: '#eef0fa', stroke: '#a9afd0' });
-    text(background, group.x + gutter, group.y + 24, title, labelSize, '#545780');
+      fill: group.color ? annotationFill(group.color) : '#eef0fa', stroke: group.color ?? '#a9afd0' });
+    text(background, group.x + gutter, group.y + 24, title, labelSize, group.color ? '#172033' : '#545780');
   }
   for (const note of options.notes ? view.notes : []) {
     if (ids && (!note.groupId || !groupIds.has(note.groupId))) continue;
@@ -177,8 +182,10 @@ function projectScene(document: ErdDocument, view: View, options: ImageOptions, 
     const width = lines.reduce((wide, line) => Math.max(wide, widthOf(line, labelSize) + 2 * gutter), note.size?.width ?? 210);
     const lineHeight = 23;
     const height = Math.max(note.size?.height ?? 0, lines.length * lineHeight + 16);
-    add(foreground, { kind: 'rect', x: note.x, y: note.y, width, height, fill: '#fff6dc', stroke: '#e2c68c' });
-    lines.forEach((line, index) => text(foreground, note.x + gutter, note.y + 24 + index * lineHeight, line, labelSize, '#5a4726'));
+    add(foreground, { kind: 'rect', x: note.x, y: note.y, width, height,
+      fill: note.color ? annotationFill(note.color) : '#fff6dc', stroke: note.color ?? '#e2c68c' });
+    lines.forEach((line, index) => text(foreground, note.x + gutter, note.y + 24 + index * lineHeight, line, labelSize,
+      note.color ? '#172033' : '#5a4726'));
   }
 
   let omitted = 0;

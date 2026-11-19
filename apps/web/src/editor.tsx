@@ -12,7 +12,10 @@ import type { QuickEdit, QuickRun } from './canvas-edit.js';
 import { canvasDisplay } from './canvas-display.js';
 import { ActionMenu, AppVersion, ColumnBadges, Icon } from './editor-controls.js';
 import { ThemeToggle } from './theme.js';
-import { columnsOf, duplicateView, EditorReadOnly, emptyView, field, Form, id, label, Modal, named, NameFields, placement, putView, ViewNameOptions } from './editor-fields.js';
+import {
+  annotationColor, AnnotationColorField, columnsOf, duplicateView, EditorReadOnly, emptyView, field, Form, id,
+  label, Modal, named, NameFields, placement, putView, ViewNameOptions,
+} from './editor-fields.js';
 import type { Table, View } from './editor-fields.js';
 import { ImageExport } from './image-export.js';
 import { ColumnForm, DeleteSchema, ForeignKeyForm, IndexForm, KeyForm } from './schema-inspector.js';
@@ -212,19 +215,22 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
 
   if (note && view) return <>
     <h3>메모</h3>
-    <Form key={JSON.stringify([note.id, note.text, note.groupId])} button="메모 적용" submit={form => run(putView({ ...view, notes: view.notes.map(item => item.id === note.id ?
-      { ...item, text: field(form, 'text'), groupId: field(form, 'group') || undefined } : item) }))}>
+    <Form key={JSON.stringify([note.id, note.text, note.groupId, note.color])} button="메모 적용" submit={form => run(putView({ ...view, notes: view.notes.map(item => item.id === note.id ?
+      { ...item, text: field(form, 'text'), groupId: field(form, 'group') || undefined, color: annotationColor(form) } : item) }))}>
       <label>메모 텍스트<textarea name="text" defaultValue={note.text} /></label><GroupField view={view} groupId={note.groupId} />
+      <AnnotationColorField value={note.color} initialColor="#c18e27" />
     </Form>
     {!readOnly && <button type="button" className="danger" onClick={() => remove(note.id)}><Icon name="trash" />메모 삭제</button>}
   </>;
   if (group && view) return <>
     <h3>그룹</h3>
-    <Form key={JSON.stringify([group.id, group.name, group.size])} button="그룹 적용" submit={form => run(putView({ ...view, groups: view.groups.map(item => item.id === group.id ?
-      { ...item, name: field(form, 'name'), size: { width: Number(field(form, 'width')), height: Number(field(form, 'height')) } } : item) }))}>
+    <Form key={JSON.stringify([group.id, group.name, group.size, group.color])} button="그룹 적용" submit={form => run(putView({ ...view, groups: view.groups.map(item => item.id === group.id ?
+      { ...item, name: field(form, 'name'), color: annotationColor(form),
+        size: { width: Number(field(form, 'width')), height: Number(field(form, 'height')) } } : item) }))}>
       <label>그룹 이름<input name="name" defaultValue={group.name} required /></label>
       <label>너비<input type="number" name="width" min="40" defaultValue={group.size?.width ?? 480} required /></label>
       <label>높이<input type="number" name="height" min="40" defaultValue={group.size?.height ?? 250} required /></label>
+      <AnnotationColorField value={group.color} initialColor="#7864cb" />
     </Form>
     {!readOnly && <button type="button" className="danger" onClick={() => remove(group.id)}><Icon name="trash" />그룹 삭제</button>}
   </>;

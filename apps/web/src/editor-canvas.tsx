@@ -1,5 +1,5 @@
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent, ReactNode } from 'react';
+import type { CSSProperties, MouseEvent, ReactNode } from 'react';
 import { applyNodeChanges, Background, Controls, Handle, MiniMap, Position, ReactFlow, ReactFlowProvider, useNodesInitialized, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
 import type { Edge, Node, NodeProps, OnSelectionChangeParams, ReactFlowInstance, XYPosition } from '@xyflow/react';
 import { columnBadgesById, isIdentifyingForeignKey, physicalRelationships, primaryColumnsByTable } from '@erd/model';
@@ -17,6 +17,7 @@ type CanvasNode = Node<Record<string, unknown> & {
   label: string;
   logicalName?: string;
   description?: string;
+  color?: string;
   tableId?: string;
   highlighted?: boolean;
   columns?: Array<{
@@ -176,7 +177,12 @@ function NoteNode({ id, data }: NodeProps<CanvasNode>) {
 const nodeTypes = { table: TableNode, groupBox: GroupNode, note: NoteNode };
 const mapColors = { groupBox: 'var(--accent-soft)', note: 'var(--warning-line)', table: 'var(--edge)' };
 const mapNodeColor = (node: CanvasNode) => node.selected || node.className === 'active-table'
-  ? 'var(--accent)' : node.type ? mapColors[node.type] : mapColors.table;
+  ? 'var(--accent)' : node.data.color ?? (node.type ? mapColors[node.type] : mapColors.table);
+
+function annotationStyle(size: CSSProperties, color: string | undefined, base: string): CSSProperties {
+  if (!color) return size;
+  return { ...size, color: 'var(--ink)', borderColor: color, backgroundColor: `color-mix(in srgb, ${color} 18%, ${base})` };
+}
 
 function edgeRoute(source: CanvasNode, target: CanvasNode, fromColumn?: string, toColumn?: string) {
   const sourceHandle = source.data.columns?.some(column => column.id === fromColumn) ? 'out:' + fromColumn : 'table-out';
@@ -204,11 +210,13 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   const nodes: CanvasNode[] = [
     ...(display.groups ? view.groups : []).map((group): CanvasNode => ({
       id: group.id, type: 'groupBox', position: { x: group.x, y: group.y },
-      data: { label: group.name }, style: group.size ?? { width: 480, height: 250 }, zIndex: -1,
+      data: { label: group.name, color: group.color },
+      style: annotationStyle(group.size ?? { width: 480, height: 250 }, group.color, 'transparent'), zIndex: -1,
     })),
     ...(display.notes ? view.notes : []).map((note): CanvasNode => ({
       id: note.id, type: 'note', position: { x: note.x, y: note.y },
-      data: { label: note.text }, style: note.size ?? { width: 210 }, zIndex: 2,
+      data: { label: note.text, color: note.color },
+      style: annotationStyle(note.size ?? { width: 210 }, note.color, 'var(--surface)'), zIndex: 2,
     })),
   ];
   for (const instance of view.instances) {

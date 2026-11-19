@@ -70,6 +70,7 @@ const index = tableMember.extend({
 });
 const position = z.object({ x: z.number(), y: z.number() });
 const size = z.object({ width: z.number().positive(), height: z.number().positive() });
+export const annotationColorSchema = z.string().length(7).regex(/^#[0-9a-f]{6}$/i);
 export const viewNameDisplaySchema = z.enum(['physical', 'logical', 'both']);
 const canvasDisplay = z.object({
   tableComments: z.boolean(),
@@ -91,8 +92,8 @@ const view = z.object({
   instances: z.array(position.extend({
     id, tableId: id, collapsed: z.boolean().optional(), size: size.optional(), visibleColumnIds: z.array(id).optional(), groupId: id.optional(),
   })),
-  groups: z.array(position.extend({ id, name: id, size: size.optional() })),
-  notes: z.array(position.extend({ id, text: z.string(), size: size.optional(), groupId: id.optional() })),
+  groups: z.array(position.extend({ id, name: id, size: size.optional(), color: annotationColorSchema.optional() })),
+  notes: z.array(position.extend({ id, text: z.string(), size: size.optional(), groupId: id.optional(), color: annotationColorSchema.optional() })),
 });
 
 export const erdDocumentSchema = z.object({

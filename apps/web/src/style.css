@@ -105,6 +105,11 @@ label { display: grid; gap: .24rem; font-size: .82rem; }
 .checkbox { display: flex; align-items: center; gap: .35rem; }
 fieldset { border: 0; min-width: 0; padding: 0; margin: 0; display: grid; gap: .58rem; }
 fieldset > .actions { margin-top: .2rem; }
+.annotation-color-field { gap: .32rem; }
+.annotation-color-field legend { font-size: .82rem; margin-bottom: .25rem; }
+.annotation-color-field input[type="radio"] { width: auto; accent-color: var(--accent); }
+.annotation-custom-color { display: flex; align-items: center; gap: .5rem; }
+.annotation-custom-color input[type="color"] { width: 2.15rem; height: 1.65rem; padding: .1rem; cursor: pointer; }
 summary { cursor: pointer; }
 .ui-icon { width: 16px; height: 16px; flex: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

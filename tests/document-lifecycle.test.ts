@@ -33,6 +33,17 @@ it('round-trips optional canvas display settings and keeps legacy documents read
   expect(deserializeDocument(serializeDocument(sampleDocument))).not.toHaveProperty('canvasDisplay');
 });
 
+it('preserves optional group and note colors and validates hexadecimal values', () => {
+  const document = structuredClone(sampleDocument);
+  const { groups, notes } = document.views[0];
+  groups[0].color = '#006f92';
+  notes[0].color = '#8640b0';
+  expect(deserializeDocument(serializeDocument(document))).toEqual(document);
+  expect(deserializeDocument(serializeDocument(sampleDocument))).toEqual(sampleDocument);
+  notes[0].color = 'invalid';
+  expect(() => serializeDocument(document)).toThrow();
+});
+
 it('preserves renamed expressions and rejects a command with broken references', () => {
   const renamed = applyCommand(sampleDocument, { kind: 'rename', objectId: 'item-quantity', physicalName: 'amount' });
   expect(renamed.applied).toBe(true);

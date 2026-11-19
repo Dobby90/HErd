@@ -55,9 +55,9 @@ it('exports and opens pinned SVG and PNG with off-screen Korean nodes, and rejec
               { id: 'first', tableId: 'a', x: 1430, y: 925, collapsed: true, groupId: 'shipping-group' },
               { id: 'second', tableId: 'b', x: 2310, y: 986, visibleColumnIds: ['b-key'] },
             ],
-            groups: [{ id: 'shipping-group', name: '국제 배송 그룹', x: 1390, y: 858, size: { width: 790, height: 348 } }],
+            groups: [{ id: 'shipping-group', name: '국제 배송 그룹', x: 1390, y: 858, size: { width: 790, height: 348 }, color: '#006f92' }],
             notes: [
-              { id: 'test-note', text: '검증 메모 <script> & 기호\n두 번째 줄의 한글', x: 1460, y: 1071, groupId: 'shipping-group' },
+              { id: 'test-note', text: '검증 메모 <script> & 기호\n두 번째 줄의 한글', x: 1460, y: 1071, groupId: 'shipping-group', color: '#8640b0' },
               { id: 'free-note', text: '고객 참조 정보를 보존합니다', x: 2248, y: 1095 },
             ],
           },
@@ -145,6 +145,8 @@ it('exports and opens pinned SVG and PNG with off-screen Korean nodes, and rejec
         const markup = vector.toString('utf8');
         expect(markup).toContain('&lt;script&gt; &amp; 기호');
         expect(markup).toContain('고객 참조 키');
+        expect(markup).toContain('fill="rgb(209, 229, 235)" stroke="#006f92"');
+        expect(markup).toContain('fill="rgb(233, 221, 241)" stroke="#8640b0"');
         for (const excluded of ['다른 탭 편집', '부모 지역', 'ticket', '포함되지 않는 별도 뷰']) expect(markup).not.toContain(excluded);
 
         const rendered = await context.newPage();
@@ -162,9 +164,12 @@ it('exports and opens pinned SVG and PNG with off-screen Korean nodes, and rejec
           context.drawImage(image, 0, 0);
           return { width: canvas.width, height: canvas.height,
             corner: [...context.getImageData(0, 0, 1, 1).data],
-            header: [...context.getImageData(70, 96, 1, 1).data] };
+            header: [...context.getImageData(70, 96, 1, 1).data],
+            group: [...context.getImageData(32, 32, 1, 1).data],
+            note: [...context.getImageData(100, 243, 1, 1).data] };
         });
-        expect(pixels).toEqual({ width: rasterWidth, height: rasterHeight, corner: [0, 0, 0, 0], header: [241, 243, 249, 255] });
+        expect(pixels).toEqual({ width: rasterWidth, height: rasterHeight, corner: [0, 0, 0, 0], header: [241, 243, 249, 255],
+          group: [209, 229, 235, 255], note: [233, 221, 241, 255] });
         await rendered.goto(review + 'diagram.svg');
         const visual = await rendered.locator('svg').evaluate(async element => {
           const svg = element as SVGSVGElement;
