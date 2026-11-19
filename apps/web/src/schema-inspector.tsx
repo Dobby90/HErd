@@ -4,6 +4,7 @@ import { deletionImpact, documentExpressions, isIdentifyingForeignKey, primaryCo
 import { Icon } from './editor-controls.js';
 import type { EditorDialect } from '@erd/sql-contract';
 import { columnsOf, field, Form, id, label, Modal, moveItem, named, NameFields, OrderedColumns, OrderedItems, sqlExpression } from './editor-fields.js';
+import { indexExpressionLabel } from './editor-diagnostics.js';
 import type { Column, Table } from './editor-fields.js';
 import { availableName, putColumn, schemaRelationNames, validPhysicalName } from './schema-edits.js';
 import type { QuickRun } from './canvas-edit.js';
@@ -145,7 +146,7 @@ export function ColumnForm({ document, table, column, dialect, run, close }: {
     <label>컬럼 위치<input type="number" name="order" min="1" max={table.columnIds.length + (column ? 0 : 1)}
       defaultValue={column ? table.columnIds.indexOf(column.id) + 1 : table.columnIds.length + 1} required /></label>
     <label className="checkbox"><input type="checkbox" name="nullable" defaultChecked={column?.nullable ?? true} />NULL 허용</label>
-    <label>DEFAULT SQL<textarea name="default" defaultValue={column?.default?.sql} /></label>
+    <label>DEFAULT SQL<textarea name="default" data-diagnostic-field="DEFAULT SQL" defaultValue={column?.default?.sql} /></label>
     {column?.identity && <p>IDENTITY · {column.identity} · 보존 전용</p>}
     {error && <p role="alert">{error}</p>}
   </Form>;
@@ -163,7 +164,7 @@ export function KeyForm({ document, table, existing, kind, run, close }: {
     if (run({ kind: 'put-catalog', collection: 'constraints', value })) close();
   }}>
     <NameFields value={existing ?? { physicalName: '' }} />
-    {kind === 'check' ? <label>CHECK SQL<textarea name="sql" defaultValue={prior?.sql} required /></label> :
+    {kind === 'check' ? <label>CHECK SQL<textarea name="sql" data-diagnostic-field="CHECK SQL" defaultValue={prior?.sql} required /></label> :
       <OrderedColumns columns={columnsOf(document, table.id)} value={keys} set={setKeys} />}
   </Form>;
 }
@@ -190,7 +191,8 @@ export function IndexForm({ document, table, existing, run, close }: {
     <OrderedItems title="인덱스 키" items={parts.map(({ id, part }, index) => ({
       key: id,
       content: part.kind === 'column' ? label(columns.find(c => c.id === part.columnId) ?? { physicalName: part.columnId }) :
-        <textarea name={id} aria-label={`인덱스 SQL 식 ${index + 1}`} defaultValue={part.expression.sql} required />,
+        <textarea name={id} aria-label={indexExpressionLabel(index)} data-diagnostic-field={indexExpressionLabel(index)}
+          defaultValue={part.expression.sql} required />,
     }))} change={(from, to) => setParts(to === null ? parts.filter((_, index) => index !== from) : moveItem(parts, from, to))} />
     <div className="actions">
       <label>인덱스 컬럼<select value={adding} onChange={event => setAdding(event.target.value)}>
@@ -200,7 +202,7 @@ export function IndexForm({ document, table, existing, run, close }: {
       <button type="button" disabled={!adding} onClick={() => { add({ kind: 'column', columnId: adding }); setAdding(''); }}>인덱스 컬럼 추가</button>
       <button type="button" onClick={() => add({ kind: 'expression', expression: { ...document.target, sql: '' } })}>SQL 식 추가</button>
     </div>
-    <label>부분 인덱스 조건 SQL<textarea name="predicate" defaultValue={existing?.predicate?.sql} /></label>
+    <label>부분 인덱스 조건 SQL<textarea name="predicate" data-diagnostic-field="부분 인덱스 조건 SQL" defaultValue={existing?.predicate?.sql} /></label>
   </Form>;
 }
 

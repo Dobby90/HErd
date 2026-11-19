@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { ResizeParams, XYPosition } from '@xyflow/react';
 import { columnBadgesById, createDocument, deletionImpact, isIdentifyingForeignKey, primaryColumnsByTable, validateDocumentStructure, viewNameDisplaySchema } from '@erd/model';
@@ -11,6 +11,8 @@ import { CanvasEditing, dragType, QuickAnnotationForm, QuickColumnForm, QuickTab
 import type { QuickAnnotationEdit, QuickEdit, QuickRun } from './canvas-edit.js';
 import { canvasDisplay, displayFields, logicalCardinalities } from './canvas-display.js';
 import { ActionMenu, AppVersion, ColumnBadges, Icon } from './editor-controls.js';
+import { DiagnosticList } from './editor-diagnostics.js';
+import type { DiagnosticTarget } from './editor-diagnostics.js';
 import { ThemeToggle } from './theme.js';
 import {
   annotationColor, AnnotationColorField, columnsOf, defaultGroupSize, duplicateView, EditorReadOnly, emptyView, field, Form, id,
@@ -37,7 +39,7 @@ type CanvasTool = { kind: 'place'; at?: CanvasPosition } | {
   kind: 'relation'; mode: PhysicalRelation | 'logical'; origin?: View['instances'][number]; problem?: string;
 };
 type Inspector = (
-  | { type: 'object'; id: string; tab?: TableTab }
+  | { type: 'object'; id: string; tab?: TableTab; diagnosticField?: string }
   | { type: 'namespace' | 'table'; namespaceId?: string }
   | { type: 'column' | 'pk' | 'unique' | 'check' | 'index'; tableId: string; id?: string }
   | { type: 'relationship'; id?: string }
@@ -375,7 +377,8 @@ export function createEditorDocument(name: string, target: SqlTarget) {
 }
 
 export function DocumentEditor({ session, readOnly = false, topActions, saveActions, exportAction, importAction, initialPlacement, verifyImage }: {
-  session: EditingSession; readOnly?: boolean; topActions?: ReactNode; saveActions?: ReactNode; exportAction?(viewId: string | undefined): ReactNode;
+  session: EditingSession; readOnly?: boolean; topActions?: ReactNode; saveActions?: ReactNode;
+  exportAction?(viewId: string | undefined, openDiagnostic: (target: DiagnosticTarget) => void): ReactNode;
   importAction?(viewId: string | undefined): ReactNode;
   initialPlacement?: CanvasFocus & { viewId: string };
   verifyImage?(): Promise<void>;
@@ -387,6 +390,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
   const [mobilePane, setMobilePane] = useState<MobilePane>('canvas');
   const [schemaCollapsed, setSchemaCollapsed] = useState(false);
   const mobileCanvasTab = useRef<HTMLButtonElement>(null);
+  const inspectorBody = useRef<HTMLDivElement>(null);
   const mobilePanesId = useId();
   const [query, setQuery] = useState('');
   const [searchFocus, setSearchFocus] = useState<CanvasFocus | undefined>(initialPlacement);
@@ -436,7 +440,15 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
     document.catalog.indexes.find(item => item.id === selectedId)?.tableId;
   const structure = useMemo(() => validateDocumentStructure(document), [document]);
   const semantic = useMemo(() => dialect?.validate(document, { target: document.target }) ?? [], [dialect, document]);
-  const issues = [...session.diagnostics.filter(issue => !semantic.some(item => item.code === issue.code && item.objectId === issue.objectId)), ...semantic];
+  const issues = [...structure, ...session.diagnostics, ...semantic];
+  useEffect(() => {
+    const field = selection?.type === 'object' ? selection.diagnosticField : undefined;
+    if (!field || mobilePane !== 'properties') return;
+    const frame = requestAnimationFrame(() => {
+      inspectorBody.current?.querySelector<HTMLElement>(`[data-diagnostic-field=${CSS.escape(field)}]`)?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selection, mobilePane]);
   const search = query.toLocaleLowerCase().trim();
   const matches = (text: string) => text.toLocaleLowerCase().includes(search);
   const matchName = (item: { physicalName: string; logicalName?: string }) =>
@@ -463,6 +475,10 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
     setTool(undefined);
     inspect(value);
     setMobilePane('properties');
+  }
+
+  function openDiagnostic({ objectId, field }: DiagnosticTarget) {
+    openProperties({ type: 'object', id: objectId, diagnosticField: field });
   }
 
   function toggleSchema() {
@@ -654,7 +670,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
         <div className="actions secondary-actions">{topActions}</div>
         {importAction && <ActionMenu label="가져오기" icon="import">{importAction(view?.id)}</ActionMenu>}
         {(exportAction || view) && <ActionMenu label="내보내기" icon="export" primary>
-          {exportAction?.(view?.id)}
+          {exportAction?.(view?.id, openDiagnostic)}
           {view && <ImageExport document={document} view={view} dialect={dialect} selection={selectedInstances} verify={verifyImage} />}
         </ActionMenu>}
         <ThemeToggle />
@@ -876,18 +892,11 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
       </section>
       <aside className="inspector" id={`${mobilePanesId}-properties`} aria-label="속성">
         <div className="pane-heading"><h2>속성</h2></div>
-        <div className="inspector-body">
+        <div className="inspector-body" ref={inspectorBody}>
           <Properties document={document} view={view} dialect={dialect} selection={selection}
             run={run} inspect={inspect} fk={setFk} remove={setDeletion} readOnly={readOnly} />
         </div>
-        <div className="inspector-diagnostics" aria-label="진단">
-          <p role="status" className={structure.length ? 'error-text' : ''}>
-            {!structure.length && <Icon name="check" />}{structure.length === 0 ? '구조 검증 통과' : '구조 오류 ' + structure.length + '건'}</p>
-          {issues.length > 0 && <ul className="diagnostics">{issues.map((issue, index) => <li key={index}>
-            {issue.objectId && <button type="button" onClick={() => selectObject(issue.objectId ?? '')}>{issue.objectId}</button>}
-            <span>{issue.message}</span>
-          </li>)}</ul>}
-        </div>
+        <DiagnosticList document={document} issues={issues} label="확인할 항목" className="inspector-diagnostics" onOpen={openDiagnostic} />
       </aside>
     </EditorPanels>
     {dialog === 'view' && <Modal title="새 다이어그램" close={() => setDialog(null)}>

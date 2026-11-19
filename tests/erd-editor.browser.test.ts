@@ -1,7 +1,10 @@
 import type { Page } from 'playwright-core';
 import { expect, it } from 'vitest';
 import type { ErdDocument } from '@erd/model';
+import { SqlService } from '@erd/sql-service';
+import type { GenerateJobOptions } from '@erd/sql-contract';
 import { sampleDocument } from '@erd/test-fixtures';
+import { createSqlRegistry } from '../apps/api/src/sql-registry.js';
 import type { Mutation, ServerDocument } from '../apps/web/src/project-api.js';
 import { withBrowser } from './support/browser.js';
 import { openExport } from './support/editor-ui.js';
@@ -881,11 +884,11 @@ it('previews column deletion in the editor and restores the column and its FK to
     await confirm.click();
     await orderNumber.waitFor({ state: 'detached' });
     await expect.poll(() => foreignKeys.count()).toBe(1);
-    await visible(page, '구조 검증 통과');
+    expect(await inspector(page).getByRole('list', { name: '확인할 항목' }).count()).toBe(0);
     await action(page, '실행 취소').click();
     await orderNumber.waitFor();
     await expect.poll(() => foreignKeys.count()).toBe(2);
-    await visible(page, '구조 검증 통과');
+    expect(await inspector(page).getByRole('list', { name: '확인할 항목' }).count()).toBe(0);
     await action(page, '다시 실행').click();
     await orderNumber.waitFor({ state: 'detached' });
     await expect.poll(() => foreignKeys.count()).toBe(1);
@@ -1002,16 +1005,12 @@ it('commits schema form values and reloads server documents with object-specific
 
     await page.reload();
     await waitSaved(page);
-    await visible(page, '구조 검증 통과');
-    for (const [id, message] of [
-      [blank.id, '물리명을 입력하세요.'],
-      [table.id, '같은 PostgreSQL 명명 범위에 동일한 물리명이 있습니다.'],
-      [duplicate.id, '같은 PostgreSQL 명명 범위에 동일한 물리명이 있습니다.'],
-    ]) {
-      await inspector(page).getByRole('listitem').filter({
-        has: page.getByRole('button', { name: id, exact: true }),
-      }).getByText(message, { exact: true }).waitFor();
-    }
+    const diagnostics = inspector(page).getByRole('list', { name: '확인할 항목' });
+    const unnamed = diagnostics.getByRole('listitem').filter({ has: page.getByRole('button', { name: 'inventory.이름 없는 테이블' }) });
+    await unnamed.getByText('물리명을 입력하세요.', { exact: true }).waitFor();
+    expect(await diagnostics.getByRole('button', { name: 'inventory.parts', exact: true }).count()).toBe(2);
+    expect(await diagnostics.getByText('같은 PostgreSQL 명명 범위에 동일한 물리명이 있습니다.', { exact: true }).count()).toBe(2);
+    for (const id of [blank.id, table.id, duplicate.id]) expect(await diagnostics.getByText(id, { exact: true }).count()).toBe(0);
   });
 }, 90_000);
 
@@ -1178,6 +1177,74 @@ it('creates and edits a view with shared tables, a group, and a plain-text note'
   });
 }, 90_000);
 
+it('explains a blocked DDL export and opens the affected SQL field for repair', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    const fixture = structuredClone(sampleDocument);
+    fixture.catalog.indexes[0].keys = [{ kind: 'column', columnId: 'product-name' }];
+    const checkId = 'internal-check-fixture';
+    fixture.catalog.constraints.push({ id: checkId, tableId: 'products', physicalName: 'products_name_check', kind: 'check',
+      expression: { ...fixture.target, sql: "name <> ''", references: ['product-name'], referencesComplete: true } });
+    await openEditor(page, origin, fixture);
+    const review = inspector(page).getByRole('list', { name: '확인할 항목' });
+    expect(await review.count()).toBe(0);
+    expect(await inspector(page).getByText('구조 검증 통과', { exact: true }).count()).toBe(0);
+
+    await nav(page).getByRole('button', { name: 'products', exact: true }).click();
+    await inspector(page).getByRole('button', { name: 'name', exact: true }).click();
+    await inspector(page).getByLabel('물리명', { exact: true }).fill('product_name');
+    await action(page, '컬럼 적용').click();
+    await waitSaved(page);
+    let saved = await savedDocument(page);
+    const target = 'public.products.products_name_check · CHECK SQL';
+    const advice = '이름이나 스키마 변경의 영향을 받을 수 있는 SQL 식입니다. 참조 이름을 확인하세요.';
+    const issue = review.getByRole('button', { name: target, exact: true });
+    await issue.waitFor();
+    await review.getByText(advice, { exact: true }).waitFor();
+    expect(await review.getByText(checkId, { exact: true }).count()).toBe(0);
+
+    const registry = createSqlRegistry();
+    const service = new SqlService(registry);
+    await page.route('**/api/sql/dialects', route => route.fulfill({ json: registry.profiles() }));
+    await page.route('**/api/projects/*/sql/jobs', async route => {
+      const { revision, options } = route.request().postDataJSON() as { revision: number; options: GenerateJobOptions };
+      expect(revision).toBe(saved.revision);
+      const result = await service.generate({ document: saved.document, target: saved.document.target,
+        tableIds: options.tableIds, options: { includeComments: options.includeComments } });
+      return route.fulfill({ json: {
+        id: `generation-${revision}`, kind: 'generate', erdId: fixture.id, revision, options,
+        target: fixture.target, adapterVersion: 'test', expiresAt: null, state: result.status === 'generated' ? 'succeeded' : 'failed',
+        output: { diagnostics: result.diagnostics, dependencies: [], sql: result.sql },
+      } });
+    });
+
+    await openExport(page, 'DDL');
+    const dialog = page.getByRole('dialog', { name: 'DDL 내보내기' });
+    await dialog.getByRole('button', { name: 'SQL 생성', exact: true }).click();
+    await dialog.getByText('DDL을 생성하지 못했습니다.', { exact: true }).waitFor();
+    const exportIssues = dialog.getByRole('list', { name: '내보내기 진단' });
+    await exportIssues.getByText(advice, { exact: true }).waitFor();
+    expect(await exportIssues.getByText(checkId, { exact: true }).count()).toBe(0);
+    expect(await dialog.getByLabel('SQL 미리보기').count()).toBe(0);
+    await exportIssues.getByRole('button', { name: target, exact: true }).click();
+    await dialog.waitFor({ state: 'detached' });
+    const field = inspector(page).getByRole('textbox', { name: 'CHECK SQL', exact: true });
+    await expect.poll(() => field.evaluate(element => element === document.activeElement)).toBe(true);
+    expect(await field.inputValue()).toBe("name <> ''");
+    await field.fill("product_name <> ''");
+    await action(page, '제약 적용').click();
+    await review.waitFor({ state: 'detached' });
+    await waitSaved(page);
+    saved = await savedDocument(page);
+
+    await openExport(page, 'DDL');
+    await dialog.getByRole('button', { name: 'SQL 생성', exact: true }).click();
+    expect(await dialog.getByLabel('SQL 미리보기').inputValue()).toContain('products_name_check');
+    expect(await dialog.getByRole('alert').count()).toBe(0);
+  });
+}, 60_000);
+
 it('preserves advanced data and indexed SQL in existing server documents', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
@@ -1187,6 +1254,7 @@ it('preserves advanced data and indexed SQL in existing server documents', async
     legacy.catalog.enums.push({ id: 'state-type', physicalName: 'state', namespaceId: 'public-schema', values: ['new', 'paid'] });
     legacy.catalog.sequences.push({ id: 'user-seq', physicalName: 'users_seq', namespaceId: 'public-schema', ownedByColumnId: 'user-id' });
     legacy.catalog.columns[0].identity = 'by-default';
+    legacy.catalog.columns.find(column => column.id === 'item-quantity')!.default = { ...legacy.target, sql: '1', invalidated: true };
     const productName = legacy.catalog.columns.find(column => column.id === 'product-name');
     if (!productName) throw new Error('Missing fixture column.');
     productName.type = {
@@ -1200,6 +1268,7 @@ it('preserves advanced data and indexed SQL in existing server documents', async
     };
     const legacyIndex = legacy.catalog.indexes[0];
     legacyIndex.keys = [{ kind: 'expression', expression }];
+    legacyIndex.predicate = { ...expression, sql: "name <> ''" };
     await openEditor(page, origin, legacy);
     await nav(page).getByText('SQL 지원', { exact: true }).click();
     for (const feature of ['ENUM', 'SEQUENCE', 'IDENTITY']) await visible(page, feature + ' · 보존 전용');
@@ -1219,7 +1288,17 @@ it('preserves advanced data and indexed SQL in existing server documents', async
     await waitSaved(page);
     await page.reload();
     await waitSaved(page);
-    await inspector(page).getByText('보존된 SQL 식을 검토하세요.', { exact: true }).waitFor();
+    const diagnostics = inspector(page).getByRole('list', { name: '확인할 항목' });
+    await diagnostics.getByRole('button', { name: 'public.products.products_name_idx · 인덱스 SQL 식 1', exact: true }).click();
+    await expect.poll(() => sqlInput.evaluate(element => element === document.activeElement)).toBe(true);
+    await diagnostics.getByRole('button', { name: 'public.products.products_name_idx · 부분 인덱스 조건 SQL', exact: true }).click();
+    const predicate = inspector(page).getByRole('textbox', { name: '부분 인덱스 조건 SQL', exact: true });
+    await expect.poll(() => predicate.evaluate(element => element === document.activeElement)).toBe(true);
+    await diagnostics.getByRole('button', { name: 'public.order_items.quantity · DEFAULT SQL', exact: true }).click();
+    const defaultSql = inspector(page).getByRole('textbox', { name: 'DEFAULT SQL', exact: true });
+    await expect.poll(() => defaultSql.evaluate(element => element === document.activeElement)).toBe(true);
+    expect(await diagnostics.getByRole('listitem').count()).toBe(3);
+    expect(await diagnostics.getByText(legacyIndex.id, { exact: true }).count()).toBe(0);
 
     const restored = (await savedDocument(page)).document;
     expect(restored.catalog.columns.find(column => column.id === 'product-name')).toEqual({ ...productName, description: '편집한 설명' });

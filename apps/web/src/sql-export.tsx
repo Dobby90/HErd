@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ErdDocument } from '@erd/model';
 import type { DialectProfile, GenerateJobOptions, GenerateSqlJob } from '@erd/sql-contract';
+import { DiagnosticList } from './editor-diagnostics.js';
+import type { DiagnosticTarget } from './editor-diagnostics.js';
 import { Modal } from './editor-fields.js';
 import { apiRequest } from './project-api.js';
 import type { ServerDocument } from './project-api.js';
@@ -12,12 +14,13 @@ const objects = { namespaces: '스키마', tables: '테이블', columns: '컬럼
 const active = (job?: GenerateSqlJob) => job?.state === 'queued' || job?.state === 'running';
 const failure = (error: unknown) => error instanceof Error ? error.message : 'SQL 작업을 처리하지 못했습니다.';
 
-export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, disabled, viewer, prepare }: {
+export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, disabled, viewer, prepare, openDiagnostic }: {
   document: ErdDocument; revision: number; dirty: boolean; projectId: string; csrf?: string | null; viewId?: string;
-  disabled: boolean; viewer: boolean; prepare(): Promise<ServerDocument>;
+  disabled: boolean; viewer: boolean; prepare(): Promise<ServerDocument>; openDiagnostic(target: DiagnosticTarget): void;
 }) {
   const [open, setOpen] = useState(false);
   const [job, setJob] = useState<GenerateSqlJob>();
+  const [jobDocument, setJobDocument] = useState<ErdDocument>();
   const [fileName, setFileName] = useState('');
   const [scope, setScope] = useState<'all' | 'view' | 'tables'>('all');
   const [select, setSelect] = useState<string[]>([]);
@@ -45,6 +48,7 @@ export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, 
     JSON.stringify(options.tableIds ?? null) === JSON.stringify(tableIds ? [...tableIds].sort() : null);
   const optionsChanged = Boolean(job && !sameOptions(job.options, tableIds));
   const planned = job?.state === 'succeeded' && sameOptions(job.options, tableIds) && !expired;
+  const generationFailed = job?.state === 'failed' && !optionsChanged && !expired;
 
   useEffect(() => {
     if (!open) return;
@@ -120,6 +124,7 @@ export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, 
       submission.current = undefined;
       setExpired(false);
       setFileName(saved.document.name);
+      setJobDocument(saved.document);
       setJob(next);
     } catch (error) {
       setError(failure(error));
@@ -185,10 +190,9 @@ export function SqlExport({ document, revision, dirty, projectId, csrf, viewId, 
         {expired && <p>결과 보관 기간이 지났습니다. SQL을 다시 생성하세요.</p>}
         {error && <p role="alert">{error}</p>}
         {pollError && <p role="alert">{pollError} <button type="button" onClick={() => setPollError('')}>상태 다시 조회</button></p>}
-        {job?.output?.diagnostics.length ? <ul aria-label="내보내기 진단">
-          {job.output.diagnostics.map((item, index) => <li key={item.code + index}>{item.message}
-            {item.objectId && ' · ' + item.objectId}</li>)}
-        </ul> : null}
+        {generationFailed && <p role="alert">{job.options.previewOnly ? '의존성을 확인하지 못했습니다.' : 'DDL을 생성하지 못했습니다.'}</p>}
+        {job?.output && !optionsChanged && <DiagnosticList document={jobDocument ?? displayed} issues={job.output.diagnostics}
+          label="내보내기 진단" onOpen={!stale && !viewer ? target => { setOpen(false); openDiagnostic(target); } : undefined} />}
         {job?.options.tableIds && job.output && !optionsChanged && <div>
           <h3>자동 포함 의존성</h3>
           {job.output.dependencies.length ? <ul>{job.output.dependencies.map(item =>

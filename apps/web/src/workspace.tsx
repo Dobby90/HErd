@@ -94,8 +94,8 @@ function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActio
         destination={{ ...destination, mode: 'replace', savedRevision: async () => (await editor.ensureSaved('모델을 교체하기')).revision }} />
     </>}
     verifyImage={() => apiRequest<void>('/erds/' + entry.id, { method: 'HEAD' })}
-    exportAction={viewId => <SqlExport document={state.history.present} revision={state.revision} dirty={editor.hasChanges()}
-      projectId={projectId} csrf={csrf} viewId={viewId} disabled={suspended} viewer={readOnly}
+    exportAction={(viewId, openDiagnostic) => <SqlExport document={state.history.present} revision={state.revision} dirty={editor.hasChanges()}
+      projectId={projectId} csrf={csrf} viewId={viewId} disabled={suspended} viewer={readOnly} openDiagnostic={openDiagnostic}
       prepare={() => readOnly ? apiRequest<ServerDocument>('/erds/' + state.history.present.id) : editor.ensureSaved('DDL을 내보내기')} />}
     session={{
     document: state.history.present, diagnostics: state.diagnostics,
