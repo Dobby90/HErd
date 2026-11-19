@@ -1,20 +1,20 @@
 import { useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
-import type { XYPosition } from '@xyflow/react';
+import type { ResizeParams, XYPosition } from '@xyflow/react';
 import { columnBadgesById, createDocument, deletionImpact, isIdentifyingForeignKey, primaryColumnsByTable, validateDocumentStructure, viewNameDisplaySchema } from '@erd/model';
 import type { CanvasDisplay, Catalog, DocumentCommand, ErdDocument, ModelDiagnostic, SqlTarget } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
 import { postgresqlEditor } from '@erd/dialect-postgresql/ui';
 import { EditorCanvas } from './editor-canvas.js';
 import type { CanvasFocus, CanvasPosition, LayoutSizes } from './editor-canvas.js';
-import { CanvasEditing, dragType, QuickColumnForm, QuickTableForm } from './canvas-edit.js';
-import type { QuickEdit, QuickRun } from './canvas-edit.js';
+import { CanvasEditing, dragType, QuickAnnotationForm, QuickColumnForm, QuickTableForm } from './canvas-edit.js';
+import type { QuickAnnotationEdit, QuickEdit, QuickRun } from './canvas-edit.js';
 import { canvasDisplay } from './canvas-display.js';
 import { ActionMenu, AppVersion, ColumnBadges, Icon } from './editor-controls.js';
 import { ThemeToggle } from './theme.js';
 import {
-  annotationColor, AnnotationColorField, columnsOf, duplicateView, EditorReadOnly, emptyView, field, Form, id,
-  label, Modal, named, NameFields, placement, putView, ViewNameOptions,
+  annotationColor, AnnotationColorField, columnsOf, defaultGroupSize, duplicateView, EditorReadOnly, emptyView, field, Form, id,
+  label, minGroupSize, Modal, named, NameFields, placement, putView, ViewNameOptions,
 } from './editor-fields.js';
 import type { Table, View } from './editor-fields.js';
 import { ImageExport } from './image-export.js';
@@ -218,7 +218,7 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
     <Form key={JSON.stringify([note.id, note.text, note.groupId, note.color])} button="메모 적용" submit={form => run(putView({ ...view, notes: view.notes.map(item => item.id === note.id ?
       { ...item, text: field(form, 'text'), groupId: field(form, 'group') || undefined, color: annotationColor(form) } : item) }))}>
       <label>메모 텍스트<textarea name="text" defaultValue={note.text} /></label><GroupField view={view} groupId={note.groupId} />
-      <AnnotationColorField value={note.color} initialColor="#c18e27" />
+      <AnnotationColorField value={note.color} kind="note" />
     </Form>
     {!readOnly && <button type="button" className="danger" onClick={() => remove(note.id)}><Icon name="trash" />메모 삭제</button>}
   </>;
@@ -228,9 +228,9 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
       { ...item, name: field(form, 'name'), color: annotationColor(form),
         size: { width: Number(field(form, 'width')), height: Number(field(form, 'height')) } } : item) }))}>
       <label>그룹 이름<input name="name" defaultValue={group.name} required /></label>
-      <label>너비<input type="number" name="width" min="40" defaultValue={group.size?.width ?? 480} required /></label>
-      <label>높이<input type="number" name="height" min="40" defaultValue={group.size?.height ?? 250} required /></label>
-      <AnnotationColorField value={group.color} initialColor="#7864cb" />
+      <label>너비<input type="number" name="width" min={minGroupSize} defaultValue={group.size?.width ?? defaultGroupSize.width} required /></label>
+      <label>높이<input type="number" name="height" min={minGroupSize} defaultValue={group.size?.height ?? defaultGroupSize.height} required /></label>
+      <AnnotationColorField value={group.color} kind="group" />
     </Form>
     {!readOnly && <button type="button" className="danger" onClick={() => remove(group.id)}><Icon name="trash" />그룹 삭제</button>}
   </>;
@@ -409,7 +409,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
   const [logical, setLogical] = useState<LogicalSeed | ErdDocument['relationships'][number]>();
   const [tool, setTool] = useState<CanvasTool>();
   const [canvasMode, setCanvasMode] = useState<'select' | 'pan'>('select');
-  const [quickEdit, setQuickEdit] = useState<QuickEdit>();
+  const [quickEdit, setQuickEdit] = useState<QuickEdit | QuickAnnotationEdit>();
   const [deletion, setDeletion] = useState('');
   const registered = dialects.get(document.target.dialectId);
   const dialect = registered?.metadata.profiles.some(profile => profile.version === document.target.engineVersion &&
@@ -613,18 +613,34 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
     run(putView({ ...view, instances: view.instances.map(moved), groups: view.groups.map(moved), notes: view.notes.map(moved) }));
   }
 
-  const edited = view?.instances.find(item => item.id === quickEdit?.instanceId);
+  function resizeGroup(id: string, { x, y, width, height }: ResizeParams) {
+    const group = view?.groups.find(item => item.id === id);
+    if (!view || !group) return;
+    const size = group.size ?? defaultGroupSize;
+    if (group.x === x && group.y === y && size.width === width && size.height === height) return;
+    run(putView({ ...view, groups: view.groups.map(item => item.id === id ? { ...item, x, y, size: { width, height } } : item) }));
+  }
+
+  const tableEdit = quickEdit && !('screen' in quickEdit) ? quickEdit : undefined;
+  const edited = view?.instances.find(item => item.id === tableEdit?.instanceId);
   const editedTable = document.catalog.tables.find(item => item.id === edited?.tableId);
-  const editedColumn = document.catalog.columns.find(item => item.id === quickEdit?.columnId && item.tableId === editedTable?.id);
-  const inline = canEdit && view && edited && editedTable && quickEdit && (!quickEdit.columnId || editedColumn) ? (
-    quickEdit.field === 'table' ? <QuickTableForm key={edited.id + ':' + (view.nameDisplay ?? 'physical')} document={document} table={editedTable}
+  const editedColumn = document.catalog.columns.find(item => item.id === tableEdit?.columnId && item.tableId === editedTable?.id);
+  const inline = canEdit && view && edited && editedTable && tableEdit && (!tableEdit.columnId || editedColumn) ? (
+    tableEdit.field === 'table' ? <QuickTableForm key={edited.id + ':' + (view.nameDisplay ?? 'physical')} document={document} table={editedTable}
       mode={view.nameDisplay} cancel={() => setQuickEdit(undefined)} apply={(value, report) => {
         if (run({ kind: 'put-catalog', collection: 'tables', value }, report)) setQuickEdit(undefined);
-      }} /> : dialect && <QuickColumnForm key={edited.id + ':' + (editedColumn?.id ?? 'new') + ':' + quickEdit.field}
+      }} /> : dialect && <QuickColumnForm key={edited.id + ':' + (editedColumn?.id ?? 'new') + ':' + tableEdit.field}
       document={document} table={editedTable} column={editedColumn} dialect={dialect} mode={view.nameDisplay}
-      focus={quickEdit.field} run={run} view={view} instance={edited}
+      focus={tableEdit.field} run={run} view={view} instance={edited}
       cancel={() => setQuickEdit(undefined)} done={() => setQuickEdit(undefined)} />
   ) : undefined;
+  const annotationEdit = quickEdit && 'screen' in quickEdit ? quickEdit : undefined;
+  const annotation = annotationEdit && (annotationEdit.field === 'group' ? view?.groups : view?.notes)
+    ?.find(item => item.id === annotationEdit.instanceId);
+  const annotationForm = canEditCanvas && view && annotationEdit && annotation ? {
+    screen: annotationEdit.screen,
+    content: <QuickAnnotationForm key={annotation.id} view={view} annotation={annotation} run={run} close={() => setQuickEdit(undefined)} />,
+  } : undefined;
 
   return <EditorReadOnly.Provider value={readOnly}><main className="editor" onKeyDown={keyboard}>
     <header className="topbar">
@@ -783,12 +799,17 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
             </div>
           </div>
           <CanvasEditing.Provider value={{
-            activeId: selectedInstance?.id ?? selectedId, edit: inline ? quickEdit : undefined, form: inline,
+            activeId: selectedInstance?.id ?? selectedId, edit: inline ? tableEdit : undefined, form: inline,
             change: canEditCanvas && !tool && dialect ? edit => {
               selectObject(edit.instanceId);
               setQuickEdit(edit);
             } : undefined,
-            remove: canEditCanvas && !tool && !inline ? id => setDeletion(id) : undefined,
+            changeAnnotation: canEditCanvas && !tool ? edit => {
+              selectObject(edit.instanceId);
+              setQuickEdit(edit);
+            } : undefined,
+            resizeGroup: canEditCanvas && !tool && !inline && !annotationForm ? resizeGroup : undefined,
+            remove: canEditCanvas && !tool && !inline && !annotationForm ? id => setDeletion(id) : undefined,
             link: canEditCanvas && tool?.kind === 'relation' ? chooseCanvasObject : undefined,
             reorder: canEditCanvas && !tool && !inline ? reorderColumn : undefined,
           }}>
@@ -815,13 +836,13 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
                 <button type="button" className="quiet" onClick={() => setTool(undefined)}>취소</button>
               </div>}
               place={canPlace ? at => chooseTool({ kind: 'place', at }) : undefined}
-              placementForm={canPlace && tool?.kind === 'place' && tool.at ? {
+              canvasForm={annotationForm ?? (canPlace && tool?.kind === 'place' && tool.at ? {
                 screen: tool.at.screen,
                 content: <QuickTableForm key={tool.at.point.x + ':' + tool.at.point.y} document={document} mode={view.nameDisplay}
                   cancel={() => setTool(undefined)} apply={(table, report) => {
                     if (tool.at && !placeTable(table, tool.at.point, true)) report('현재 뷰에 테이블을 추가하지 못했습니다.');
                   }} />,
-              } : undefined}
+              } : undefined)}
               dropTable={canEdit ? (tableId, point) => {
                 const table = document.catalog.tables.find(item => item.id === tableId);
                 if (!table) return;

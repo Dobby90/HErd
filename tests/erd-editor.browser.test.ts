@@ -299,6 +299,92 @@ it('sets independent colors for a group and a note and restores the default colo
   });
 }, 60_000);
 
+it('resizes a group on the canvas without moving its members and undoes a drag in one step', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    await openEditor(page, origin);
+    const group = page.locator('[data-id="sales"]');
+    const before = sampleDocument.views[0];
+    const savedView = async () => (await savedDocument(page)).document.views[0];
+    const dimensions = () => group.evaluate(node => ({ width: (node as HTMLElement).offsetWidth, height: (node as HTMLElement).offsetHeight }));
+    const resize = async (corner: string, dx: number, dy: number) => {
+      const handle = group.locator('.canvas-group-resize-handle' + corner);
+      await handle.waitFor();
+      const box = (await handle.boundingBox())!;
+      const x = box.x + box.width / 2, y = box.y + box.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + dx, y + dy, { steps: 6 });
+      await page.mouse.up();
+    };
+    await group.locator('.group-name').click();
+    await resize('.bottom.right', 56, 45);
+    await expect.poll(async () => (await savedView()).groups[0].size?.width, { timeout: 5_000 }).toBeGreaterThan(before.groups[0].size!.width);
+    const expanded = (await savedView()).groups[0];
+    expect(expanded.size!.height).toBeGreaterThan(before.groups[0].size!.height);
+    expect({ x: expanded.x, y: expanded.y }).toEqual({ x: before.groups[0].x, y: before.groups[0].y });
+    expect(await dimensions()).toEqual(expanded.size);
+
+    await resize('.top.left', 35, 28);
+    await expect.poll(async () => (await savedView()).groups[0].x, { timeout: 5_000 }).toBeGreaterThan(expanded.x);
+    const narrowed = await savedView();
+    expect(narrowed.groups[0].y).toBeGreaterThan(expanded.y);
+    expect(narrowed.groups[0].size!.width).toBeLessThan(expanded.size!.width);
+    expect(narrowed.groups[0].size!.height).toBeLessThan(expanded.size!.height);
+    expect(narrowed.instances).toEqual(before.instances);
+    expect(narrowed.notes).toEqual(before.notes);
+
+    await action(page, '실행 취소').click();
+    await expect.poll(async () => (await savedView()).groups[0], { timeout: 5_000 }).toEqual(expanded);
+    await page.reload();
+    expect(await dimensions()).toEqual(expanded.size);
+  });
+}, 60_000);
+
+it('edits group and note text and colors directly on the canvas', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    await openEditor(page, origin);
+    const group = page.locator('[data-id="sales"]');
+    const note = page.locator('[data-id="overview-note"]');
+    const groupEditor = page.getByRole('form', { name: '그룹 편집' });
+    const noteEditor = page.getByRole('form', { name: '메모 편집' });
+
+    await group.locator('.group-name').dblclick();
+    const groupName = groupEditor.getByLabel('그룹 이름');
+    expect(await groupName.evaluate(element => element === document.activeElement)).toBe(true);
+    await groupName.fill('배송 관리');
+    await groupEditor.getByLabel('사용자 지정 색상').fill('#006f92');
+    await groupName.press('Enter');
+    await groupEditor.waitFor({ state: 'detached' });
+    await group.getByText('배송 관리', { exact: true }).waitFor();
+
+    await note.locator('.note-text').click();
+    await note.getByRole('button', { name: '메모 편집', exact: true }).press('Enter');
+    const noteText = noteEditor.getByLabel('메모 텍스트');
+    await noteText.fill('취소할 내용');
+    await noteText.press('Escape');
+    await noteEditor.waitFor({ state: 'detached' });
+    await note.getByText(sampleDocument.views[0].notes[0].text, { exact: true }).waitFor();
+
+    await note.locator('.note-text').dblclick();
+    const content = '배송 담당자 확인\n다음 배포에 반영';
+    await noteText.fill(content);
+    await noteEditor.getByLabel('사용자 지정 색상').fill('#8640b0');
+    await noteText.press('Control+Enter');
+    await noteEditor.waitFor({ state: 'detached' });
+    await expect.poll(async () => (await savedDocument(page)).document.views[0].notes[0].color, { timeout: 5_000 }).toBe('#8640b0');
+    const saved = (await savedDocument(page)).document.views[0];
+    expect(saved.groups[0]).toEqual({ ...sampleDocument.views[0].groups[0], name: '배송 관리', color: '#006f92' });
+    expect(saved.notes[0]).toEqual({ ...sampleDocument.views[0].notes[0], text: content, color: '#8640b0' });
+    await page.reload();
+    await group.getByText('배송 관리', { exact: true }).waitFor();
+    expect(await note.locator('.note-text').textContent()).toBe(content);
+  });
+}, 60_000);
+
 it('folds and reopens the schema panel on desktop and mobile', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();

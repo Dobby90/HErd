@@ -1,10 +1,11 @@
 import { createContext, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useReactFlow } from '@xyflow/react';
+import type { ResizeParams, XYPosition } from '@xyflow/react';
 import type { DocumentCommand, ErdDocument } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
 import { Icon } from './editor-controls.js';
-import { field, id, label, putView, sqlExpression } from './editor-fields.js';
+import { annotationColor, AnnotationColorField, field, id, label, putView, sqlExpression } from './editor-fields.js';
 import type { Column, Named, Table, View } from './editor-fields.js';
 import { availableName, columnTypeLabel, putColumn, schemaRelationNames, validPhysicalName } from './schema-edits.js';
 
@@ -15,15 +16,23 @@ export type QuickEdit = {
   field: 'table' | 'name' | 'type';
   columnId?: string;
 };
+export type QuickAnnotationEdit = { instanceId: string; field: 'group' | 'note'; screen: XYPosition };
 export const CanvasEditing = createContext<{
   activeId?: string;
   edit?: QuickEdit;
   form?: ReactNode;
   change?(edit: QuickEdit): void;
+  changeAnnotation?(edit: QuickAnnotationEdit): void;
+  resizeGroup?(id: string, bounds: ResizeParams): void;
   remove?(id: string): void;
   link?(instanceId: string): void;
   reorder?(instanceId: string, columnId: string, targetId: string, after: boolean): void;
 }>({});
+
+export function canvasFormPosition(bounds: DOMRectReadOnly, x: number, y: number): XYPosition {
+  return { x: Math.min(Math.max(x - bounds.left, 8), Math.max(bounds.width - 258, 8)),
+    y: Math.min(Math.max(y - bounds.top, 8), Math.max(bounds.height - 310, 8)) };
+}
 
 function QuickForm({ children, title, initialFocus = 'physicalName', cancel, submit }: {
   children: ReactNode; title: string; initialFocus?: string; cancel(): void;
@@ -84,6 +93,26 @@ function QuickForm({ children, title, initialFocus = 'physicalName', cancel, sub
       <button type="button" className="quiet" onClick={cancel}>취소</button>
     </div>
   </form>;
+}
+
+export function QuickAnnotationForm({ view, annotation, run, close }: {
+  view: View; annotation: View['groups'][number] | View['notes'][number]; run: QuickRun; close(): void;
+}) {
+  const group = 'name' in annotation;
+  const name = group ? 'name' : 'text';
+  return <QuickForm title={group ? '그룹 편집' : '메모 편집'} initialFocus={name} cancel={close} submit={(form, report) => {
+    const content = field(form, name);
+    if (group && !content.trim()) return report('그룹 이름을 입력하세요.');
+    if (content.includes('\0')) return report('텍스트에 NUL 문자를 사용할 수 없습니다.');
+    const color = annotationColor(form);
+    const next = group ? { ...view, groups: view.groups.map(item => item.id === annotation.id ? { ...item, name: content, color } : item) }
+      : { ...view, notes: view.notes.map(item => item.id === annotation.id ? { ...item, text: content, color } : item) };
+    if (run(putView(next), report)) close();
+  }}>
+    {group ? <label>그룹 이름<input name="name" defaultValue={annotation.name} required /></label>
+      : <label>메모 텍스트<textarea name="text" defaultValue={annotation.text} rows={3} /></label>}
+    <AnnotationColorField value={annotation.color} kind={group ? 'group' : 'note'} />
+  </QuickForm>;
 }
 
 function CanvasNameFields({ value, mode }: { value?: Named; mode: View['nameDisplay'] }) {

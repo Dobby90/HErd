@@ -7,6 +7,8 @@ import type { Catalog, ErdDocument, SqlExpression } from '@erd/model';
 export type Column = Catalog['columns'][number];
 export type Table = Catalog['tables'][number];
 export type View = ErdDocument['views'][number];
+export const defaultGroupSize = { width: 480, height: 250 };
+export const minGroupSize = 40;
 export type Named = { physicalName: string; logicalName?: string; description?: string };
 export const id = () => crypto.randomUUID();
 export const label = (value: Named) => value.physicalName || '(이름 없음)';
@@ -42,14 +44,14 @@ export function annotationColor(form: FormData) {
   return field(form, 'colorMode') === 'custom' ? annotationColorSchema.parse(field(form, 'color')) : undefined;
 }
 
-export function AnnotationColorField({ value, initialColor }: { value?: string; initialColor: string }) {
+export function AnnotationColorField({ value, kind }: { value?: string; kind: 'group' | 'note' }) {
   const custom = useRef<HTMLInputElement>(null);
   return <fieldset className="annotation-color-field">
     <legend>색상</legend>
     <label className="checkbox"><input type="radio" name="colorMode" value="default" defaultChecked={!value} />기본 색상</label>
     <div className="annotation-custom-color">
       <label className="checkbox"><input ref={custom} type="radio" name="colorMode" value="custom" defaultChecked={Boolean(value)} />사용자 지정</label>
-      <input type="color" name="color" aria-label="사용자 지정 색상" defaultValue={value ?? initialColor} onChange={() => {
+      <input type="color" name="color" aria-label="사용자 지정 색상" defaultValue={value ?? (kind === 'group' ? '#7864cb' : '#c18e27')} onChange={() => {
         if (custom.current) custom.current.checked = true;
       }} />
     </div>

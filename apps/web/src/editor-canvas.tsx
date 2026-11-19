@@ -1,13 +1,13 @@
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode } from 'react';
-import { applyNodeChanges, Background, Controls, Handle, MiniMap, Position, ReactFlow, ReactFlowProvider, useNodesInitialized, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
-import type { Edge, Node, NodeProps, OnSelectionChangeParams, ReactFlowInstance, XYPosition } from '@xyflow/react';
+import { applyNodeChanges, Background, Controls, Handle, MiniMap, NodeResizer, Position, ReactFlow, ReactFlowProvider, useNodesInitialized, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
+import type { Edge, Node, NodeProps, OnResizeEnd, OnSelectionChangeParams, ReactFlowInstance, XYPosition } from '@xyflow/react';
 import { columnBadgesById, isIdentifyingForeignKey, physicalRelationships, primaryColumnsByTable } from '@erd/model';
 import type { ErdDocument } from '@erd/model';
 import type { EditorDialect } from '@erd/sql-contract';
 import { ColumnBadges, Icon } from './editor-controls.js';
-import { secondaryName, viewColumnIds, viewLabel } from './editor-fields.js';
-import { CanvasEditing, dragType } from './canvas-edit.js';
+import { defaultGroupSize, minGroupSize, secondaryName, viewColumnIds, viewLabel } from './editor-fields.js';
+import { CanvasEditing, canvasFormPosition, dragType } from './canvas-edit.js';
 import { canvasDisplay } from './canvas-display.js';
 import { measureTableWidths } from './canvas-width.js';
 import { columnTypeLabel } from './schema-edits.js';
@@ -62,10 +62,10 @@ function CanvasViewport({ focus, viewportOnly, empty }: { focus?: CanvasFocus; v
   return null;
 }
 
-function CanvasDeleteButton({ label, title = label, remove, annotation = false }: {
-  label: string; title?: string; remove(): void; annotation?: boolean;
+function CanvasDeleteButton({ label, title = label, remove }: {
+  label: string; title?: string; remove(): void;
 }) {
-  return <button type="button" className={'quiet danger canvas-node-action nodrag nopan' + (annotation ? ' canvas-annotation-action' : '')}
+  return <button type="button" className="quiet danger canvas-node-action nodrag nopan"
     aria-label={label} title={title} onClick={event => { event.stopPropagation(); remove(); }}><Icon name="trash" /></button>;
 }
 
@@ -160,21 +160,36 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
   </article>;
 });
 
-function GroupNode({ id, data }: NodeProps<CanvasNode>) {
-  const { activeId, remove } = useContext(CanvasEditing);
-  return <><strong className="group-name">{data.label}</strong>
-    {activeId === id && remove && <CanvasDeleteButton annotation label={data.label + ' 그룹 삭제'} title="그룹 삭제" remove={() => remove(id)} />}
+function AnnotationNode({ id, data, type, selected }: NodeProps<CanvasNode>) {
+  const { activeId, changeAnnotation, remove, resizeGroup } = useContext(CanvasEditing);
+  const group = type === 'groupBox';
+  const active = activeId === id || (!activeId && selected);
+  const finishResize = useCallback<OnResizeEnd>((_, bounds) => resizeGroup?.(id, bounds), [id, resizeGroup]);
+  const open = changeAnnotation && ((event: MouseEvent<HTMLElement>) => {
+    event.stopPropagation();
+    const canvasBounds = event.currentTarget.closest('.canvas')?.getBoundingClientRect();
+    if (!canvasBounds) return;
+    const target = event.currentTarget.getBoundingClientRect();
+    const screen = canvasFormPosition(canvasBounds, event.detail ? event.clientX : target.left,
+      (event.detail ? event.clientY : target.bottom) + 8);
+    changeAnnotation({ instanceId: id, field: group ? 'group' : 'note', screen });
+  });
+  const title = group ? '그룹 편집' : '메모 편집';
+  return <>
+    {group ? <strong className="group-name" title={data.label} onDoubleClick={open}>{data.label}</strong>
+      : <div className="note-text" onDoubleClick={open}>{data.label}</div>}
+    {active && (open || remove) && <div className="canvas-annotation-actions">
+      {open && <button type="button" className="quiet canvas-node-action nodrag nopan" aria-label={title} title={title}
+        onClick={open}><Icon name="edit" /></button>}
+      {remove && <CanvasDeleteButton label={group ? data.label + ' 그룹 삭제' : '메모 삭제'}
+        title={group ? '그룹 삭제' : '메모 삭제'} remove={() => remove(id)} />}
+    </div>}
+    {group && active && resizeGroup && <NodeResizer color="var(--accent)" minWidth={minGroupSize} minHeight={minGroupSize}
+      handleClassName="canvas-group-resize-handle" lineClassName="canvas-group-resize-line" onResizeEnd={finishResize} />}
   </>;
 }
 
-function NoteNode({ id, data }: NodeProps<CanvasNode>) {
-  const { activeId, remove } = useContext(CanvasEditing);
-  return <><div className="note-text">{data.label}</div>
-    {activeId === id && remove && <CanvasDeleteButton annotation label="메모 삭제" remove={() => remove(id)} />}
-  </>;
-}
-
-const nodeTypes = { table: TableNode, groupBox: GroupNode, note: NoteNode };
+const nodeTypes = { table: TableNode, groupBox: AnnotationNode, note: AnnotationNode };
 const mapColors = { groupBox: 'var(--accent-soft)', note: 'var(--warning-line)', table: 'var(--edge)' };
 const mapNodeColor = (node: CanvasNode) => node.selected || node.className === 'active-table'
   ? 'var(--accent)' : node.data.color ?? (node.type ? mapColors[node.type] : mapColors.table);
@@ -211,7 +226,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
     ...(display.groups ? view.groups : []).map((group): CanvasNode => ({
       id: group.id, type: 'groupBox', position: { x: group.x, y: group.y },
       data: { label: group.name, color: group.color },
-      style: annotationStyle(group.size ?? { width: 480, height: 250 }, group.color, 'transparent'), zIndex: -1,
+      style: annotationStyle(group.size ?? defaultGroupSize, group.color, 'transparent'), zIndex: -1,
     })),
     ...(display.notes ? view.notes : []).map((note): CanvasNode => ({
       id: note.id, type: 'note', position: { x: note.x, y: note.y },
@@ -285,7 +300,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
 }
 
 export function EditorCanvas({ document, view, dialect, select, clearSelection, selectInstances, focus, activeTableId, activeRelationId,
-  connect, move, layoutSizes, snap, readOnly, panMode, showMap, mapId, placing, picking, pickId, place, placementForm, dropTable, instruction, editRelation }: {
+  connect, move, layoutSizes, snap, readOnly, panMode, showMap, mapId, placing, picking, pickId, place, canvasForm, dropTable, instruction, editRelation }: {
   document: ErdDocument; view: View; dialect?: EditorDialect;
   select(id: string): void;
   clearSelection(): void;
@@ -305,7 +320,7 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
   picking?: boolean;
   pickId?: string;
   place?(position: CanvasPosition): void;
-  placementForm?: { screen: XYPosition; content: ReactNode };
+  canvasForm?: { screen: XYPosition; content: ReactNode };
   dropTable?(tableId: string, position: XYPosition): void;
   instruction?: ReactNode;
   editRelation?(id: string): void;
@@ -315,7 +330,9 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
   const [nodes, setNodes] = useState(projected.nodes);
   const displayNodes = useMemo(() => nodes.map(node => {
     const className = node.id === pickId ? 'relationship-origin' : activeTableId && node.data.tableId === activeTableId ? 'active-table' : undefined;
-    return className ? { ...node, className } : node;
+    // A selected group stays behind its tables and notes.
+    const zIndex = node.selected && node.type !== 'groupBox' ? 3 : node.zIndex;
+    return className || zIndex !== node.zIndex ? { ...node, className, zIndex } : node;
   }), [activeTableId, nodes, pickId]);
   const edges = useMemo(() => {
     const active = new Set(view.instances.filter(instance => instance.tableId === activeTableId).map(instance => instance.id));
@@ -350,9 +367,7 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
   const position = (x: number, y: number): CanvasPosition | undefined => {
     const bounds = canvas.current?.getBoundingClientRect();
     if (!bounds || !flow.current) return;
-    return { point: flow.current.screenToFlowPosition({ x, y }, { snapToGrid: snap }),
-      screen: { x: Math.min(Math.max(x - bounds.left, 8), Math.max(bounds.width - 258, 8)),
-        y: Math.min(Math.max(y - bounds.top, 8), Math.max(bounds.height - 310, 8)) } };
+    return { point: flow.current.screenToFlowPosition({ x, y }, { snapToGrid: snap }), screen: canvasFormPosition(bounds, x, y) };
   };
   return <ReactFlowProvider initialNodes={projected.nodes} initialEdges={projected.edges} initialMinZoom={0.15} initialMaxZoom={2.5}>
     <div ref={canvas} className="canvas" tabIndex={0} aria-label="캔버스 탐색"
@@ -377,6 +392,7 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
         onInit={instance => { flow.current = instance; }}
         nodesDraggable={!readOnly && !picking && !placing && !panMode} nodesConnectable={!readOnly && !picking && !placing && !panMode}
         elementsSelectable={!panMode} nodesFocusable={!panMode} edgesFocusable={!panMode}
+        elevateNodesOnSelect={false}
         nodes={displayNodes} edges={edges} nodeTypes={nodeTypes}
         onNodesChange={changes => {
           setNodes(previous => applyNodeChanges(readOnly || panMode ? changes.filter(change => change.type !== 'position') : changes, previous));
@@ -418,13 +434,13 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
         <Controls showInteractive={false} orientation="horizontal" fitViewOptions={fitOptions} />
       </ReactFlow>
       {instruction}
-      {placing && !placementForm && <button type="button" className="canvas-place-center quiet" onClick={() => {
+      {placing && !canvasForm && <button type="button" className="canvas-place-center quiet" onClick={() => {
         const bounds = canvas.current?.getBoundingClientRect();
         if (!bounds) return;
         const at = position(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
         if (at) place?.(at);
       }}>화면 중앙에 추가</button>}
-      {placementForm && <div className="canvas-placement" style={{ left: placementForm.screen.x, top: placementForm.screen.y }}>{placementForm.content}</div>}
+      {canvasForm && <div className="canvas-popover" style={{ left: canvasForm.screen.x, top: canvasForm.screen.y }}>{canvasForm.content}</div>}
     </div>
     <div id={mapId} className="canvas-map" hidden={!showMap}>
       {showMap && <MiniMap<CanvasNode> ariaLabel="뷰 미니맵" pannable zoomable nodeColor={mapNodeColor} maskColor="var(--map-mask)"

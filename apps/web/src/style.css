@@ -328,8 +328,8 @@ summary { cursor: pointer; }
   background: var(--accent-soft); color: var(--accent-ink); border: 1px solid var(--line); border-radius: 9px;
   box-shadow: 0 3px 12px var(--shadow); font-size: .79rem; }
 .canvas-instruction button { margin-left: auto; min-height: 27px; }
-.canvas-placement { position: absolute; z-index: 11; width: min(248px, calc(100% - 16px)); }
-.canvas-placement .quick-form { border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 26px var(--shadow); }
+.canvas-popover { position: absolute; z-index: 11; width: min(248px, calc(100% - 16px)); }
+.canvas-popover .quick-form { border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 26px var(--shadow); }
 .canvas-place-center { position: absolute; z-index: 8; left: 12px; bottom: 54px; background: var(--surface); border-color: var(--line); }
 .canvas-status {
   min-height: 36px;
@@ -391,7 +391,7 @@ summary { cursor: pointer; }
 .quick-form { display: grid; gap: .48rem; padding: .65rem; background: var(--surface); border-top: 1px solid var(--line); border-radius: 0 0 7px 7px;
   max-height: min(24rem, 52dvh); overflow: auto; }
 .quick-title { font-size: .78rem; font-weight: 680; }
-.quick-form input:not([type="checkbox"]), .quick-form select, .quick-form textarea { padding: .29rem .38rem; }
+.quick-form input:not([type="checkbox"], [type="radio"], [type="color"]), .quick-form select, .quick-form textarea { padding: .29rem .38rem; }
 .quick-form textarea { min-height: 2.7rem; }
 .quick-form textarea[name="default"] { font: .73rem/1.35 var(--mono); }
 .quick-error { font-size: .74rem; overflow-wrap: anywhere; }
@@ -423,9 +423,13 @@ summary { cursor: pointer; }
 .canvas .react-flow__handle.route-handle { visibility: hidden; pointer-events: none; }
 .react-flow__node-groupBox { background: color-mix(in srgb, var(--accent-soft) 60%, transparent); color: var(--accent-ink); border: 1px dashed var(--logical-edge); border-radius: 9px; padding: .34rem .55rem; font-size: .83rem; }
 .react-flow__node-note { border: 1px solid var(--warning-line); border-radius: 7px; color: var(--warning-ink); background: var(--warning-bg); padding: .55rem; font-size: .82rem; }
-.canvas-annotation-action { position: absolute; inset-block-start: .28rem; inset-inline-end: .34rem; width: 24px; min-height: 24px; background: var(--surface); }
-.group-name { display: block; overflow-wrap: anywhere; }
-.react-flow__node:has(.canvas-annotation-action) > :is(.group-name, .note-text) { padding-inline-end: 1.45rem; }
+.canvas-annotation-actions { position: absolute; inset-block-start: .28rem; inset-inline-end: .34rem; display: flex; gap: .18rem; }
+.canvas-annotation-actions > .canvas-node-action { width: 24px; min-height: 24px; background: var(--surface); }
+.group-name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.react-flow__node:has(.canvas-annotation-actions) > :is(.group-name, .note-text) { padding-inline-end: 1.45rem; }
+.react-flow__node:has(.canvas-annotation-actions > :nth-child(2)) > :is(.group-name, .note-text) { padding-inline-end: 3.1rem; }
+.react-flow__resize-control.canvas-group-resize-handle { width: 11px; height: 11px; border: 2px solid var(--surface); border-radius: 3px; }
+.react-flow__resize-control.canvas-group-resize-line { opacity: .65; }
 .note-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .react-flow__node:is(.selected, .active-table) > .canvas-table { border-color: var(--accent); box-shadow: 0 0 0 2px var(--selection), 0 3px 9px var(--shadow); }
 .react-flow__node:is(.selected, .active-table) > .canvas-table > strong { background: var(--accent-soft); color: var(--accent-ink); }
