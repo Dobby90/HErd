@@ -17,6 +17,7 @@ import {
   label, minGroupSize, Modal, named, NameFields, placement, putView, ViewNameOptions,
 } from './editor-fields.js';
 import type { Table, View } from './editor-fields.js';
+import { EditorPanels } from './editor-panels.js';
 import { ImageExport } from './image-export.js';
 import { ColumnForm, DeleteSchema, ForeignKeyForm, IndexForm, KeyForm } from './schema-inspector.js';
 import type { FkDialog, PhysicalRelation } from './schema-inspector.js';
@@ -670,7 +671,8 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
           setMobilePane(pane);
         }}>{mobilePanes[pane]}</button>)}
     </div>
-    <div className="editor-layout" data-mobile-pane={mobilePane} data-schema-collapsed={schemaCollapsed}>
+    <EditorPanels mobilePane={mobilePane} schemaCollapsed={schemaCollapsed}
+      schemaId={`${mobilePanesId}-schema`} inspectorId={`${mobilePanesId}-properties`}>
       <aside className="navigator" id={`${mobilePanesId}-schema`} aria-label="문서 탐색">
         <div className="section-heading nav-heading navigator-header">
           {!schemaCollapsed && <h2>스키마</h2>}
@@ -887,7 +889,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
           </li>)}</ul>}
         </div>
       </aside>
-    </div>
+    </EditorPanels>
     {dialog === 'view' && <Modal title="새 다이어그램" close={() => setDialog(null)}>
       <Form button="다이어그램 만들기" cancel={() => setDialog(null)} submit={form => {
         const next = emptyView(field(form, 'name'));

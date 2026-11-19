@@ -594,6 +594,76 @@ it('edits group and note text and colors directly on the canvas', async () => {
   });
 }, 60_000);
 
+it('resizes and remembers both desktop editor panels and resets each width independently', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    await openEditor(page, origin);
+    const schemaDivider = page.getByRole('separator', { name: '스키마 너비 조절' });
+    const inspectorDivider = page.getByRole('separator', { name: '속성 너비 조절' });
+    const canvas = page.getByRole('region', { name: '다이어그램' });
+    const width = async (element: typeof schemaDivider) => (await element.boundingBox())!.width;
+    const drag = async (divider: typeof schemaDivider, delta: number) => {
+      const box = (await divider.boundingBox())!;
+      const x = box.x + box.width / 2, y = box.y + box.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + delta, y, { steps: 6 });
+      await page.mouse.up();
+    };
+    const schemaDefault = await width(nav(page));
+    const inspectorDefault = await width(inspector(page));
+    await drag(schemaDivider, 110);
+    await expect.poll(() => width(nav(page))).toBe(schemaDefault + 110);
+    expect(await width(inspector(page))).toBe(inspectorDefault);
+    await drag(inspectorDivider, -130);
+    await expect.poll(() => width(inspector(page))).toBe(inspectorDefault + 130);
+    expect(await width(nav(page))).toBe(schemaDefault + 110);
+
+    await nav(page).getByRole('button', { name: '스키마 접기' }).click();
+    await schemaDivider.waitFor({ state: 'detached' });
+    expect(await width(nav(page))).toBe(42);
+    await nav(page).getByRole('button', { name: '스키마 펼치기' }).click();
+    await expect.poll(() => width(nav(page))).toBe(schemaDefault + 110);
+
+    await page.reload();
+    await expect.poll(() => width(nav(page))).toBe(schemaDefault + 110);
+    expect(await width(inspector(page))).toBe(inspectorDefault + 130);
+    await page.setViewportSize({ width: 850, height: 850 });
+    await expect.poll(() => width(nav(page))).toBeLessThan(schemaDefault + 110);
+    expect(await width(inspector(page))).toBeLessThan(inspectorDefault + 130);
+    expect(await width(canvas)).toBeGreaterThanOrEqual(360);
+    await page.setViewportSize({ width: 760, height: 850 });
+    await schemaDivider.waitFor({ state: 'hidden' });
+    await inspectorDivider.waitFor({ state: 'hidden' });
+    await page.setViewportSize({ width: 1280, height: 850 });
+    await expect.poll(() => width(inspector(page))).toBe(inspectorDefault + 130);
+    expect(await width(nav(page))).toBe(schemaDefault + 110);
+
+    await page.setViewportSize({ width: 850, height: 850 });
+    await expect.poll(() => width(inspector(page))).toBeLessThan(inspectorDefault + 130);
+    const adjustedInspector = await width(inspector(page)) - 20;
+    await drag(inspectorDivider, 20);
+    await expect.poll(() => width(inspector(page))).toBe(adjustedInspector);
+    await page.setViewportSize({ width: 1280, height: 850 });
+    await expect.poll(() => width(nav(page))).toBe(schemaDefault + 110);
+
+    await schemaDivider.dblclick();
+    await expect.poll(() => width(nav(page))).toBe(schemaDefault);
+    expect(await width(inspector(page))).toBe(adjustedInspector);
+    await inspectorDivider.dblclick();
+    await expect.poll(() => width(inspector(page))).toBe(inspectorDefault);
+    await inspectorDivider.press('Shift+ArrowLeft');
+    await expect.poll(() => width(inspector(page))).toBe(inspectorDefault + 40);
+    await inspectorDivider.press('Enter');
+    await expect.poll(() => width(inspector(page))).toBe(inspectorDefault);
+    await page.reload();
+    await expect.poll(() => width(nav(page))).toBe(schemaDefault);
+    expect(await width(inspector(page))).toBe(inspectorDefault);
+    expect((await savedDocument(page)).revision).toBe(1);
+  });
+}, 60_000);
+
 it('folds and reopens the schema panel on desktop and mobile', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
