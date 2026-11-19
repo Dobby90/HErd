@@ -7,7 +7,7 @@ HERD는 브라우저에서 PostgreSQL 17용 ERD를 설계하고 관리하는 도
 - **PostgreSQL DDL** — SQL을 분석해 새 ERD를 만들거나, 현재 뷰에 테이블을 추가하거나, 기존 모델을 교체합니다. 서버에 저장된 스키마 전체, 현재 뷰, 선택한 테이블을 SQL로 내보낼 수 있습니다.
 - **이미지 출력** — 현재 뷰 전체나 선택한 테이블을 SVG 또는 PNG로 내려받습니다.
 
-화면별 사용법은 [사용 가이드](docs/user-guide.md)에서 확인하세요.
+화면별 사용법은 [편집기 사용법](#편집기-사용법)에서 확인하세요.
 
 ## 빠른 시작
 
@@ -55,11 +55,19 @@ curl -fsS http://127.0.0.1:8080/api/ready
 
 `/api/health`는 API 프로세스의 상태를, `/api/ready`는 DB 연결과 마이그레이션 이력 및 SQL 작업 초기화 상태를 확인합니다. PostgreSQL 데이터는 Compose의 `herd-db` 볼륨에 저장됩니다.
 
+## 편집기 사용법
+
+- 캔버스 상단의 **+ 테이블**로 새 테이블을 배치합니다. 기존 테이블은 왼쪽 스키마 목록에서 끌어놓습니다. 테이블명, 컬럼명, 자료형은 더블클릭해 코멘트와 컬럼 기본값을 포함한 편집 화면을 엽니다. **이름 표시 → 전체 보기**에서 물리명과 논리명을 함께 볼 수 있습니다.
+- **관계 연결**에서 식별 FK, 비식별 FK, 논리 관계를 선택합니다. 선택·이동 모드는 포인터와 손 아이콘 또는 `V`와 `H`로 전환합니다. 선택한 테이블의 휴지통 버튼으로 영향을 확인한 뒤 삭제할 수 있습니다.
+- 서버 ERD는 자동 저장되며 편집기 상단에 저장 상태와 리비전이 표시됩니다. **버전 이력**에서 스냅샷을 열거나 복원하고, **내보내기**에서 DDL·SVG·PNG를 선택합니다.
+
 ## PostgreSQL DDL 지원 범위
 
 가져올 SQL은 직접 붙여 넣거나 UTF-8 `.sql` 파일로 올릴 수 있습니다. `pg_dump --schema-only`의 plain 형식도 지원하며 입력 한도는 기본 5 MiB입니다. 격리된 워커의 문장별 분석 결과에서 제외되는 항목을 확인한 뒤 적용합니다.
 
-뷰나 테이블만 내보낼 때도 필요한 FK 대상, ENUM, 시퀀스, 스키마가 생성 범위에 포함됩니다. 결과는 복사하거나 `.sql`로 내려받아 새 PostgreSQL 17 DB에 적용할 수 있습니다. [지원 구문과 제한](docs/sql-support/postgresql.md)
+서버 ERD의 **가져오기** 메뉴에서 현재 뷰에 테이블을 추가하거나 모델을 교체합니다. 일반 테이블, 주요 내장 타입, PK·UNIQUE·FK, 지원하는 DEFAULT·CHECK 식과 B-tree 인덱스를 처리합니다. 뷰·함수·트리거, 파티션, 부분·식 인덱스는 지원 범위 밖입니다.
+
+뷰나 테이블만 내보낼 때도 필요한 FK 대상, ENUM, 시퀀스, 스키마가 생성 범위에 포함됩니다. 결과는 복사하거나 `.sql`로 내려받아 새 PostgreSQL 17 DB에 적용할 수 있습니다. 세부 지원 범위는 [가져오기 테스트](tests/ddl-import.test.ts)와 [내보내기 테스트](tests/ddl-export.test.ts)에서 확인할 수 있습니다.
 
 ## 저장소 구성
 
@@ -75,6 +83,8 @@ TypeScript 기반 pnpm 워크스페이스입니다. 웹은 React·React Flow·Vi
 | `packages/test-fixtures`, `tests` | 공유 예제와 테스트 데이터, 단위·브라우저·통합·릴리스 검증 |
 | `db/migrations`, `deploy`, `scripts` | 서비스 DB 마이그레이션, Nginx 구성, 개발·릴리스 스크립트 |
 
+`docs/`는 로컬 문서 공간으로 사용하며 Git 추적에서 제외합니다.
+
 ## 개발 검증
 
 | 명령 | 검증 범위 |
@@ -85,7 +95,7 @@ TypeScript 기반 pnpm 워크스페이스입니다. 웹은 React·React Flow·Vi
 | `pnpm build` | 운영 빌드 생성 (`dist/web`, `dist/api`) |
 | `pnpm test:release` | `pnpm build` 이후 운영 빌드 흐름, 성능, 입력 한도, 백업·복원 검증 |
 
-브라우저 테스트는 기본적으로 `/usr/bin/chromium`을 사용합니다. 로컬 실행 파일 경로는 `CHROMIUM_PATH`로 지정할 수 있습니다. PostgreSQL 실행 파일과 Chromium이 포함된 Docker 환경에서 CI 검증을 재현할 수 있습니다. [릴리스 검증 재현 방법](docs/release-validation.md#재현-방법)
+브라우저 테스트는 기본적으로 `/usr/bin/chromium`을 사용합니다. 로컬 실행 파일 경로는 `CHROMIUM_PATH`로 지정할 수 있습니다. PostgreSQL 실행 파일과 Chromium이 포함된 [Docker 검증 대상](Dockerfile)으로 [CI 검증](.github/workflows/verify.yml)을 재현할 수 있습니다. Compose 패키지는 `sh scripts/release-compose.sh`로 검증합니다.
 
 ## 릴리스와 운영
 
@@ -97,5 +107,12 @@ sh scripts/release.sh v0.4.2 linux/amd64
 
 운영에서는 HTTPS `APP_ORIGIN`과 서비스 DB를 설정하고 자체 계정 또는 OIDC를 활성화합니다. Compose에서는 `HERD_NODE_ENV=production`과 `HERD_DEV_LOGIN=0`을 사용합니다. 자체 계정은 Compose의 `HERD_LOCAL_AUTH=1` 또는 API 자체 실행의 `ERD_LOCAL_AUTH=1`로 켭니다. OIDC를 사용하면 공급자에 `<APP_ORIGIN>/api/auth/callback`을 등록합니다.
 
-- 배포 환경변수, 마이그레이션, 백업과 복원은 [운영 가이드](docs/operations.md)를 참고하세요.
-- 설계 결정과 단계별 구현 기록은 [개발 문서](docs/README.md)에서 확인할 수 있습니다.
+배포 서버에서는 패키지 디렉터리에서 다음 명령을 실행합니다. `production.env`에 공개 origin, DB 연결과 인증 설정을 지정합니다.
+
+```sh
+docker image load -i images.tar.gz
+docker compose --env-file production.env --env-file release.env pull db
+docker compose --env-file production.env --env-file release.env up -d --no-build --pull never --wait
+```
+
+Compose는 DB가 준비되면 마이그레이션을 적용하고 API를 시작합니다. 운영 변경 전에는 서비스 DB를 `pg_dump -Fc`로 백업하고, 별도 DB에 `pg_restore`로 복원해 확인합니다. 서비스 백업과 복원의 검증 절차는 [운영 릴리스 테스트](tests/operations.release.test.ts)에서 확인할 수 있습니다.

@@ -12,6 +12,9 @@ coverage/
 .turbo/
 *.tsbuildinfo
 
+# Local documentation
+/docs/
+
 # Test output
 playwright-report/
 test-results/
