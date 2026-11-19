@@ -20,11 +20,11 @@ type LogicalRelationship = ErdDocument['relationships'][number];
 export const logicalCardinalities = {
   'one-to-one': { label: '일대일', notation: '1:1' },
   'one-to-many': { label: '일대다', notation: '1:N' },
-  'many-to-many': { label: '다대다', notation: 'N:M' },
+  'many-to-many': { label: '다대다', notation: 'N:N' },
 } as const;
 
 export function logicalRelationshipLabel(relation: LogicalRelationship) {
-  return `${relation.name} · 논리 · ${logicalCardinalities[relation.cardinality].notation}`;
+  return `${relation.name} · 관계선 · ${logicalCardinalities[relation.cardinality].notation}`;
 }
 
 export function foreignKeyLabel(identifying: boolean, meaning: ReturnType<EditorDialect['cardinality']>, compact = false) {

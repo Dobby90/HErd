@@ -106,7 +106,7 @@ const TableNode = memo(function TableNode({ id, data, selected }: NodeProps<Canv
       onDoubleClick={open}>{value}</button> : <span className={'canvas-' + field + '-text'} title={value}>{value}</span>;
   };
   return <article className={'canvas-table' + (data.highlighted ? ' search-match' : '') + (stacked ? ' stacked-columns' : '')}>
-    <strong onClick={() => setSelectedColumn('')}><Icon name="table" /><span className="canvas-names">{editText(data.label, 'table')}
+    <strong className="canvas-table-header" data-table-id={tableId} onClick={() => setSelectedColumn('')}><Icon name="table" /><span className="canvas-names">{editText(data.label, 'table')}
       {data.logicalName && <span className="canvas-logical-name" title={data.logicalName}>{data.logicalName}</span>}
     </span>
       {active && remove && tableId && <CanvasDeleteButton label={data.label + ' 테이블 삭제'}
@@ -144,7 +144,8 @@ const TableNode = memo(function TableNode({ id, data, selected }: NodeProps<Canv
           const bounds = event.currentTarget.getBoundingClientRect();
           if (source) reorder(id, source.id, column.id, event.clientY > bounds.top + bounds.height / 2);
         }}>
-      <Handle id={'in:' + column.id} type="target" position={Position.Left} className={portClass('in:' + column.id)} aria-label={column.name + ' 참조점'} />
+      <Handle id={'in:' + column.id} type="target" position={Position.Left} className={portClass('in:' + column.id)}
+        isConnectableStart={false} aria-label={column.name + ' 자식 연결점'} />
       {active && reorder && <button type="button" draggable className="quiet canvas-column-grip nodrag nopan" aria-label={column.name + ' 순서 이동'}
         title="드래그 또는 Alt+↑/↓로 순서 이동" onClick={event => event.stopPropagation()} onDragStart={event => {
           event.stopPropagation();
@@ -162,7 +163,8 @@ const TableNode = memo(function TableNode({ id, data, selected }: NodeProps<Canv
         {column.logicalName && <span className="canvas-logical-name" title={column.logicalName}>{column.logicalName}</span>}
       </span>
       {column.type && editText(column.type, 'type', column.id)}<ColumnBadges values={column.badges} />
-      <Handle id={'out:' + column.id} type="source" position={Position.Right} className={portClass('out:' + column.id)} aria-label={column.name + ' 연결점'} />
+      <Handle id={'out:' + column.id} type="source" position={Position.Right} className={portClass('out:' + column.id)}
+        isConnectableEnd={false} aria-label={column.name + ' 부모 연결점'} />
       <Handle id={'reverse-in:' + column.id} type="target" position={Position.Right} className={portClass('reverse-in:' + column.id, 'route-handle')} isConnectable={false} />
       <Handle id={'reverse-out:' + column.id} type="source" position={Position.Left} className={portClass('reverse-out:' + column.id, 'route-handle')} isConnectable={false} />
       </div>
@@ -349,7 +351,7 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
   activeTableId?: string;
   activeRelationId?: string;
   layoutSizes: LayoutSizes;
-  connect(sourceColumnId: string, targetColumnId: string): void;
+  connect(parentColumnId: string, childTableId: string, childColumnId?: string): void;
   move(positions: Map<string, XYPosition>): void;
   resolveOverlaps?(view: View): void;
   snap: boolean;
@@ -479,10 +481,21 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
         onSelectionChange={onSelection}
         onEdgeClick={panMode ? undefined : (_, edge) => select(String(edge.data?.objectId ?? ''))}
         onEdgeDoubleClick={panMode ? undefined : (_, edge) => { if (!picking && !placing) editRelation?.(String(edge.data?.objectId ?? '')); }}
-        onConnectStart={() => setConnecting(true)} onConnectEnd={() => setConnecting(false)}
+        onConnectStart={() => setConnecting(true)} onConnectEnd={(event, state) => {
+          setConnecting(false);
+          const from = state.fromHandle?.id;
+          if (readOnly || panMode || state.isValid || !from?.startsWith('out:')) return;
+          const point = 'changedTouches' in event ? event.changedTouches[0] : event;
+          const header = point && globalThis.document.elementFromPoint(point.clientX, point.clientY)
+            ?.closest<HTMLElement>('.canvas-table-header');
+          if (header?.dataset.tableId) connect(from.slice(4), header.dataset.tableId);
+        }}
         isValidConnection={connection => Boolean(connection.sourceHandle?.startsWith('out:') && connection.targetHandle?.startsWith('in:'))}
-        onConnect={({ sourceHandle, targetHandle }) => {
-          if (!readOnly && !panMode && sourceHandle?.startsWith('out:') && targetHandle?.startsWith('in:')) connect(sourceHandle.slice(4), targetHandle.slice(3));
+        onConnect={({ sourceHandle, targetHandle, target }) => {
+          const childTableId = view.instances.find(instance => instance.id === target)?.tableId;
+          if (!readOnly && !panMode && childTableId && sourceHandle?.startsWith('out:') && targetHandle?.startsWith('in:')) {
+            connect(sourceHandle.slice(4), childTableId, targetHandle.slice(3));
+          }
         }}
         connectionRadius={18} snapToGrid={snap} snapGrid={[20, 20]} deleteKeyCode={null} selectionOnDrag={!panMode}
         zoomOnDoubleClick={!placing && !picking}

@@ -81,20 +81,20 @@ it('edits and arranges the canvas, connects each relation type, and persists val
         };
         const fk = page.getByRole('dialog', { name: '관계 설정' });
         await connect('1:N', 'users', 'shipment_records');
-        await fk.getByLabel(/에 대응할 자식 컬럼/).selectOption({ label: 'customer_id' });
-        await button('관계 적용').click();
+        await fk.getByLabel(/→ 자식 컬럼/).selectOption({ label: 'customer_id' });
+        await button('외래 키 생성').click();
         await fk.waitFor({ state: 'hidden' });
         await connect('1:1', 'orders', 'shipment_records');
-        await fk.getByText('상세 설정', { exact: true }).click();
+        await fk.getByText('고급 설정', { exact: true }).click();
         await fk.getByLabel('자식 기본키에 포함').check();
         await expect.poll(() => fk.locator('select').evaluateAll(nodes =>
           nodes.filter(node => (node as HTMLSelectElement).selectedOptions[0]?.text.startsWith('새 컬럼')).length)).toBe(2);
-        await button('관계 적용').click();
+        await button('외래 키 생성').click();
         await fk.waitFor({ state: 'hidden' });
         await connect('N:N', 'users', 'shipment_records');
         await fk.getByLabel('연결 테이블 이름').fill('users_shipments');
         await fk.getByText('연결 테이블 1개 · 외래 키 2개 · 연결 컬럼으로 구성한 복합 기본키', { exact: true }).waitFor();
-        await button('관계 적용').click();
+        await button('연결 테이블 생성').click();
         await fk.waitFor({ state: 'hidden' });
         await expect.poll(() => page.locator('.identifying-edge').count()).toBe(6);
         expect(await page.locator('.non-identifying-edge').count()).toBe(1);

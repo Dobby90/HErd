@@ -415,11 +415,25 @@ summary { cursor: pointer; }
 .quick-error { font-size: .74rem; overflow-wrap: anywhere; }
 .quick-form .actions button { font-size: .73rem; min-height: 26px; }
 .quick-form .actions button .ui-icon { width: 12px; height: 12px; }
-.fk-summary { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .55rem; margin-bottom: .7rem; font-size: .87rem; }
-.fk-summary strong { overflow-wrap: anywhere; min-width: 0; }
+.relationship-dialog { width: min(32rem, calc(100% - 2rem)); }
 .relationship-settings { display: grid; gap: .65rem; }
-.relationship-settings .fk-summary { margin: 0; }
-.relationship-changes { padding: .55rem .65rem; border: 1px solid var(--line); border-radius: 5px; }
+.relationship-endpoints { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: .55rem; align-items: center; }
+.relationship-endpoints > label, .relationship-endpoints > div { display: grid; gap: .25rem; min-width: 0; }
+.relationship-endpoints > div > strong { overflow-wrap: anywhere; }
+.relationship-endpoints small, .relationship-options legend { color: var(--muted); font-size: .78rem; }
+.relationship-swap { justify-self: end; }
+.relationship-options > div { display: flex; gap: .35rem; }
+.relationship-options legend { margin-bottom: .25rem; }
+.relationship-options label { flex: 1; display: flex; align-items: center; gap: .35rem; margin: 0;
+  padding: .4rem .5rem; border: 1px solid var(--line); border-radius: 5px; cursor: pointer; }
+.relationship-options input[type="radio"] { width: auto; padding: 0; accent-color: var(--accent); }
+.relationship-options label:has(:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+.relationship-options:disabled label { cursor: default; }
+.relationship-preview, .relationship-inspector { display: grid; gap: .45rem; overflow-wrap: anywhere; }
+.relationship-preview, .relationship-direction { padding: .55rem .65rem; border: 1px solid var(--line); border-radius: 5px; }
+.relationship-preview > :is(p, label), .relationship-inspector :is(p, ul) { margin: 0; }
+.relationship-inspector ul { display: grid; gap: .25rem; padding-inline-start: 1.3rem; }
+.relationship-inspector .actions { flex-wrap: wrap; }
 .relationship-details { display: grid; gap: .5rem; }
 .relationship-details > label { margin-top: .45rem; }
 .relationship-join-side { border-top: 1px solid var(--line); padding-top: .45rem; overflow-wrap: anywhere; }
@@ -455,6 +469,7 @@ summary { cursor: pointer; }
 .canvas:not(:has(.canvas-column:hover)) .canvas-column:is(:focus-within, [data-column-selected]) .react-flow__handle:not(.route-handle),
 .canvas .canvas-column .react-flow__handle:is(.connectingfrom, .connectingto):not(.route-handle) { opacity: 1; pointer-events: auto; }
 .canvas[data-connecting="true"] .canvas-column .react-flow__handle.target:not(.route-handle) { pointer-events: auto; }
+.canvas[data-connecting="true"] .canvas-table > .canvas-table-header:hover { background: var(--accent-soft); outline: 1px solid var(--accent); }
 .canvas .react-flow__handle:is(:hover, .connectingfrom, .connectingto) { background: var(--accent); }
 .canvas .react-flow__handle.table-handle { top: 17px; width: 6px; height: 6px; }
 .canvas .react-flow__handle.route-handle { visibility: hidden; pointer-events: none; }

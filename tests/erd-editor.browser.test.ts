@@ -184,7 +184,7 @@ it('uses canvas visibility for image exports and allows per-export overrides', a
         const markup = await fetch((node as HTMLImageElement).src).then(response => response.text());
         const svg = new DOMParser().parseFromString(markup, 'image/svg+xml');
         const labels = Array.from(svg.querySelectorAll('text'));
-        const relationshipLabels = labels.filter(label => /^(비)?식별 관계 · | · 논리 · /.test(label.textContent ?? ''));
+        const relationshipLabels = labels.filter(label => /^(비)?식별 관계 · | · 관계선 · /.test(label.textContent ?? ''));
         const rect = (element: Element) => {
           const [x, y, width, height] = ['x', 'y', 'width', 'height'].map(name => Number(element.getAttribute(name)));
           return { x, y, right: x + width, bottom: y + height };
@@ -213,7 +213,7 @@ it('uses canvas visibility for image exports and allows per-export overrides', a
     for (const option of options) await option.check();
     const visible = await previewSvg();
     expect(visible.text).toEqual(expect.arrayContaining([
-      'quantity', document.views[0].notes[0].text, document.views[0].groups[0].name, '고객별 상품 집계 · 논리 · N:M',
+      'quantity', document.views[0].notes[0].text, document.views[0].groups[0].name, '고객별 상품 집계 · 관계선 · N:N',
     ]));
     expect(visible.edges).toBe(4);
     expect(visible.relationshipLabels).toBe(4);
@@ -335,9 +335,9 @@ it('folds table columns and exposes relationship handles only on the active row'
     await openEditor(page, origin);
     const orders = page.locator('[data-id="overview-orders"] .canvas-table');
     const products = page.locator('[data-id="overview-products"] .canvas-table');
-    const unused = products.getByLabel('name 연결점', { exact: true });
+    const unused = products.getByLabel('name 부모 연결점', { exact: true });
     const opacity = () => unused.evaluate(node => Number(getComputedStyle(node).opacity));
-    const idHandle = products.getByLabel('id 연결점', { exact: true });
+    const idHandle = products.getByLabel('id 부모 연결점', { exact: true });
     const idOpacity = () => idHandle.evaluate(node => Number(getComputedStyle(node).opacity));
     expect(await opacity()).toBe(0);
     await products.locator('strong').hover();
@@ -734,7 +734,7 @@ it('fits the view on first open and exposes table tabs and export with the keybo
     await expect.poll(() => canvas.locator('.fk-edge.related-edge').count()).toBe(2);
     expect(await canvas.locator('.logical-edge.muted-edge').count()).toBe(1);
     await columns.press('ArrowRight');
-    await inspector(page).getByRole('tabpanel', { name: '제약' }).getByRole('button', { name: '외래 키 추가' }).waitFor();
+    await inspector(page).getByRole('tabpanel', { name: '제약' }).getByRole('button', { name: '관계 추가' }).waitFor();
 
     const exportMenu = action(page, '내보내기');
     await exportMenu.press('Enter');
@@ -782,15 +782,15 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
     await addColumn(page, 'parent_region');
     await addColumn(page, 'parent_number');
     await page.locator('.react-flow__controls-fitview').click();
-    const source = tableOnCanvas(page, 'children').getByLabel('parent_region 연결점', { exact: true });
-    const destination = tableOnCanvas(page, 'parents').getByLabel('region 참조점', { exact: true });
+    const source = tableOnCanvas(page, 'parents').getByLabel('region 부모 연결점', { exact: true });
+    const destination = tableOnCanvas(page, 'children').getByLabel('parent_region 자식 연결점', { exact: true });
     const reachable = (handle: typeof source) => handle.evaluate(element => {
       const { x, y, width, height } = element.getBoundingClientRect();
       return document.elementFromPoint(x + width / 2, y + height / 2) === element;
     });
     // React Flow applies fitView after layout. A visible DOM handle can still
     // be clipped by the canvas and its current coordinates can hit the sidebar.
-    await tableOnCanvas(page, 'children').getByRole('button', { name: 'parent_region 이름 편집' }).hover();
+    await tableOnCanvas(page, 'parents').getByRole('button', { name: 'region 이름 편집' }).hover();
     await expect.poll(() => reachable(source)).toBe(true);
     await source.hover();
     const destinationBox = await destination.boundingBox();
@@ -801,11 +801,11 @@ it('uses the normal editor to create a composite key and FK by dragging, then re
 
     const relationship = page.getByRole('dialog', { name: '관계 설정' });
     await relationship.waitFor();
-    await relationship.getByText('상세 설정', { exact: true }).click();
+    await relationship.getByText('고급 설정', { exact: true }).click();
     await relationship.getByLabel('물리명', { exact: true }).fill('children_parent_fk');
-    await relationship.getByLabel('2. number에 대응할 자식 컬럼').selectOption({ label: 'parent_number' });
+    await relationship.getByLabel('number → 자식 컬럼').selectOption({ label: 'parent_number' });
     await relationship.getByLabel('ON DELETE').selectOption('cascade');
-    await action(page, '관계 적용').click();
+    await action(page, '외래 키 생성').click();
     await page.locator('.fk-edge').waitFor();
     await action(page, '실행 취소').click();
     await page.locator('.fk-edge').waitFor({ state: 'detached' });
@@ -1048,23 +1048,31 @@ it('reverses a relationship to reuse a child column and adds a unique foreign ke
     await action(page, '1:N').click();
     await columnName(names[1], foreignName).click();
     await columnName(names[0], foreignName).click();
-    await dialog.getByText('선택한 부모 컬럼에 PK 또는 UNIQUE가 필요합니다.', { exact: true }).waitFor();
+    await dialog.getByText(names[1] + '.' + foreignName + ' 컬럼에 PK 또는 UNIQUE가 필요합니다.', { exact: true }).waitFor();
     await dialog.getByRole('button', { name: '방향 바꾸기' }).click();
-    const mapping = dialog.getByLabel('1. ' + foreignName + '에 대응할 자식 컬럼');
+    const mapping = dialog.getByLabel(foreignName + ' → 자식 컬럼');
     expect(await mapping.inputValue()).toBe('reuse-fk');
     expect(await dialog.getByLabel('참조 후보키').count()).toBe(0);
     await dialog.getByText('외래 키 1개', { exact: true }).waitFor();
-    await action(page, '관계 적용').click();
+    await action(page, '외래 키 생성').click();
     await page.locator('.fk-edge').getByText('FK · 1:N', { exact: true }).waitFor();
+    await nav(page).getByRole('button', { name: names[1], exact: true }).click();
+    await tab(page, '제약').click();
+    await inspector(page).getByRole('button', { name: /^FK · / }).click();
+    await inspector(page).getByText(names[0] + ' → ' + names[1], { exact: true }).waitFor();
 
-    await action(page, '관계 추가').click();
-    await action(page, '1:1').click();
-    await columnName(names[0], foreignName).click();
-    await tableOnCanvas(page, names[2]).locator('strong > svg').first().click();
+    await columnName(names[0], foreignName).hover();
+    await tableOnCanvas(page, names[0]).getByLabel(foreignName + ' 부모 연결점').hover();
+    const header = await tableOnCanvas(page, names[2]).locator('.canvas-table-header').boundingBox();
+    if (!header) throw new Error('Cannot locate the child table header.');
+    await page.mouse.down();
+    await page.mouse.move(header.x + header.width / 2, header.y + header.height / 2, { steps: 15 });
+    await page.mouse.up();
+    await dialog.getByRole('radio', { name: '1:1' }).check();
     expect(await mapping.locator('option:checked').textContent()).toBe('새 컬럼 · ' + foreignName);
     await dialog.getByText('생성 · bigint', { exact: true }).waitFor();
     await dialog.getByText('새 컬럼 1개 · 외래 키 1개 · UNIQUE 1개', { exact: true }).waitFor();
-    await action(page, '관계 적용').click();
+    await action(page, '외래 키 생성').click();
     await page.locator('.fk-edge').getByText('FK · 1:1', { exact: true }).waitFor();
     await waitSaved(page);
     const saved = (await savedDocument(page)).document;
@@ -1082,6 +1090,50 @@ it('reverses a relationship to reuse a child column and adds a unique foreign ke
   });
 }, 60_000);
 
+it('adds and edits a display-only relationship without eligible keys or DDL changes', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    const document = structuredClone(sampleDocument);
+    document.catalog.indexes = [];
+    document.catalog.constraints = document.catalog.constraints.filter(item => item.kind !== 'check');
+    for (const column of document.catalog.columns) delete column.default;
+    await openEditor(page, origin, document);
+
+    await action(page, '관계 추가').click();
+    await action(page, '1:N').click();
+    await tableOnCanvas(page, 'products').getByRole('button', { name: 'name 관계 컬럼으로 선택' }).click();
+    await tableOnCanvas(page, 'orders').locator('.canvas-table-header').click();
+    const dialog = page.getByRole('dialog', { name: '관계 설정' });
+    await dialog.getByRole('alert').getByText(/products\.name 컬럼에 PK 또는 UNIQUE가 필요합니다/).waitFor();
+    await dialog.getByRole('radio', { name: '관계선만 표시' }).check();
+    await dialog.getByRole('radio', { name: 'N:N' }).check();
+    await dialog.getByText('products ↔ orders · N:N', { exact: true }).waitFor();
+    await action(page, '관계선 추가').click();
+    await page.locator('.logical-edge').getByText('products ↔ orders · 관계선 · N:N').waitFor();
+    await waitSaved(page);
+    const added = (await savedDocument(page)).document;
+    const relation = added.relationships.find(item => item.name === 'products ↔ orders');
+    expect(relation).toMatchObject({ sourceTableId: 'products', targetTableId: 'orders', cardinality: 'many-to-many' });
+
+    await nav(page).getByRole('button', { name: 'products ↔ orders', exact: true }).click();
+    await inspector(page).getByText('관계선만 표시 · N:N', { exact: true }).waitFor();
+    await inspector(page).getByRole('button', { name: '관계 설정' }).click();
+    await dialog.getByRole('radio', { name: '1:1' }).check();
+    await dialog.getByText('고급 설정', { exact: true }).click();
+    await dialog.getByLabel('관계선 이름').fill('상품 주문 흐름');
+    await action(page, '관계선 저장').click();
+    await waitSaved(page);
+    const saved = (await savedDocument(page)).document;
+    expect(saved.relationships).toContainEqual({ ...relation, name: '상품 주문 흐름', cardinality: 'one-to-one' });
+    expect(saved.catalog).toEqual(document.catalog);
+    const sql = new SqlService(createSqlRegistry());
+    const original = await sql.generate({ document, target: document.target });
+    expect(original.status).toBe('generated');
+    expect(await sql.generate({ document: saved, target: saved.target })).toEqual(original);
+  });
+}, 60_000);
+
 it('qualifies same-named FK targets so the intended schema can be selected', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
@@ -1091,8 +1143,8 @@ it('qualifies same-named FK targets so the intended schema can be selected', asy
     await openEditor(page, origin, document);
     await nav(page).getByRole('button', { name: 'orders', exact: true }).click();
     await tab(page, '제약').click();
-    await action(page, '외래 키 추가').click();
-    const targets = page.getByLabel('참조 테이블');
+    await inspector(page).getByRole('button', { name: '관계 추가', exact: true }).click();
+    const targets = page.getByLabel('부모 테이블');
     expect(await targets.locator('option').allTextContents()).toEqual([
       '테이블 선택', 'public.users', 'orders', 'order_items', 'products', 'audit.users',
     ]);
@@ -1114,30 +1166,35 @@ it('adds reciprocal and self foreign keys and preserves legacy relationship line
       await nav(page).getByRole('button', { name: 'users', exact: true }).click();
       await addColumn(page, name.replace('_fk', '_id'));
       await tab(page, '제약').click();
-      await action(page, '외래 키 추가').click();
+      await inspector(page).getByRole('button', { name: '관계 추가', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: '관계 설정' });
-      await dialog.getByLabel('참조 테이블').selectOption({ label: target });
-      await dialog.getByText('상세 설정', { exact: true }).click();
+      await dialog.getByLabel('부모 테이블').selectOption({ label: target });
+      await dialog.getByText('고급 설정', { exact: true }).click();
       await dialog.getByLabel('물리명', { exact: true }).fill(name);
-      await dialog.getByLabel('1. id에 대응할 자식 컬럼').selectOption({ label: name.replace('_fk', '_id') });
+      await dialog.getByLabel('id → 자식 컬럼').selectOption({ label: name.replace('_fk', '_id') });
       await dialog.getByLabel('ON DELETE').selectOption(onDelete);
       await dialog.getByLabel('ON UPDATE').selectOption(onUpdate);
-      await action(page, '관계 적용').click();
+      await action(page, '외래 키 생성').click();
     }
     await nav(page).getByRole('button', { name: 'products', exact: true }).click();
     await addColumn(page, 'owner_id');
     await tab(page, '제약').click();
-    await action(page, '외래 키 추가').click();
+    await inspector(page).getByRole('button', { name: '관계 추가', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '관계 설정' });
-    await dialog.getByLabel('참조 테이블').selectOption({ label: 'users' });
-    await dialog.getByText('상세 설정', { exact: true }).click();
+    await dialog.getByLabel('부모 테이블').selectOption({ label: 'users' });
+    await dialog.getByText('고급 설정', { exact: true }).click();
     await dialog.getByLabel('물리명', { exact: true }).fill('products_owner_fk');
-    await dialog.getByLabel('1. id에 대응할 자식 컬럼').selectOption({ label: 'owner_id' });
-    await action(page, '관계 적용').click();
+    await dialog.getByLabel('id → 자식 컬럼').selectOption({ label: 'owner_id' });
+    await action(page, '외래 키 생성').click();
 
     await action(page, '고객별 상품 집계').click();
-    await inspector(page).getByText('users → products · N:M', { exact: true }).waitFor();
-    await page.locator('.logical-edge').getByText('고객별 상품 집계 · 논리 · N:M', { exact: true }).waitFor();
+    await inspector(page).getByText('users ↔ products', { exact: true }).waitFor();
+    await inspector(page).getByText('관계선만 표시 · N:N', { exact: true }).waitFor();
+    await inspector(page).getByRole('button', { name: '관계 설정' }).click();
+    expect(await dialog.getByRole('radio', { name: '관계선만 표시' }).isChecked()).toBe(true);
+    expect(await dialog.getByRole('radio', { name: 'N:N' }).isChecked()).toBe(true);
+    await dialog.getByRole('button', { name: '닫기' }).click();
+    await page.locator('.logical-edge').getByText('고객별 상품 집계 · 관계선 · N:N', { exact: true }).waitFor();
     await expect.poll(() => page.locator('.fk-edge').count()).toBe(6);
     await page.locator('.fk-edge').filter({ hasText: 'FK · 1:N' }).first().waitFor();
     await waitSaved(page);

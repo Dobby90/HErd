@@ -8,11 +8,27 @@ import type { Column, Table, View } from './editor-fields.js';
 import { availableName, columnTypeLabel, schemaRelationNames, validPhysicalName } from './schema-edits.js';
 
 export type RelationshipSize = '1:N' | '1:1' | 'N:N';
-export type FkDialog = {
-  tableId: string; targetTableId?: string; sourceColumnId?: string; targetColumnId?: string;
-  existing?: ForeignKey; size?: RelationshipSize;
+type LogicalRelationship = ErdDocument['relationships'][number];
+type RelationshipMode = 'foreign-key' | 'line';
+export type RelationshipDraft = {
+  childTableId: string; parentTableId?: string; childColumnId?: string; parentColumnId?: string;
+  existing?: ForeignKey | LogicalRelationship; size?: RelationshipSize;
 };
-const sizes: RelationshipSize[] = ['1:N', '1:1', 'N:N'];
+const cardinalities = { '1:N': 'one-to-many', '1:1': 'one-to-one', 'N:N': 'many-to-many' } as const;
+const sizes = ['1:N', '1:1', 'N:N'] as const;
+
+export function relationshipDraft(existing: ForeignKey | LogicalRelationship): RelationshipDraft {
+  return 'kind' in existing
+    ? { childTableId: existing.tableId, parentTableId: existing.targetTableId, existing }
+    : { childTableId: existing.targetTableId, parentTableId: existing.sourceTableId, existing,
+      size: sizes.find(size => cardinalities[size] === existing.cardinality) };
+}
+
+export function relationshipTableName(document: ErdDocument, table: Table) {
+  return document.catalog.tables.some(item => item.id !== table.id && label(item) === label(table))
+    ? [document.catalog.namespaces.find(item => item.id === table.namespaceId)?.physicalName, label(table)].filter(Boolean).join('.')
+    : label(table);
+}
 
 function eligibleKeys(document: ErdDocument, dialect: EditorDialect, tableId: string, columnId?: string) {
   const primary = document.catalog.constraints.find(key => key.tableId === tableId && key.kind === 'pk');
@@ -37,62 +53,99 @@ function childColumnName(parent: Table, column: Column) {
 }
 
 export function RelationshipEditor({ document, view, dialect, seed, run, close }: {
-  document: ErdDocument; view?: View; dialect: EditorDialect; seed: FkDialog; run: QuickRun; close(): void;
+  document: ErdDocument; view?: View; dialect: EditorDialect; seed: RelationshipDraft; run: QuickRun; close(): void;
 }) {
+  const existing = seed.existing;
+  const foreignKey = existing && 'kind' in existing ? existing : undefined;
+  const line = existing && !('kind' in existing) ? existing : undefined;
   const [direction, setDirection] = useState(seed);
+  const [mode, setMode] = useState<RelationshipMode>(line ? 'line' : 'foreign-key');
   const [size, setSize] = useState<RelationshipSize>(seed.size ?? (
-    seed.existing && dialect.cardinality(document, seed.existing)?.childMax === 1 ? '1:1' : '1:N'));
-  const table = document.catalog.tables.find(item => item.id === direction.tableId);
-  const parent = document.catalog.tables.find(item => item.id === direction.targetTableId);
-  const namespaces = new Map(document.catalog.namespaces.map(item => [item.id, label(item)]));
-  const names = document.catalog.tables.map(label);
-  const tableLabel = (item: Table) => names.indexOf(label(item)) !== names.lastIndexOf(label(item))
-    ? [namespaces.get(item.namespaceId), label(item)].filter(Boolean).join('.') : label(item);
+    foreignKey && dialect.cardinality(document, foreignKey)?.childMax === 1 ? '1:1' : '1:N'));
+  const [lineError, setLineError] = useState('');
+  const table = document.catalog.tables.find(item => item.id === direction.childTableId);
+  const parent = document.catalog.tables.find(item => item.id === direction.parentTableId);
+  const tableLabel = (item: Table) => relationshipTableName(document, item);
   if (!table) return null;
+  const endpoints = JSON.stringify([parent?.id, table.id, direction.parentColumnId, direction.childColumnId]);
+  const lineName = parent ? tableLabel(parent) + (size === 'N:N' ? ' ↔ ' : ' → ') + tableLabel(table) : '';
 
-  return <Modal title="관계 설정" close={close}>
+  return <Modal title="관계 설정" close={close} className="relationship-dialog">
     <section className="relationship-settings">
-      <label>관계 유형<select value={size} onChange={event => setSize(event.target.value as RelationshipSize)}>
-        {sizes.filter(item => !seed.existing || item !== 'N:N').map(item => <option key={item}>{item}</option>)}
-      </select></label>
-      <label>{size === 'N:N' ? '첫 번째 참조 테이블' : '참조 테이블'}<select value={parent?.id ?? ''}
-        onChange={event => setDirection({ ...direction, targetTableId: event.target.value, targetColumnId: undefined, sourceColumnId: undefined })}>
-        <option value="">테이블 선택</option>
-        {document.catalog.tables.map(item => <option key={item.id} value={item.id}>{tableLabel(item)}</option>)}
-      </select></label>
-      <div className="fk-summary">
-        <strong>{parent ? tableLabel(parent) : '참조 테이블'}</strong>
-        <span>{size === 'N:N' ? 'N ↔ N' : size === '1:1' ? '1 → 1' : '1 → N'}</span>
-        <strong>{tableLabel(table)}</strong>
-        {parent && !seed.existing && size !== 'N:N' && <button type="button" className="quiet" onClick={() => setDirection({
-          tableId: parent.id, targetTableId: table.id, sourceColumnId: direction.targetColumnId, targetColumnId: direction.sourceColumnId,
-        })}>방향 바꾸기</button>}
+      <div className="relationship-endpoints">
+        <label>{size === 'N:N' ? '첫 번째 테이블' : '부모 테이블'}<select value={parent?.id ?? ''}
+          onChange={event => {
+            setLineError('');
+            setDirection({ ...direction, parentTableId: event.target.value, parentColumnId: undefined, childColumnId: undefined });
+          }}>
+          <option value="">테이블 선택</option>
+          {document.catalog.tables.map(item => <option key={item.id} value={item.id}>{tableLabel(item)}</option>)}
+        </select></label>
+        <span aria-hidden="true">{size === 'N:N' ? '↔' : '→'}</span>
+        <div><small>{size === 'N:N' ? '두 번째 테이블' : '자식 테이블'}</small><strong title={tableLabel(table)}>{tableLabel(table)}</strong></div>
       </div>
-      {parent && (size === 'N:N' ? <JoinTableForm key={parent.id + ':' + table.id} document={document} view={view} dialect={dialect}
-        left={parent} right={table} run={run} close={close} /> :
-        <ForeignKeyFields key={JSON.stringify(direction)} document={document} dialect={dialect} seed={direction} table={table}
-          parent={parent} size={size} run={run} close={close} />)}
+      {parent && !foreignKey && size !== 'N:N' && <button type="button" className="quiet relationship-swap" onClick={() => {
+        setLineError('');
+        setDirection({ childTableId: parent.id, parentTableId: table.id,
+          childColumnId: direction.parentColumnId, parentColumnId: direction.childColumnId });
+      }}>방향 바꾸기</button>}
+      <fieldset className="relationship-options">
+        <legend>카디널리티</legend>
+        <div>{sizes.filter(item => !foreignKey || item !== 'N:N').map(item => <label key={item}>
+          <input type="radio" name="relationship-size" checked={size === item} onChange={() => { setSize(item); setLineError(''); }} />{item}
+        </label>)}</div>
+      </fieldset>
+      <fieldset className="relationship-options" disabled={Boolean(existing)}>
+        <legend>적용 방식</legend>
+        <div>
+          <label><input type="radio" name="relationship-mode" checked={mode === 'foreign-key'} onChange={() => setMode('foreign-key')} />외래 키 생성</label>
+          <label><input type="radio" name="relationship-mode" checked={mode === 'line'} onChange={() => { setMode('line'); setLineError(''); }} />관계선만 표시</label>
+        </div>
+      </fieldset>
+      {!parent && <p className="muted">{size === 'N:N' ? '첫 번째 테이블을 선택하세요.' : '부모 테이블을 선택하세요.'}</p>}
+      {parent && (mode === 'line' ? <Form key={endpoints} cancel={close} button={line ? '관계선 저장' : '관계선 추가'} submit={form => {
+        const next = { id: line?.id ?? id(), name: field(form, 'name').trim() || lineName,
+          sourceTableId: parent.id, targetTableId: table.id, cardinality: cardinalities[size],
+          description: field(form, 'description').trim() || undefined };
+        if (run({ kind: 'put-relationship', value: next }, setLineError)) close();
+      }}>
+        <section className="relationship-preview" aria-label="적용 미리보기">
+          <strong>적용 미리보기</strong>
+          <p>{lineName} · {size}</p>
+          <small>테이블 사이에 관계선을 표시합니다. DDL에 포함하지 않습니다.</small>
+        </section>
+        <details className="relationship-details"><summary>고급 설정</summary>
+          <label>관계선 이름<input name="name" defaultValue={line?.name} placeholder={lineName} /></label>
+          <label>설명<textarea name="description" defaultValue={line?.description} /></label>
+        </details>
+        {lineError && <p role="alert">{lineError}</p>}
+      </Form> : size === 'N:N'
+        ? <JoinTableForm key={endpoints} document={document} view={view} dialect={dialect} left={parent} right={table}
+          leftColumnId={direction.parentColumnId} rightColumnId={direction.childColumnId} run={run} close={close} />
+        : <ForeignKeyFields key={endpoints} document={document} dialect={dialect} seed={direction} existing={foreignKey}
+          table={table} parent={parent} size={size} run={run} close={close} />)}
     </section>
   </Modal>;
 }
 
-function ForeignKeyFields({ document, dialect, seed, table, parent, size, run, close }: {
-  document: ErdDocument; dialect: EditorDialect; seed: FkDialog; table: Table; parent: Table;
+function ForeignKeyFields({ document, dialect, seed, existing, table, parent, size, run, close }: {
+  document: ErdDocument; dialect: EditorDialect; seed: RelationshipDraft; existing?: ForeignKey; table: Table; parent: Table;
   size: '1:1' | '1:N'; run: QuickRun; close(): void;
 }) {
-  const keys = eligibleKeys(document, dialect, parent.id, seed.targetColumnId);
-  const [chosen, setChosen] = useState(seed.existing?.targetKey.id ?? keys[0]?.key.id ?? '');
-  const [keyId] = useState(() => seed.existing?.id ?? id());
+  const keys = eligibleKeys(document, dialect, parent.id, seed.parentColumnId);
+  const [chosen, setChosen] = useState(() => keys.find(key => key.key.id === existing?.targetKey.id)?.key.id ?? keys[0]?.key.id ?? '');
+  const [keyId] = useState(() => existing?.id ?? id());
   const newColumnChoice = keyId + ':new';
   const [identify, setIdentify] = useState(false);
   const [error, setError] = useState('');
-  const [pairs, setPairs] = useState<Record<string, string>>(() => Object.fromEntries(seed.existing?.pairs.map(pair =>
-    [pair.targetColumnId, pair.sourceColumnId]) ?? (seed.targetColumnId && seed.sourceColumnId ? [[seed.targetColumnId, seed.sourceColumnId]] : [])));
+  const [pairs, setPairs] = useState<Record<string, string>>(() => Object.fromEntries(
+    existing?.targetTableId === parent.id ? existing.pairs.map(pair => [pair.targetColumnId, pair.sourceColumnId]) :
+      seed.parentColumnId && seed.childColumnId ? [[seed.parentColumnId, seed.childColumnId]] : []));
   const parentColumns = new Map(columnsOf(document, parent.id).map(column => [column.id, column]));
   const childColumns = columnsOf(document, table.id);
   const candidate = keys.find(item => item.key.id === chosen);
-  const order = seed.existing?.targetKey.id === candidate?.key.id
-    ? seed.existing?.pairs.map(pair => pair.targetColumnId) : candidate?.columnIds;
+  const order = existing && existing.targetKey.id === candidate?.key.id
+    ? existing.pairs.map(pair => pair.targetColumnId) : candidate?.columnIds;
   const usedNames = new Set(childColumns.map(column => column.physicalName));
   const selected = new Set(Object.values(pairs));
   const added: Column[] = [];
@@ -119,6 +172,7 @@ function ForeignKeyFields({ document, dialect, seed, table, parent, size, run, c
   const unique = Boolean(key && eligibleKeys(document, dialect, table.id).some(item => item.columnIds.every(id => sourceIds.has(id))));
   const pk = document.catalog.constraints.find(item => item.kind === 'pk' && item.tableId === table.id);
   const pkColumns = pk?.kind === 'pk' ? pk.columnIds : [];
+  const includedInPk = Boolean(key && mapping.every(pair => pkColumns.includes(pair.sourceColumnId)));
   const nextPk = [...new Set([...pkColumns, ...sourceIds])];
   const pkChanges = identify && nextPk.length !== pkColumns.length;
   const introducesUnique = pkChanges && nextPk.every(id => sourceIds.has(id));
@@ -132,16 +186,19 @@ function ForeignKeyFields({ document, dialect, seed, table, parent, size, run, c
   const namesOnTable = new Set(document.catalog.constraints.filter(item => item.tableId === table.id && item.id !== keyId).map(item => item.physicalName));
   const suggestedName = availableName(table.physicalName + '_' + parent.physicalName + '_fk', new Set(namesOnTable));
   const enums = new Map(document.catalog.enums.map(item => [item.id, item.physicalName]));
-  if (!keys.length) return <p role="alert">{seed.targetColumnId ? '선택한 부모 컬럼에 PK 또는 UNIQUE가 필요합니다.' :
-    '참조 테이블에서 사용할 수 있는 PK 또는 UNIQUE 키가 없습니다.'}</p>;
+  const parentColumn = seed.parentColumnId ? parentColumns.get(seed.parentColumnId) : undefined;
+  const parentName = relationshipTableName(document, parent);
+  if (!keys.length) return <p role="alert">{parentColumn
+    ? `${parentName}.${parentColumn.physicalName} 컬럼에 PK 또는 UNIQUE가 필요합니다.`
+    : `${parentName} 테이블에 참조할 수 있는 PK 또는 UNIQUE가 필요합니다.`}</p>;
 
-  return <Form cancel={close} button="관계 적용" submit={form => {
+  return <Form cancel={close} button={existing ? '외래 키 저장' : '외래 키 생성'} submit={form => {
     if (!key || duplicate || validation.length || sizeProblem) {
       setError('참조 키와 자식 컬럼을 확인하세요.');
       return;
     }
     const names = named(form);
-    names.physicalName = names.physicalName || seed.existing?.physicalName || suggestedName;
+    names.physicalName = names.physicalName || existing?.physicalName || suggestedName;
     if (!validPhysicalName(names.physicalName) || namesOnTable.has(names.physicalName)) {
       setError('자식 테이블에서 중복되지 않는 FK 물리명을 UTF-8 기준 1~63바이트로 입력하세요.');
       return;
@@ -175,29 +232,32 @@ function ForeignKeyFields({ document, dialect, seed, table, parent, size, run, c
     if (needsUnique) commands.push({ kind: 'put-catalog', collection: 'constraints', value: {
       id: id(), tableId: table.id, kind: 'unique', physicalName: availableName(names.physicalName + '_unique', keyNames), columnIds: [...sourceIds],
     } });
-    commands.push({ kind: 'put-catalog', collection: 'constraints', value: { ...seed.existing, ...key, ...names, onDelete, onUpdate } });
+    commands.push({ kind: 'put-catalog', collection: 'constraints', value: { ...existing, ...key, ...names, onDelete, onUpdate } });
     setError('');
     if (run({ kind: 'batch', commands }, setError)) close();
   }}>
     <KeySelect label="참조 후보키" keys={keys} columns={parentColumns} selected={chosen} select={value => { setChosen(value); setError(''); }} />
-    {options.map(({ column, value, name, mapping: pair }, index) => <label key={column.id}>
-      {index + 1}. {label(column)}에 대응할 자식 컬럼
-      <select required value={value} onChange={event => { setPairs({ ...pairs, [column.id]: event.target.value }); setError(''); }}>
-        <option value="">컬럼 선택</option>
-        <option value={newColumnChoice}>새 컬럼 · {name}</option>
-        {childColumns.map(item => <option key={item.id} value={item.id}>{label(item)}</option>)}
-      </select>
-      {value && <small className="muted">{value === newColumnChoice ? '생성 · ' + columnTypeLabel(column.type, enums) : '기존 컬럼 사용'}
-        {value !== newColumnChoice && !childColumns.some(item => item.id === pair.sourceColumnId) && ' · 컬럼을 다시 선택하세요'}</small>}
-    </label>)}
-    {key && <p className="relationship-changes">{[added.length && '새 컬럼 ' + added.length + '개', !seed.existing && '외래 키 1개',
-      needsUnique && 'UNIQUE 1개', pkChanges && '자식 기본키 변경'].filter(Boolean).join(' · ') || '외래 키 설정 변경'}</p>}
-    <details className="relationship-details"><summary>상세 설정</summary>
-      <NameFields value={seed.existing ?? { physicalName: suggestedName }} />
-      <label className="checkbox"><input type="checkbox" checked={identify} onChange={event => { setIdentify(event.target.checked); setError(''); }} />
+    <section className="relationship-preview" aria-label="적용 미리보기">
+      <strong>적용 미리보기</strong>
+      {options.map(({ column, value, name }) => <label key={column.id}>
+        <span><code>{label(column)}</code> → 자식 컬럼</span>
+        <select required value={value} onChange={event => { setPairs({ ...pairs, [column.id]: event.target.value }); setError(''); }}>
+          <option value="">컬럼 선택</option>
+          <option value={newColumnChoice}>새 컬럼 · {name}</option>
+          {childColumns.map(item => <option key={item.id} value={item.id}>{label(item)}</option>)}
+        </select>
+        {value && <small className="muted">{value === newColumnChoice ? '생성 · ' + columnTypeLabel(column.type, enums) : '기존 컬럼 사용'}</small>}
+      </label>)}
+      {key && <p>{[added.length && '새 컬럼 ' + added.length + '개', !existing && '외래 키 1개',
+        needsUnique && 'UNIQUE 1개', pkChanges && '자식 기본키 변경'].filter(Boolean).join(' · ') || '외래 키 설정 변경'}</p>}
+    </section>
+    <details className="relationship-details"><summary>고급 설정</summary>
+      <NameFields value={existing ?? { physicalName: suggestedName }} />
+      <label className="checkbox"><input type="checkbox" checked={identify || includedInPk} disabled={includedInPk}
+        onChange={event => { setIdentify(event.target.checked); setError(''); }} />
         자식 기본키에 포함</label>
       {(['onDelete', 'onUpdate'] as const).map(action => <label key={action}>{action === 'onDelete' ? 'ON DELETE' : 'ON UPDATE'}
-        <select name={action} defaultValue={seed.existing?.[action] ?? ''}>
+        <select name={action} defaultValue={existing?.[action] ?? ''}>
           <option value="">기본 동작</option>
           {dialect.actions.map(item => <option key={item} value={item}>{item.toUpperCase().replace('-', ' ')}</option>)}
         </select>
@@ -210,11 +270,13 @@ function ForeignKeyFields({ document, dialect, seed, table, parent, size, run, c
   </Form>;
 }
 
-function JoinTableForm({ document, view, dialect, left, right, run, close }: {
+function JoinTableForm({ document, view, dialect, left, right, leftColumnId, rightColumnId, run, close }: {
   document: ErdDocument; view?: View; dialect: EditorDialect; left: Table; right: Table; run: QuickRun; close(): void;
+  leftColumnId?: string; rightColumnId?: string;
 }) {
   const sides = [left, right];
-  const eligible = sides.map(side => eligibleKeys(document, dialect, side.id));
+  const anchors = [leftColumnId, rightColumnId];
+  const eligible = sides.map((side, index) => eligibleKeys(document, dialect, side.id, anchors[index]));
   const [chosen, setChosen] = useState(() => eligible.map(keys => keys[0]?.key.id ?? ''));
   const [tableId] = useState(id);
   const [error, setError] = useState('');
@@ -233,10 +295,15 @@ function JoinTableForm({ document, view, dialect, left, right, run, close }: {
     });
     return [{ side, index, key, columns, mapped }];
   });
-  if (plans.length !== 2) return <p role="alert">N:N 연결에는 두 테이블 모두 참조할 수 있는 PK 또는 UNIQUE 키가 필요합니다.</p>;
+  if (plans.length !== 2) return <>{sides.map((side, index) => {
+    if (eligible[index].length) return null;
+    const column = document.catalog.columns.find(item => item.id === anchors[index]);
+    const name = relationshipTableName(document, side);
+    return <p key={index} role="alert">{column ? `${name}.${column.physicalName} 컬럼` : `${name} 테이블`}에 참조할 수 있는 PK 또는 UNIQUE가 필요합니다.</p>;
+  })}</>;
   const columns = plans.flatMap(plan => plan.mapped.map(item => item.column));
   const enums = new Map(document.catalog.enums.map(item => [item.id, item.physicalName]));
-  return <Form cancel={close} button="관계 적용" submit={() => {
+  return <Form cancel={close} button="연결 테이블 생성" submit={() => {
     if (!validPhysicalName(name) || tableNames.has(name)) {
       setError('스키마에서 중복되지 않는 연결 테이블 이름을 UTF-8 기준 1~63바이트로 입력하세요.');
       return;
@@ -258,15 +325,18 @@ function JoinTableForm({ document, view, dialect, left, right, run, close }: {
     if (view) commands.push(putView({ ...view, instances: [...view.instances, placement(view, tableId)] }));
     if (run({ kind: 'batch', commands }, setError)) close();
   }}>
-    {plans.map(({ side, index, key, columns, mapped }) => <div key={index} className="relationship-join-side">
-      <KeySelect label={index === 0 ? '첫 번째 참조 키' : '두 번째 참조 키'} keys={eligible[index]} columns={columns} selected={key.key.id}
-        select={value => { setChosen(current => current.map((item, i) => i === index ? value : item)); setError(''); }} />
-      <p><Icon name="link" /> {side.physicalName}</p>
-      <ul>{mapped.map(item => <li key={item.column.id}>{item.column.physicalName} · {columnTypeLabel(item.column.type, enums)}
-        {' → '}{columns.get(item.targetColumnId)?.physicalName}</li>)}</ul>
-    </div>)}
     <label>연결 테이블 이름<input value={name} onChange={event => { setName(event.target.value); setError(''); }} required /></label>
-    <p className="relationship-changes">연결 테이블 1개 · 외래 키 2개 · 연결 컬럼으로 구성한 복합 기본키</p>
+    <section className="relationship-preview" aria-label="적용 미리보기">
+      <strong>적용 미리보기</strong>
+      {plans.map(({ side, index, key, columns, mapped }) => <div key={index} className="relationship-join-side">
+        <KeySelect label={index === 0 ? '첫 번째 참조 키' : '두 번째 참조 키'} keys={eligible[index]} columns={columns} selected={key.key.id}
+          select={value => { setChosen(current => current.map((item, i) => i === index ? value : item)); setError(''); }} />
+        <p><Icon name="link" /> {relationshipTableName(document, side)}</p>
+        <ul>{mapped.map(item => <li key={item.column.id}>{columns.get(item.targetColumnId)?.physicalName}
+          {' → '}{item.column.physicalName} · {columnTypeLabel(item.column.type, enums)}</li>)}</ul>
+      </div>)}
+      <p>연결 테이블 1개 · 외래 키 2개 · 연결 컬럼으로 구성한 복합 기본키</p>
+    </section>
     {error && <p role="alert">{error}</p>}
   </Form>;
 }
