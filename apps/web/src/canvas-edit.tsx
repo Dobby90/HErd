@@ -22,6 +22,7 @@ export const CanvasEditing = createContext<{
   edit?: QuickEdit;
   form?: ReactNode;
   change?(edit: QuickEdit): void;
+  toggleColumns?(instanceId: string): void;
   changeAnnotation?(edit: QuickAnnotationEdit): void;
   resizeGroup?(id: string, bounds: ResizeParams): void;
   remove?(id: string): void;

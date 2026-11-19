@@ -9,8 +9,9 @@ import { ColumnBadges, Icon } from './editor-controls.js';
 import { defaultGroupSize, minGroupSize, secondaryName, viewColumnIds, viewLabel } from './editor-fields.js';
 import { CanvasEditing, canvasFormPosition, dragType } from './canvas-edit.js';
 import { canvasDisplay } from './canvas-display.js';
-import { measureTableWidths } from './canvas-width.js';
+import { measureTableLayout } from './canvas-width.js';
 import { columnTypeLabel } from './schema-edits.js';
+import { arrangeOverlappingTables, overlappingTables } from './view-overlap.js';
 
 type View = ErdDocument['views'][number];
 type CanvasNode = Node<Record<string, unknown> & {
@@ -20,6 +21,11 @@ type CanvasNode = Node<Record<string, unknown> & {
   color?: string;
   tableId?: string;
   highlighted?: boolean;
+  columnCount?: number;
+  columnsCollapsed?: boolean;
+  stackedColumns?: boolean;
+  estimatedHeight?: number;
+  connectedHandles?: Set<string>;
   columns?: Array<{
     id: string; name: string; type?: string; badges: string[]; highlighted?: boolean;
     logicalName?: string; description?: string; defaultSql?: string;
@@ -69,18 +75,22 @@ function CanvasDeleteButton({ label, title = label, remove }: {
     aria-label={label} title={title} onClick={event => { event.stopPropagation(); remove(); }}><Icon name="trash" /></button>;
 }
 
-const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
-  const { activeId, edit, form, change, remove, reorder, link } = useContext(CanvasEditing);
+const TableNode = memo(function TableNode({ id, data, selected }: NodeProps<CanvasNode>) {
+  const { activeId, edit, form, change, toggleColumns, remove, reorder, link } = useContext(CanvasEditing);
   const [dropTarget, setDropTarget] = useState('');
   const editing = edit?.instanceId === id ? edit : undefined;
-  const active = activeId === id;
+  const active = activeId === id || (!activeId && selected);
   const tableId = data.tableId;
   const refresh = useUpdateNodeInternals();
   const handles = data.columns?.map(column =>
     [column.id, Boolean(column.logicalName), Boolean(column.description), Boolean(column.defaultSql)].join(':')).join('|');
   const hasLogicalName = Boolean(data.logicalName);
   const hasDescription = Boolean(data.description);
-  useEffect(() => refresh(id), [handles, hasLogicalName, hasDescription, id, refresh, editing, active]);
+  const stacked = data.stackedColumns;
+  useEffect(() => refresh(id), [handles, hasLogicalName, hasDescription, id, refresh, editing, active, stacked]);
+  const portClass = (handleId: string, kind = '') => `${kind}${data.connectedHandles?.has(handleId) ? ' connected-handle' : ''}`;
+  const showCount = data.columnCount && (data.columnsCollapsed || (active && toggleColumns));
+  const addColumn = active && change && data.columns && !data.columnsCollapsed;
   const editText = (value: string, field: 'table' | 'name' | 'type', columnId?: string) => {
     const open = (event: MouseEvent) => {
       event.stopPropagation();
@@ -92,7 +102,7 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
       onClick={event => { if (event.detail === 0 || window.matchMedia('(pointer: coarse)').matches) open(event); }}
       onDoubleClick={open}>{value}</button> : <span className={'canvas-' + field + '-text'} title={value}>{value}</span>;
   };
-  return <article className={'canvas-table' + (data.highlighted ? ' search-match' : '')}>
+  return <article className={'canvas-table' + (data.highlighted ? ' search-match' : '') + (stacked ? ' stacked-columns' : '')}>
     <strong><Icon name="table" /><span className="canvas-names">{editText(data.label, 'table')}
       {data.logicalName && <span className="canvas-logical-name" title={data.logicalName}>{data.logicalName}</span>}
     </span>
@@ -101,10 +111,10 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
       {link && <button type="button" className="quiet canvas-node-action nodrag nopan" aria-label={data.label + ' 관계 연결 대상 선택'}
         title="연결할 테이블로 선택" onClick={event => { event.stopPropagation(); link(id); }}><Icon name="link" /></button>}
     </strong>
-    <Handle id="table-in" type="target" position={Position.Left} className="table-handle" isConnectable={false} />
-    <Handle id="table-out" type="source" position={Position.Right} className="table-handle" isConnectable={false} />
-    <Handle id="reverse-table-in" type="target" position={Position.Right} className="table-handle route-handle" isConnectable={false} />
-    <Handle id="reverse-table-out" type="source" position={Position.Left} className="table-handle route-handle" isConnectable={false} />
+    <Handle id="table-in" type="target" position={Position.Left} className={portClass('table-in', 'table-handle')} isConnectable={false} />
+    <Handle id="table-out" type="source" position={Position.Right} className={portClass('table-out', 'table-handle')} isConnectable={false} />
+    <Handle id="reverse-table-in" type="target" position={Position.Right} className={portClass('reverse-table-in', 'table-handle route-handle')} isConnectable={false} />
+    <Handle id="reverse-table-out" type="source" position={Position.Left} className={portClass('reverse-table-out', 'table-handle route-handle')} isConnectable={false} />
     {data.description && <p className="canvas-table-comment canvas-metadata-line" title={data.description}>{data.description}</p>}
     {editing?.field === 'table' && form}
     {data.columns?.map((column, index, rows) => <div className="canvas-column-slot" key={column.id}>
@@ -126,7 +136,7 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
           const bounds = event.currentTarget.getBoundingClientRect();
           if (source) reorder(id, source.id, column.id, event.clientY > bounds.top + bounds.height / 2);
         }}>
-      <Handle id={'in:' + column.id} type="target" position={Position.Left} aria-label={column.name + ' 참조점'} />
+      <Handle id={'in:' + column.id} type="target" position={Position.Left} className={portClass('in:' + column.id)} aria-label={column.name + ' 참조점'} />
       {active && reorder && <button type="button" draggable className="quiet canvas-column-grip nodrag nopan" aria-label={column.name + ' 순서 이동'}
         title="드래그 또는 Alt+↑/↓로 순서 이동" onClick={event => event.stopPropagation()} onDragStart={event => {
           event.stopPropagation();
@@ -144,9 +154,9 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
         {column.logicalName && <span className="canvas-logical-name" title={column.logicalName}>{column.logicalName}</span>}
       </span>
       {column.type && editText(column.type, 'type', column.id)}<ColumnBadges values={column.badges} />
-      <Handle id={'out:' + column.id} type="source" position={Position.Right} aria-label={column.name + ' 연결점'} />
-      <Handle id={'reverse-in:' + column.id} type="target" position={Position.Right} className="route-handle" isConnectable={false} />
-      <Handle id={'reverse-out:' + column.id} type="source" position={Position.Left} className="route-handle" isConnectable={false} />
+      <Handle id={'out:' + column.id} type="source" position={Position.Right} className={portClass('out:' + column.id)} aria-label={column.name + ' 연결점'} />
+      <Handle id={'reverse-in:' + column.id} type="target" position={Position.Right} className={portClass('reverse-in:' + column.id, 'route-handle')} isConnectable={false} />
+      <Handle id={'reverse-out:' + column.id} type="source" position={Position.Left} className={portClass('reverse-out:' + column.id, 'route-handle')} isConnectable={false} />
       </div>
       {(column.description || column.defaultSql) && <div className="canvas-column-meta">
         {column.defaultSql && <p className="canvas-metadata-line canvas-default" title={column.defaultSql}><span>DEFAULT </span>{column.defaultSql}</p>}
@@ -154,9 +164,15 @@ const TableNode = memo(function TableNode({ id, data }: NodeProps<CanvasNode>) {
       </div>}
       {editing?.columnId === column.id && form}
     </div>)}
-    {editing && editing.field !== 'table' && !editing.columnId ? form :
-      data.columns && active && change && <button type="button" className="quiet canvas-add-column nodrag nopan" aria-label={data.label + ' 컬럼 추가'}
+    {editing && editing.field !== 'table' && !editing.columnId ? form : (showCount || addColumn) && <div className="canvas-table-actions">
+      {showCount ? toggleColumns ? <button type="button" className="quiet canvas-column-count nodrag nopan" aria-expanded={!data.columnsCollapsed}
+        aria-label={data.label + ` 컬럼 ${data.columnsCollapsed ? '펼치기' : '접기'} (${data.columnCount}개)`}
+        onClick={event => { event.stopPropagation(); toggleColumns(id); }}>
+        <Icon name={data.columnsCollapsed ? 'right' : 'chevron'} />컬럼 {data.columnCount}개</button>
+        : <small>컬럼 {data.columnCount}개 접힘</small> : null}
+      {addColumn && change && <button type="button" className="quiet canvas-add-column nodrag nopan" aria-label={data.label + ' 컬럼 추가'}
         onClick={event => { event.stopPropagation(); change({ instanceId: id, field: 'name' }); }}><Icon name="plus" />컬럼 추가</button>}
+    </div>}
   </article>;
 });
 
@@ -219,7 +235,7 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
   const enums = new Map(document.catalog.enums.map(item => [item.id, item.physicalName]));
   const badges = display.columnBadges ? columnBadgesById(document) : undefined;
   const primary = primaryColumnsByTable(document);
-  const measureWidth = measureTableWidths();
+  const measure = measureTableLayout();
   const full = view.nameDisplay === 'both';
   const titleMode = full ? 'physical' : view.nameDisplay;
   const instances = new Map<string, CanvasNode[]>();
@@ -254,14 +270,20 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
         logicalName: secondaryName(column, view.nameDisplay), description: display.columnComments ? column.description : undefined,
         defaultSql: display.columnDefaults ? column.default?.sql : undefined }];
     });
-    const width = instance.size?.width ?? measureWidth(label, logicalName, rows);
+    const layout = measure(label, logicalName, rows);
+    const width = instance.size?.width ?? layout.width;
+    const stackedColumns = width < layout.rowWidth && Boolean(layout.typeWidth || layout.badgeWidth);
+    const style = { width, '--canvas-type-width': `${layout.typeWidth}px`, '--canvas-badge-width': `${layout.badgeWidth}px` };
+    const estimatedHeight = rows.reduce((height, row) => height + 25 + (row.logicalName ? 15 : 0)
+      + (row.description ? 16 : 0) + (row.defaultSql ? 16 : 0) + (stackedColumns ? 18 : 0),
+    36 + (logicalName ? 15 : 0) + (description ? 20 : 0) + (display.columns && instance.collapsed ? 28 : 0));
     const node: CanvasNode = {
       id: instance.id, type: 'table', position: { x: instance.x, y: instance.y },
-      style: { width }, zIndex: 2,
-      ...(viewportOnly && { initialWidth: width, initialHeight: rows.reduce((height, row) =>
-        height + 25 + (row.logicalName ? 15 : 0) + (row.description ? 16 : 0) + (row.defaultSql ? 16 : 0),
-      36 + (logicalName ? 15 : 0) + (description ? 20 : 0)) }),
-      data: { tableId: table.id, label, logicalName, description, columns: display.columns ? rows : undefined },
+      style, zIndex: 2,
+      ...(viewportOnly && { initialWidth: width, initialHeight: estimatedHeight }),
+      data: { tableId: table.id, label, logicalName, description, estimatedHeight, stackedColumns,
+        columns: display.columns ? rows : undefined, columnsCollapsed: display.columns && instance.collapsed,
+        columnCount: display.columns ? (instance.visibleColumnIds ?? table.columnIds).length : undefined },
     };
     nodes.push(node);
     const copies = instances.get(table.id) ?? [];
@@ -301,11 +323,18 @@ function project(document: ErdDocument, view: View, dialect: EditorDialect | und
       });
     }
   }
+  const nodesById = new Map(nodes.map(node => [node.id, node]));
+  for (const edge of edges) {
+    const source = nodesById.get(edge.source);
+    const target = nodesById.get(edge.target);
+    if (source && edge.sourceHandle) (source.data.connectedHandles ??= new Set()).add(edge.sourceHandle);
+    if (target && edge.targetHandle) (target.data.connectedHandles ??= new Set()).add(edge.targetHandle);
+  }
   return { nodes, edges };
 }
 
 export function EditorCanvas({ document, view, dialect, select, clearSelection, selectInstances, focus, activeTableId, activeRelationId,
-  connect, move, layoutSizes, snap, readOnly, panMode, showMap, mapId, placing, picking, pickId, place, canvasForm, dropTable, instruction, editRelation }: {
+  connect, move, resolveOverlaps, layoutSizes, snap, readOnly, panMode, showMap, mapId, placing, picking, pickId, place, canvasForm, dropTable, instruction, editRelation }: {
   document: ErdDocument; view: View; dialect?: EditorDialect;
   select(id: string): void;
   clearSelection(): void;
@@ -316,6 +345,7 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
   layoutSizes: LayoutSizes;
   connect(sourceColumnId: string, targetColumnId: string): void;
   move(positions: Map<string, XYPosition>): void;
+  resolveOverlaps?(view: View): void;
   snap: boolean;
   readOnly: boolean;
   panMode: boolean;
@@ -333,6 +363,24 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
   const viewportOnly = view.instances.length >= 120;
   const projected = useMemo(() => project(document, view, dialect, viewportOnly), [document, view, dialect, viewportOnly]);
   const [nodes, setNodes] = useState(projected.nodes);
+  const [connecting, setConnecting] = useState(false);
+  const canResolveOverlaps = Boolean(resolveOverlaps) && !connecting;
+  const overlaps = useMemo(() => {
+    if (!canResolveOverlaps || nodes.some(node => node.dragging)) return undefined;
+    const measured = new Map(nodes.map(node => [node.id, node]));
+    const cards = projected.nodes.flatMap(node => {
+      if (node.type !== 'table') return [];
+      const current = measured.get(node.id);
+      const size = current?.style?.width === node.style?.width ? current?.measured : undefined;
+      return [{ id: node.id, ...node.position, width: Number(node.style?.width), height: size?.height ?? node.data.estimatedHeight ?? 36 }];
+    });
+    const ids = overlappingTables(cards);
+    if (!ids.size) return undefined;
+    const notes = view.notes.map(note => ({ x: note.x, y: note.y,
+      width: measured.get(note.id)?.measured?.width ?? note.size?.width ?? 210,
+      height: measured.get(note.id)?.measured?.height ?? note.size?.height ?? Math.max(42, note.text.split('\n').length * 24 + 20) }));
+    return { cards, ids, notes };
+  }, [canResolveOverlaps, nodes, projected.nodes, view.notes]);
   const displayNodes = useMemo(() => nodes.map(node => {
     const className = node.id === pickId ? 'relationship-origin' : activeTableId && node.data.tableId === activeTableId ? 'active-table' : undefined;
     // A selected group stays behind its tables and notes.
@@ -354,7 +402,10 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
     // Large views also need the projected widths of tables outside the viewport.
     for (const node of projected.nodes) {
       if (node.type !== 'table') continue;
-      layoutSizes.set(node.id, { width: Number(node.style?.width), height: layoutSizes.get(node.id)?.height ?? 0 });
+      const width = Number(node.style?.width);
+      const previous = layoutSizes.get(node.id);
+      const measuredHeight = previous?.width === width ? previous.height : 0;
+      layoutSizes.set(node.id, { width, height: Math.max(measuredHeight, node.data.estimatedHeight ?? 36) });
     }
   }, [layoutSizes, projected.nodes]);
   useEffect(() => setNodes(previous => {
@@ -376,7 +427,7 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
   };
   return <ReactFlowProvider initialNodes={projected.nodes} initialEdges={projected.edges} initialMinZoom={0.15} initialMaxZoom={2.5}>
     <div ref={canvas} className="canvas" tabIndex={0} aria-label="캔버스 탐색"
-      data-mode={panMode ? 'pan' : 'select'} data-tool={placing ? 'place' : picking ? 'connect' : undefined}
+      data-mode={panMode ? 'pan' : 'select'} data-tool={placing ? 'place' : picking ? 'connect' : undefined} data-connecting={connecting || picking || undefined}
       onDragOver={event => {
         if (readOnly || panMode || !event.dataTransfer.types.some(type => type === dragType.table || type === dragType.newTable)) return;
         event.preventDefault();
@@ -422,6 +473,7 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
         onSelectionChange={onSelection}
         onEdgeClick={panMode ? undefined : (_, edge) => select(String(edge.data?.objectId ?? ''))}
         onEdgeDoubleClick={panMode ? undefined : (_, edge) => { if (!picking && !placing) editRelation?.(String(edge.data?.objectId ?? '')); }}
+        onConnectStart={() => setConnecting(true)} onConnectEnd={() => setConnecting(false)}
         isValidConnection={connection => Boolean(connection.sourceHandle?.startsWith('out:') && connection.targetHandle?.startsWith('in:'))}
         onConnect={({ sourceHandle, targetHandle }) => {
           if (!readOnly && !panMode && sourceHandle?.startsWith('out:') && targetHandle?.startsWith('in:')) connect(sourceHandle.slice(4), targetHandle.slice(3));
@@ -439,6 +491,11 @@ export function EditorCanvas({ document, view, dialect, select, clearSelection, 
         <Controls showInteractive={false} orientation="horizontal" fitViewOptions={fitOptions} />
       </ReactFlow>
       {instruction}
+      {overlaps && resolveOverlaps && <div className="canvas-overlap-notice">
+        <span role="status">겹친 카드 {overlaps.ids.size}개</span>
+        <button type="button" onClick={() => resolveOverlaps(arrangeOverlappingTables(view, overlaps.cards, overlaps.ids, overlaps.notes))}>
+          겹친 카드 정리</button>
+      </div>}
       {placing && !canvasForm && <button type="button" className="canvas-place-center quiet" onClick={() => {
         const bounds = canvas.current?.getBoundingClientRect();
         if (!bounds) return;

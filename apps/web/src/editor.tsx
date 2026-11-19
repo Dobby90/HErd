@@ -349,6 +349,8 @@ function Properties({ document, view, dialect, selection, run, inspect, fk, remo
           }))}><GroupField view={view} groupId={instance.groupId} />
             <label className="checkbox"><input type="checkbox" name="collapsed" defaultChecked={instance.collapsed} />컬럼 접기</label>
           </Form>
+          {instance.size && <button type="button" onClick={() => run(putView({ ...view, instances: view.instances.map(item =>
+            item.id === instance.id ? { ...item, size: undefined } : item) }))}>자동 너비로 되돌리기</button>}
           <button type="button" onClick={() => {
             run({ kind: 'remove-instance', viewId: view.id, instanceId: instance.id });
             inspect({ type: 'object', id: table.id, tab: 'settings' });
@@ -805,6 +807,9 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
               selectObject(edit.instanceId);
               setQuickEdit(edit);
             } : undefined,
+            toggleColumns: canEditCanvas && !tool && !inline && !annotationForm ? instanceId => run(putView({
+              ...view, instances: view.instances.map(item => item.id === instanceId ? { ...item, collapsed: !item.collapsed } : item),
+            })) : undefined,
             changeAnnotation: canEditCanvas && !tool ? edit => {
               selectObject(edit.instanceId);
               setQuickEdit(edit);
@@ -817,6 +822,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
             <EditorCanvas key={document.id + view.id} document={document} view={view} dialect={dialect} select={chooseCanvasObject}
               clearSelection={() => { inspect(null); setQuickEdit(undefined); }} activeTableId={selectedTableId} activeRelationId={selectedRelation?.id}
               selectInstances={setSelectedInstances} focus={searchFocus} move={move} layoutSizes={layoutSizes.current} snap={snap} readOnly={readOnly}
+              resolveOverlaps={canEditCanvas && !tool && !inline && !annotationForm ? next => run(putView(next)) : undefined}
               panMode={canvasMode === 'pan'}
               showMap={showMap} mapId={mapId} placing={canPlace && tool?.kind === 'place'}
               picking={canEdit && tool?.kind === 'relation'} pickId={canEdit && tool?.kind === 'relation' ? tool.origin?.id : undefined}

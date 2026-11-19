@@ -1,8 +1,8 @@
 type WidthRow = { name: string; logicalName?: string; type?: string; badges: string[] };
 
-export function measureTableWidths() {
+export function measureTableLayout() {
   const context = typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d');
-  if (!context) return () => 195;
+  if (!context) return () => ({ width: 195, rowWidth: 195, typeWidth: 0, badgeWidth: 0 });
 
   const root = getComputedStyle(document.documentElement);
   const rem = parseFloat(root.fontSize) || 16;
@@ -27,16 +27,21 @@ export function measureTableWidths() {
 
   // Reserve space for controls that appear when the table is selected.
   const headerSpace = 2 + 15 + 20 + (1.24 + .8) * rem;
-  const rowSpace = 2 + 15 + (1.14 - .32 + .6) * rem;
+  const rowSpace = 2 + 15 + (1.14 + .56) * rem;
   return (label: string, logicalName: string | undefined, rows: WidthRow[]) => {
-    let width = Math.max(widthOf(label, title), widthOf(logicalName, logical)) + headerSpace;
+    const headerWidth = Math.max(widthOf(label, title), widthOf(logicalName, logical)) + headerSpace;
+    let nameWidth = 0, typeWidth = 0, badgeWidth = 0;
     for (const row of rows) {
       const badges = row.badges.reduce((sum, text) => sum + widthOf(text.toUpperCase(), badge) + 8, 0)
         + Math.max(0, row.badges.length - 1) * .16 * rem;
-      const typeWidth = Math.min(widthOf(row.type, type), 8 * rem);
-      const rowWidth = Math.max(widthOf(row.name, name), widthOf(row.logicalName, logical)) + typeWidth + badges + rowSpace;
-      width = Math.max(width, rowWidth);
+      nameWidth = Math.max(nameWidth, widthOf(row.name, name), widthOf(row.logicalName, logical));
+      typeWidth = Math.max(typeWidth, widthOf(row.type, type));
+      badgeWidth = Math.max(badgeWidth, badges);
     }
-    return Math.max(195, Math.min(640, Math.ceil(width)));
+    typeWidth = Math.ceil(typeWidth);
+    badgeWidth = Math.ceil(badgeWidth);
+    const rowWidth = Math.ceil(nameWidth + typeWidth + badgeWidth + rowSpace);
+    const width = Math.max(195, Math.min(640, Math.ceil(Math.max(headerWidth, rowWidth))));
+    return { width, rowWidth, typeWidth, badgeWidth };
   };
 }

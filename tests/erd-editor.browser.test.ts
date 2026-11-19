@@ -203,6 +203,110 @@ it('shows persisted NULL and NOT NULL badges independently of key badges', async
   });
 }, 60_000);
 
+it('aligns column metadata, restores automatic width, and moves only overlapping cards', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    const document = structuredClone(sampleDocument);
+    const table = document.catalog.tables.find(item => item.id === 'orders')!;
+    table.physicalName = 'customer_subscription_notification_settings';
+    const column = document.catalog.columns.find(item => item.id === 'order-user-id')!;
+    column.physicalName = 'external_customer_subscription_reference_id';
+    document.canvasDisplay = { columnNullability: true };
+    await openEditor(page, origin, document);
+
+    const card = page.locator('[data-id="overview-orders"] .canvas-table');
+    const items = page.locator('[data-id="overview-items"] .canvas-table');
+    const cols = card.locator('.canvas-column');
+    const longName = card.getByRole('button', { name: column.physicalName + ' 이름 편집', exact: true });
+    const cardWidth = () => card.evaluate(node => (node as HTMLElement).offsetWidth);
+    const measured = async () => page.locator('.canvas-table').evaluateAll(cards => cards.map(card => {
+      const bounds = card.getBoundingClientRect();
+      return { x: bounds.x, y: bounds.y, right: bounds.right, bottom: bounds.bottom };
+    }));
+    expect(await cardWidth()).toBe(240);
+    expect(await longName.evaluate(node => node.scrollWidth <= node.clientWidth && (node as HTMLElement).offsetHeight > 25)).toBe(true);
+    const nameBottom = (await longName.boundingBox())!;
+    expect((await cols.first().locator('.column-badges').boundingBox())!.y).toBeGreaterThanOrEqual(nameBottom.y + nameBottom.height);
+    const typePositions = () => cols.locator('.canvas-type-text').evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().x)));
+    expect(new Set(await typePositions()).size).toBe(1);
+
+    await card.locator(':scope > strong > svg').first().click();
+    await tab(page, '이름·배치').click();
+    await inspector(page).getByRole('button', { name: '자동 너비로 되돌리기' }).click();
+    await expect.poll(cardWidth).toBeGreaterThan(300);
+    expect(new Set(await typePositions()).size).toBe(1);
+    const settle = action(page, '겹친 카드 정리');
+    await settle.waitFor();
+    const expanded = (await card.boundingBox())!;
+    expect(expanded.x + expanded.width).toBeGreaterThan((await items.boundingBox())!.x);
+    await expect.poll(async () => (await savedDocument(page)).document.views[0].instances.find(item => item.id === 'overview-orders')!.size,
+      { timeout: 5_000 }).toBeUndefined();
+
+    await settle.click();
+    await settle.waitFor({ state: 'detached' });
+    await expect.poll(async () => (await savedDocument(page)).revision, { timeout: 5_000 }).toBe(3);
+    const view = (await savedDocument(page)).document.views[0];
+    const original = document.views[0];
+    expect(view.instances.filter(item => ['overview-users', 'overview-products'].includes(item.id)))
+      .toEqual(original.instances.filter(item => ['overview-users', 'overview-products'].includes(item.id)));
+    expect(view.notes).toEqual(original.notes);
+    const moved = view.instances.find(item => item.id === 'overview-items')!;
+    const group = view.groups.find(item => item.id === moved.groupId)!;
+    const itemWidth = await items.evaluate(node => (node as HTMLElement).offsetWidth);
+    expect(group.x + group.size!.width).toBeGreaterThanOrEqual(moved.x + itemWidth);
+    const boxes = await measured();
+    expect(boxes.some((a, index) => boxes.slice(index + 1).some(b => a.x < b.right && a.right > b.x && a.y < b.bottom && a.bottom > b.y))).toBe(false);
+
+    await action(page, '실행 취소').click();
+    await settle.waitFor();
+    expect(await cardWidth()).toBeGreaterThan(300);
+  });
+}, 60_000);
+
+it('folds table columns from the card and reveals only connected handles while idle', async () => {
+  await withBrowser(async (context, origin) => {
+    const page = context.pages()[0] ?? await context.newPage();
+    page.setDefaultTimeout(8_000);
+    await openEditor(page, origin);
+    const orders = page.locator('[data-id="overview-orders"] .canvas-table');
+    const products = page.locator('[data-id="overview-products"] .canvas-table');
+    const unused = products.getByLabel('name 연결점', { exact: true });
+    const opacity = () => unused.evaluate(node => Number(getComputedStyle(node).opacity));
+    const connected = orders.locator('.connected-handle').first();
+    expect(await connected.evaluate(node => Number(getComputedStyle(node).opacity))).toBeGreaterThan(0);
+    expect(await opacity()).toBe(0);
+    await products.hover();
+    expect(await opacity()).toBe(1);
+    await page.mouse.move(6, 6);
+    expect(await opacity()).toBe(0);
+    await action(page, '관계 연결').click();
+    await action(page, '논리 관계').click();
+    expect(await opacity()).toBe(1);
+    await page.getByRole('button', { name: '취소', exact: true }).click();
+
+    await orders.locator(':scope > strong > svg').first().click();
+    const names = () => orders.locator('.canvas-name-text').allTextContents();
+    await orders.getByRole('button', { name: 'number 순서 이동' }).dragTo(
+      orders.locator('.canvas-column').filter({ hasText: 'user_id' }), { targetPosition: { x: 100, y: 4 } });
+    await expect.poll(names).toEqual(['number', 'user_id']);
+    await action(page, '실행 취소').click();
+    await expect.poll(names).toEqual(['user_id', 'number']);
+
+    const fold = orders.getByRole('button', { name: 'orders 컬럼 접기 (2개)' });
+    const expand = orders.getByRole('button', { name: 'orders 컬럼 펼치기 (2개)' });
+    expect(await fold.getAttribute('aria-expanded')).toBe('true');
+    await fold.click();
+    await orders.locator('.canvas-column').first().waitFor({ state: 'detached' });
+    expect(await expand.getAttribute('aria-expanded')).toBe('false');
+    expect(await orders.locator('.table-handle.connected-handle').count()).toBeGreaterThan(0);
+    await expect.poll(async () => (await savedDocument(page)).document.views[0].instances[0].collapsed, { timeout: 5_000 }).toBe(true);
+    await page.reload();
+    await expand.click();
+    await expect.poll(() => orders.locator('.canvas-column').count()).toBe(2);
+  });
+}, 60_000);
+
 it('fits visible names, reuses canvas widths for arrangement, and keeps inspector actions accessible', async () => {
   await withBrowser(async (context, origin) => {
     const page = context.pages()[0] ?? await context.newPage();
