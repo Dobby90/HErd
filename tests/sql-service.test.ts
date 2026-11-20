@@ -37,7 +37,8 @@ it('distinguishes certified editing from unregistered, uncertified and unavailab
     expect(capabilities).not.toHaveProperty('diagnostics');
     expect(capabilities).toMatchObject({ enum: { edit: 'not-implemented' }, sequence: { edit: 'not-implemented' }, identity: { edit: 'not-implemented' } });
     expect(capabilities).toMatchObject({
-      namespace: { import: 'supported' }, expressionIndex: { import: 'unsupported' }, partialIndex: { import: 'unsupported' },
+      namespace: { import: 'supported' }, expressionIndex: { import: 'unsupported' },
+      partialIndex: { import: 'supported', export: 'supported' },
     });
     const draft = structuredClone(sampleDocument);
     const column = draft.catalog.columns[0];
