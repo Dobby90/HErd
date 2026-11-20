@@ -91,6 +91,9 @@ function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActio
         destination={{ ...destination, mode: 'append', viewId, viewName: document.views.find(view => view.id === viewId)?.name,
           namespaces: document.catalog.namespaces, savedRevision: async () => (await editor.ensureSaved('테이블을 추가하기')).revision }} />
       <SqlImport projectId={projectId} csrf={csrf} disabled={suspended} onApplied={onImported}
+        destination={{ ...destination, mode: 'change', viewId, namespaces: document.catalog.namespaces,
+          savedRevision: async () => (await editor.ensureSaved('모델을 변경하기')).revision }} />
+      <SqlImport projectId={projectId} csrf={csrf} disabled={suspended} onApplied={onImported}
         destination={{ ...destination, mode: 'replace', savedRevision: async () => (await editor.ensureSaved('모델을 교체하기')).revision }} />
     </>}
     verifyImage={() => apiRequest<void>('/erds/' + entry.id, { method: 'HEAD' })}
@@ -454,7 +457,8 @@ export function Workspace() {
           initialPlacement={applied?.erdId === open.id && applied.revision === open.editor.snapshot().revision ? applied.placement : undefined}
           topActions={<><button type="button" onClick={backToProject}>ERD 목록</button>
             <button type="button" disabled={busy} onClick={logOut}>로그아웃</button></>}
-          onImported={result => reloadAfterReplacement(result.placement ? `추가한 테이블을 리비전 ${result.revision}에 저장했습니다.`
+          onImported={result => reloadAfterReplacement(result.mode === 'change' ? `모델 변경을 리비전 ${result.revision}에 저장했습니다.`
+            : result.placement ? `추가한 테이블을 리비전 ${result.revision}에 저장했습니다.`
             : `리비전 ${result.revision}에 가져오기를 적용했습니다. 교체 전 버전은 서버 이력에 저장되었습니다.`, result)}
           onRestored={(result, synchronized) => reloadAfterReplacement(synchronized ? `서버 리비전 ${result.revision}을 열었습니다.`
             : `복원 결과를 리비전 ${result.revision}으로 저장했습니다. 복원 전 버전은 서버 이력에 저장되었습니다.`)}

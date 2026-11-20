@@ -31,6 +31,7 @@ async function executeSql(job: Claimed, settings: SqlJobSettings, signal: AbortS
   const task = job.kind === 'parse' ? {
     kind: 'parse', jobId: job.id,
     request: { ...job.snapshot, target: job.target, defaultNamespace: job.options.defaultNamespace,
+      allowExistingChanges: job.options.append?.mode === 'change',
       limits: { maxBytes: settings.maxInputBytes ?? defaultSqlInputBytes } } satisfies ParseRequest,
   } : {
     kind: 'generate',

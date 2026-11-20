@@ -8,9 +8,9 @@ import type { SqlInputHandle } from './sql-input.js';
 
 type ApplyMode =
   | { mode: 'create'; name: string }
-  | { mode: 'replace' | 'append'; erdId: string; baseRevision: number };
+  | { mode: 'replace' | 'append' | 'change'; erdId: string; baseRevision: number };
 type Destination = { id: string; target: SqlTarget; savedRevision(): Promise<number> } & (
-  { mode: 'replace' } | { mode: 'append'; viewId?: string; viewName?: string; namespaces: Catalog['namespaces'] }
+  { mode: 'replace' } | { mode: 'append' | 'change'; viewId?: string; viewName?: string; namespaces: Catalog['namespaces'] }
 );
 type Profile = DialectProfile & { maxInputBytes?: number };
 
@@ -47,6 +47,7 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
   const [job, setJob] = useState<ParseSqlJob>();
   const [baseRevision, setBaseRevision] = useState<number>();
   const [confirmed, setConfirmed] = useState(false);
+  const [changesConfirmed, setChangesConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
   const [applying, setApplying] = useState(false);
   const [expired, setExpired] = useState(false);
@@ -57,10 +58,13 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
   const activeJob = useRef<ParseSqlJob | undefined>(undefined);
   const sqlInput = useRef<SqlInputHandle>(null);
   const submit = useRef<{ signature: string; id: string } | undefined>(undefined);
-  const apply = useRef<{ signature: string; jobId: string; body: ApplyMode & { mutationId: string; lossFingerprint?: string } } | undefined>(undefined);
+  const apply = useRef<{ signature: string; jobId: string; body: ApplyMode & {
+    mutationId: string; lossFingerprint?: string; changeFingerprint?: string;
+  } } | undefined>(undefined);
   const jobPath = (id: string) => '/sql/jobs/' + id;
-  const append = destination?.mode === 'append' ? destination : undefined;
-  const heading = append ? 'DDL로 테이블 추가' : destination ? 'DDL로 모델 교체' : 'DDL로 새 ERD 만들기';
+  const append = destination && destination.mode !== 'replace' ? destination : undefined;
+  const changing = append?.mode === 'change';
+  const heading = changing ? 'DDL로 모델 변경' : append ? 'DDL로 테이블 추가' : destination ? 'DDL로 모델 교체' : 'DDL로 새 ERD 만들기';
   const targets = (profiles ?? []).flatMap(profile => profile.versions
     .filter(value => value.capabilities.table?.import === 'supported' &&
       profile.metadata.profiles.some(engine => engine.version === value.version && engine.status === 'certified'))
@@ -68,6 +72,7 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
   const selected = destination?.target ?? targets.find(target => targetKey(target) === choice) ?? targets[0];
   const maxBytes = profiles?.find(profile => profile.metadata.id === selected?.dialectId)?.maxInputBytes ?? 5 * 1024 * 1024;
   const catalog = job?.output?.catalog;
+  const changes = job?.output?.changes ?? [];
   const losses = job?.output?.losses ?? [];
   const missingKey = losses.find(item => item.code === 'missing-foreign-key-table');
   const missingKeyLine = missingKey?.location?.line;
@@ -76,9 +81,10 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
   const problems = diagnostics.filter(item => item.severity !== 'info');
   const working = pending || applying;
   const canApply = !working && !expired && job?.state === 'succeeded' && catalog && (!losses.length || confirmed) &&
+    (!changing || (changesConfirmed && job.output?.changeFingerprint)) &&
     (destination ? baseRevision !== undefined : Boolean(name.trim()));
   const jump = (line: number) => sqlInput.current?.jumpToLine(line);
-  const applyLabel = append && catalog && missingKey ? '제외하고 나머지 추가'
+  const applyLabel = changing ? '확인하고 모델 변경' : append && catalog && missingKey ? '제외하고 나머지 추가'
     : append ? '현재 다이어그램에 테이블 추가' : destination ? '확인하고 모델 교체' : '새 ERD에 적용';
 
   useEffect(() => () => {
@@ -127,6 +133,7 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
     setJob(undefined);
     setBaseRevision(undefined);
     setConfirmed(false);
+    setChangesConfirmed(false);
     setExpired(false);
     setApplyRetry(false);
     setPollError('');
@@ -158,6 +165,7 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
     activeJob.current = undefined;
     setJob(undefined);
     setConfirmed(false);
+    setChangesConfirmed(false);
     setApplyRetry(false);
     apply.current = undefined;
     setExpired(false);
@@ -169,7 +177,7 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
       if (epoch.current !== attempt) return;
       const target = { dialectId: selected.dialectId, engineVersion: selected.engineVersion };
       const payload = { kind: 'parse', target, defaultNamespace: namespace, sql,
-        append: append && { erdId: append.id, baseRevision: revision, viewId: append.viewId } };
+        append: append && { erdId: append.id, baseRevision: revision, viewId: append.viewId, mode: changing ? 'change' : undefined } };
       const signature = JSON.stringify(payload);
       if (submit.current?.signature !== signature) submit.current = { signature, id: crypto.randomUUID() };
       const next = await apiRequest<ParseSqlJob>('/projects/' + projectId + '/sql/jobs', {
@@ -223,7 +231,8 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
         const options: ApplyMode = destination
           ? { mode: destination.mode, erdId: destination.id, baseRevision: baseRevision! }
           : { mode: 'create', name: name.trim() };
-        const body = { ...options, lossFingerprint: job.output?.lossFingerprint };
+        const body = { ...options, lossFingerprint: job.output?.lossFingerprint,
+          changeFingerprint: changing ? job.output?.changeFingerprint : undefined };
         const signature = JSON.stringify([job.id, body]);
         if (apply.current?.signature !== signature) {
           apply.current = { jobId: job.id, signature, body: { ...body, mutationId: crypto.randomUUID() } };
@@ -259,7 +268,8 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
     <button type="button" disabled={disabled} onClick={() => setOpen(true)}>{heading}</button>
     {open && <Modal title={heading} close={close}>
       <section className="sql-import">
-        {append && <p className="muted">추가할 다이어그램 · {append.viewName ?? '기본 다이어그램'}</p>}
+        {changing ? <p className="muted">새 테이블과 기존 테이블에 추가할 컬럼, 제약조건, 인덱스를 분석합니다.</p>
+          : append && <p className="muted">추가할 다이어그램 · {append.viewName ?? '기본 다이어그램'}</p>}
         <fieldset disabled={working}>
           <label>SQL 대상<select value={selected ? targetKey(selected) : ''} disabled={Boolean(destination)}
             onChange={event => { invalidate(); setChoice(event.target.value); }}>
@@ -290,11 +300,27 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
         {!expired && problems.length ? <ul aria-label="분석 오류">{problems.map((item, index) =>
           <li key={index}><SourceLink location={item.location} jump={jump} /> {item.message}</li>)}</ul> : null}
         {!expired && catalog && <>
-          <h3>{append ? '추가할 모델 객체' : '변환 및 이름 해석'}</h3>
+          <h3>{changing ? '모델 변경 미리보기' : append ? '추가할 모델 객체' : '변환 및 이름 해석'}</h3>
           <p>{Object.entries(catalog).map(([kind, items]) => objectLabels[kind as keyof Catalog] + ' ' + items.length).join(' · ')}</p>
           <ul>{catalog.tables.map(table => <li key={table.id}>
             {[...catalog.namespaces, ...(append?.namespaces ?? [])].find(schema => schema.id === table.namespaceId)?.physicalName}.{table.physicalName}
           </li>)}</ul>
+          {changing && changes.map(change => <section key={change.tableId} className="sql-table-change">
+            <h4>{change.schema}.{change.table}</h4>
+            <ul>
+              {change.columns.map(column => <li key={'column-' + column.name}>컬럼 추가 · <code>{column.name}</code>
+                <small><code>{column.type}{column.nullable ? '' : ' NOT NULL'}</code></small>
+              </li>)}
+              {change.constraints.map(key => <li key={'constraint-' + key.name}>
+                {key.kind === 'fk' ? '외래 키' : key.kind.toUpperCase()} 추가 · <code>{key.name}</code>
+                <small><code>{key.detail}</code></small>
+              </li>)}
+              {change.indexes.map(index => <li key={'index-' + index.name}>
+                {index.unique ? 'UNIQUE 인덱스' : '인덱스'} 추가 · <code>{index.name}</code>
+                {index.predicate && <small><code>WHERE {index.predicate}</code></small>}
+              </li>)}
+            </ul>
+          </section>)}
         </>}
         {!expired && job?.output?.statements?.length ? <details>
           <summary>문장별 결과 {job.output.statements.length}개</summary>
@@ -315,7 +341,11 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
           </div>}
         </> : null}
         {catalog && !expired && <>
-          {append
+          {changing ? <>
+            <label className="checkbox"><input type="checkbox" checked={changesConfirmed} disabled={working}
+              onChange={event => setChangesConfirmed(event.target.checked)} />위 모델 변경을 확인하고 적용하겠습니다.</label>
+            <p>변경 전 버전은 서버 이력에 저장됩니다.</p>
+          </> : append
             ? <p>새 테이블을 현재 다이어그램에 배치합니다. 적용 전 버전은 서버 이력에 저장됩니다.</p>
             : destination
             ? <p>적용하면 기존 모델과 배치를 새 모델과 기본 다이어그램로 교체합니다. 교체 전 버전은 서버 이력에 저장됩니다.</p>
@@ -325,7 +355,7 @@ export function SqlImport({ projectId, csrf, destination, disabled, onApplied }:
           </button>
         </>}
         {applying && <p role="status">가져오기 적용 중</p>}
-        {applyRetry && !applying && <button type="button" disabled={Boolean(losses.length && !confirmed)}
+        {applyRetry && !applying && <button type="button" disabled={Boolean((losses.length && !confirmed) || (changing && !changesConfirmed))}
           onClick={() => void applyResult(true)}>같은 요청 다시 적용</button>}
       </section>
     </Modal>}

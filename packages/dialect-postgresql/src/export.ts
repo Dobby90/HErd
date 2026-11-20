@@ -3,6 +3,7 @@ import { documentForSelection } from '@erd/model';
 import type { Catalog, ErdDocument, SqlExpression } from '@erd/model';
 import type { Dependency, Diagnostic, GenerateRequest, PreparedGeneration } from '@erd/sql-contract';
 import { compileExpression } from './expressions.js';
+import type { ExpressionMode } from './expressions.js';
 import { builtinType, identifier, literal, qualified, validText } from './render-sql.js';
 import { canonicalType, constraintBackingIndexes } from './ui.js';
 
@@ -69,7 +70,7 @@ export async function preparePostgresqlExport(request: GenerateRequest): Promise
   const expressions = new Map<string, string>();
   const checked = new Set<string>();
 
-  async function analyze(ownerId: string, table: Table, expression: SqlExpression, mode: 'default' | 'check') {
+  async function analyze(ownerId: string, table: Table, expression: SqlExpression, mode: ExpressionMode) {
     checked.add(ownerId);
     if (expression.invalidated || expression.engineVersion !== request.target.engineVersion ||
         expression.dialectId !== request.target.dialectId) return;
@@ -92,6 +93,9 @@ export async function preparePostgresqlExport(request: GenerateRequest): Promise
       if (constraint.kind === 'check' && !checked.has(constraint.id)) {
         await analyze(constraint.id, tables.get(constraint.tableId)!, constraint.expression, 'check');
       }
+    }
+    for (const index of document.catalog.indexes) {
+      if (index.predicate && !checked.has(index.id)) await analyze(index.id, tables.get(index.tableId)!, index.predicate, 'predicate');
     }
     if (checked.size === before) break;
     document = scoped();
@@ -203,8 +207,8 @@ export async function preparePostgresqlExport(request: GenerateRequest): Promise
     }
   }
   for (const item of catalog.indexes) {
-    if (item.predicate || item.keys.some(key => key.kind !== 'column')) {
-      issue('postgresql-unsupported-index', item.id, '부분 인덱스와 식 인덱스의 DDL 내보내기는 지원하지 않습니다.');
+    if (item.keys.some(key => key.kind !== 'column')) {
+      issue('postgresql-unsupported-index', item.id, '식 인덱스의 DDL 내보내기는 지원하지 않습니다.');
     }
     if (item.keys.length > 32) issue('postgresql-index-key-limit', item.id, '인덱스 키는 최대 32개입니다.');
   }
@@ -247,7 +251,8 @@ export async function preparePostgresqlExport(request: GenerateRequest): Promise
       if (backing.has(item.id)) return;
       const keys = item.keys.flatMap(key => key.kind === 'column' ? [columnName(key.columnId)] : []);
       add('CREATE ' + (item.unique ? 'UNIQUE ' : '') + 'INDEX ' + identifier(item.physicalName) +
-        ' ON ' + tableName(item.tableId) + ' USING btree (' + keys.join(', ') + ')');
+        ' ON ' + tableName(item.tableId) + ' USING btree (' + keys.join(', ') + ')' +
+        (item.predicate ? ' WHERE ' + expressions.get(item.id) : ''));
     }
     for (const item of catalog.indexes) if (requiredIndexes.has(item.id)) createIndex(item);
     for (const item of catalog.constraints) {

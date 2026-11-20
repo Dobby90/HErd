@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { erdDocumentSchema, validateDocumentStructure } from '@erd/model';
 import type { Catalog, ErdDocument, ForeignKey, SqlExpression, SqlTarget } from '@erd/model';
-import type { Diagnostic, ParseRequest, ParseResult, StatementResult } from '@erd/sql-contract';
+import type { Diagnostic, ImportTableChange, ParseRequest, ParseResult, StatementResult } from '@erd/sql-contract';
 import { preparePostgresqlExport } from './export.js';
-import { compileAstExpression } from './expressions.js';
+import { compileAstExpression, LocatedExpressionError } from './expressions.js';
+import type { ExpressionMode } from './expressions.js';
 import { ast, columnType, names, need, nodes, only, optionList, rangeName, requireOption, sequenceSettings, text, UnsupportedDdl } from './import-ast.js';
 import type { Ast } from './import-ast.js';
 import { characterOffset, preprocessSql, sourceLocations, statementRanges, textOffsets } from './import-source.js';
@@ -92,7 +93,7 @@ function plainConstraint(constraint: Ast) {
 function importIndex(entry: Entry) {
   const node = entry.body;
   const keys = nodes(node.indexParams).map(value => ast(value.IndexElem));
-  requireOption(only(node, 'idxname relation accessMethod indexParams unique if_not_exists') && (!node.accessMethod || node.accessMethod === 'btree') &&
+  requireOption(only(node, 'idxname relation accessMethod indexParams unique if_not_exists whereClause') && (!node.accessMethod || node.accessMethod === 'btree') &&
     keys.length > 0 && keys.every(key => only(key, 'name ordering nulls_ordering') && key.name &&
       key.ordering === 'SORTBY_DEFAULT' && key.nulls_ordering === 'SORTBY_NULLS_DEFAULT'), indexKind);
   return keys.map(key => text(key.name));
@@ -122,7 +123,8 @@ class ImportCatalog {
   private readonly ambiguous = new WeakMap<object, Set<string>>();
   private readonly skippedBaseTables = new Set<string>();
 
-  constructor(readonly target: SqlTarget, readonly defaultNamespace: string, private readonly base?: Catalog) {
+  constructor(readonly target: SqlTarget, readonly defaultNamespace: string, private readonly base?: Catalog,
+    private readonly allowExistingChanges = false) {
     this.catalog = base ? structuredClone(base) : blankCatalog();
     this.originalIds = new Set(Object.values(this.catalog).flat().map(item => item.id));
     for (const schema of this.catalog.namespaces) {
@@ -172,8 +174,62 @@ class ImportCatalog {
       indexes: added(indexes), enums: added(enums), sequences: added(sequences) };
   }
 
+  changes(added: Catalog) {
+    const groups = new Map<string, ImportTableChange>();
+    const tables = new Map(this.catalog.tables.map(item => [item.id, item]));
+    const columns = new Map(this.catalog.columns.map(item => [item.id, item.physicalName]));
+    const enums = new Map(this.catalog.enums.map(item => [item.id, item]));
+    const tableName = (id: string) => {
+      const table = tables.get(id)!;
+      return this.schemaNames.get(table.namespaceId) + '.' + table.physicalName;
+    };
+    const groupFor = (id: string) => {
+      if (this.isNew(id)) return;
+      let group = groups.get(id);
+      if (!group) {
+        const table = tables.get(id)!;
+        group = { tableId: id, schema: this.schemaNames.get(table.namespaceId)!, table: table.physicalName,
+          columns: [], constraints: [], indexes: [] };
+        groups.set(id, group);
+      }
+      return group;
+    };
+    for (const column of added.columns) {
+      const group = groupFor(column.tableId);
+      if (!group) continue;
+      const { reference, arrayDimensions, arguments: args } = column.type;
+      const enumeration = reference.kind === 'enum' ? enums.get(reference.enumId) : undefined;
+      const name = reference.kind === 'native' ? reference.name : enumeration?.physicalName ?? 'ENUM';
+      const type = name + (args.length ? '(' + args.join(', ') + ')' : '') + '[]'.repeat(arrayDimensions);
+      group.columns.push({ name: column.physicalName, type, nullable: column.nullable });
+    }
+    for (const key of added.constraints) {
+      const group = groupFor(key.tableId);
+      if (!group) continue;
+      const detail = key.kind === 'check' ? key.expression.sql : key.kind === 'fk'
+        ? '(' + key.pairs.map(pair => columns.get(pair.sourceColumnId)).join(', ') + ') → ' + tableName(key.targetTableId) +
+          ' (' + key.pairs.map(pair => columns.get(pair.targetColumnId)).join(', ') + ')'
+        : key.columnIds.map(id => columns.get(id)).join(', ');
+      group.constraints.push({ name: key.physicalName, kind: key.kind, detail });
+    }
+    for (const index of added.indexes) groupFor(index.tableId)?.indexes.push({
+      name: index.physicalName, unique: index.unique, predicate: index.predicate?.sql,
+    });
+    return [...groups.values()];
+  }
+
   requireNew(item: { id: string; physicalName: string }) {
     if (!this.isNew(item.id)) throw new Error('테이블 추가에서는 기존 객체를 변경할 수 없습니다 (' + item.physicalName + ').');
+  }
+
+  private located<T>(node: Ast, name: string, action: () => T): T {
+    try { return action(); } catch (error) {
+      if (error instanceof Error && !(error instanceof UnsupportedDdl)) {
+        const offset = error instanceof LocatedExpressionError ? error.offset : node.location;
+        if (typeof offset === 'number' && offset >= 0) throw new LocatedExpressionError(name + ' · ' + error.message, offset);
+      }
+      throw error;
+    }
   }
 
   id(entry: Entry) {
@@ -353,57 +409,64 @@ class ImportCatalog {
     const table: Table = { id: this.id(entry), namespaceId: schema.id, physicalName: name, columnIds: [] };
     this.catalog.tables.push(table);
     this.tables.set(key, table);
-    const byName = new Map<string, Column>();
-    this.columns.set(table.id, byName);
+    this.columns.set(table.id, new Map());
     for (const item of elements) {
       if (item.Constraint) {
         this.keys.push({ table, ast: ast(item.Constraint), entry });
         continue;
       }
-      const definition = ast(item.ColumnDef);
-      const name = text(definition.colname);
-      if (byName.has(name)) throw new Error('컬럼 정의가 중복됩니다 (' + name + ').');
-      this.checkReference('type', names(ast(definition.typeName).names), entry);
-      const { descriptor, serialType } = columnType(definition.typeName, path => this.enumType(path, entry));
-      const column: Column = { id: this.id(entry), physicalName: name, tableId: table.id, type: descriptor,
-        nullable: !definition.is_not_null && !serialType };
-      byName.set(name, column);
-      this.catalog.columns.push(column);
-      table.columnIds.push(column.id);
-      if (serialType) {
-        const generated = objectName(table.physicalName, name, 'seq', candidate => {
-          const key = relationKey(schema.physicalName, candidate);
-          return this.sequences.has(key) || this.tables.has(key);
-        });
-        const dataType = serialType as Sequence['dataType'];
-        const sequence: Sequence = { id: this.id(entry), namespaceId: table.namespaceId, physicalName: generated, ownedByColumnId: column.id, dataType };
-        this.sequences.set(relationKey(schema.physicalName, generated), sequence);
-        this.catalog.sequences.push(sequence);
-        column.default = this.expression('pg_catalog.nextval(' + literal(qualified(schema.physicalName, generated)) + '::pg_catalog.regclass)', [sequence.id]);
-      }
-      let nullMode: 'null' | 'not-null' | undefined;
-      for (const wrapper of nodes(definition.constraints)) {
-        const rule = ast(wrapper.Constraint);
-        switch (rule.contype) {
-          case 'CONSTR_NULL':
-          case 'CONSTR_NOTNULL': {
-            const mode = rule.contype === 'CONSTR_NULL' ? 'null' : 'not-null';
-            if (nullMode && nullMode !== mode) throw new Error('NULL과 NOT NULL 정의가 충돌합니다.');
-            nullMode = mode;
-            if (mode === 'null' && (column.identity || serialType)) throw new Error('자동 번호 컬럼에는 명시적 NULL을 지정할 수 없습니다.');
-            column.nullable = mode === 'null';
-            break;
-          }
-          case 'CONSTR_DEFAULT': this.setDefault(table, column, rule.raw_expr, entry); break;
-          case 'CONSTR_IDENTITY':
-            if (nullMode === 'null') throw new Error('IDENTITY와 명시적 NULL 정의가 충돌합니다.');
-            this.identity(column, table, rule);
-            break;
-          default: this.keys.push({ table, ast: rule, entry, inline: column });
-        }
-      }
+      this.addColumn(table, ast(item.ColumnDef), entry);
     }
     return table.id;
+  }
+
+  private addColumn(table: Table, definition: Ast, entry: Entry) {
+    const byName = this.columns.get(table.id)!;
+    const schemaName = this.schemaNames.get(table.namespaceId)!;
+    const name = text(definition.colname);
+    if (byName.has(name)) throw new Error('컬럼 정의가 중복됩니다 (' + name + ').');
+    const typeName = ast(definition.typeName);
+    const { descriptor, serialType } = this.located(typeName, table.physicalName + '.' + name, () => {
+      this.checkReference('type', names(typeName.names), entry);
+      return columnType(typeName, path => this.enumType(path, entry));
+    });
+    const column: Column = { id: this.id(entry), physicalName: name, tableId: table.id, type: descriptor,
+      nullable: !definition.is_not_null && !serialType };
+    byName.set(name, column);
+    this.catalog.columns.push(column);
+    table.columnIds.push(column.id);
+    if (serialType) {
+      const generated = objectName(table.physicalName, name, 'seq', candidate => {
+        const key = relationKey(schemaName, candidate);
+        return this.sequences.has(key) || this.tables.has(key);
+      });
+      const dataType = serialType as Sequence['dataType'];
+      const sequence: Sequence = { id: this.id(entry), namespaceId: table.namespaceId, physicalName: generated, ownedByColumnId: column.id, dataType };
+      this.sequences.set(relationKey(schemaName, generated), sequence);
+      this.catalog.sequences.push(sequence);
+      column.default = this.expression('pg_catalog.nextval(' + literal(qualified(schemaName, generated)) + '::pg_catalog.regclass)', [sequence.id]);
+    }
+    let nullMode: 'null' | 'not-null' | undefined;
+    for (const wrapper of nodes(definition.constraints)) {
+      const rule = ast(wrapper.Constraint);
+      switch (rule.contype) {
+        case 'CONSTR_NULL':
+        case 'CONSTR_NOTNULL': {
+          const mode = rule.contype === 'CONSTR_NULL' ? 'null' : 'not-null';
+          if (nullMode && nullMode !== mode) throw new Error('NULL과 NOT NULL 정의가 충돌합니다.');
+          nullMode = mode;
+          if (mode === 'null' && (column.identity || serialType)) throw new Error('자동 번호 컬럼에는 명시적 NULL을 지정할 수 없습니다.');
+          column.nullable = mode === 'null';
+          break;
+        }
+        case 'CONSTR_DEFAULT': this.setDefault(table, column, rule.raw_expr, entry); break;
+        case 'CONSTR_IDENTITY':
+          if (nullMode === 'null') throw new Error('IDENTITY와 명시적 NULL 정의가 충돌합니다.');
+          this.identity(column, table, rule);
+          break;
+        default: this.keys.push({ table, ast: rule, entry, inline: column });
+      }
+    }
   }
 
   defineIndex(entry: Entry) {
@@ -425,11 +488,12 @@ class ImportCatalog {
         return index === name;
       })
     )) return { skipped: schema + '.' + name + ' 이름의 객체가 이미 있어 인덱스 생성을 건너뜁니다.' };
-    this.requireNew(table);
+    if (!this.allowExistingChanges) this.requireNew(table);
     const ids = columns.map(name => this.column(table, name).id);
     if (this.indexes.has(lookup)) throw new Error('인덱스 이름이 중복됩니다 (' + name + ').');
     const item: Catalog['indexes'][number] = { id: this.id(entry), tableId: table.id, physicalName: name, unique,
       keys: ids.map(columnId => ({ kind: 'column', columnId })) };
+    if (entry.body.whereClause) item.predicate = this.compile(entry.body.whereClause, 'predicate', table, entry, name);
     this.catalog.indexes.push(item);
     this.indexes.set(lookup, item);
     return item.id;
@@ -441,9 +505,16 @@ class ImportCatalog {
     if (commands.length && commands.every(command => command.subtype === 'AT_ChangeOwner')) return 'owner';
     requireOption(node.objtype === 'OBJECT_TABLE' && !node.missing_ok && commands.length > 0, '지원 범위를 벗어난 ALTER TABLE입니다.');
     for (const command of commands) {
-      requireOption(['AT_AddConstraint', 'AT_ColumnDefault', 'AT_SetNotNull', 'AT_AddIdentity', 'AT_SetIdentity'].includes(text(command.subtype)),
+      requireOption(['AT_AddColumn', 'AT_AddConstraint', 'AT_ColumnDefault', 'AT_SetNotNull', 'AT_AddIdentity', 'AT_SetIdentity'].includes(text(command.subtype)),
         '지원 범위를 벗어난 ALTER TABLE 문입니다 (' + text(command.subtype) + ').');
       if (command.subtype === 'AT_AddConstraint' || command.subtype === 'AT_AddIdentity') plainConstraint(ast(ast(command.def).Constraint));
+      if (command.subtype === 'AT_AddColumn') {
+        const definition = ast(ast(command.def).ColumnDef);
+        requireOption(!command.missing_ok && definition.colname &&
+          only(definition, 'colname typeName is_local is_not_null constraints location'),
+        '조건부 컬럼 추가 및 추가 컬럼 옵션은 지원하지 않습니다.');
+        for (const wrapper of nodes(definition.constraints)) plainConstraint(ast(wrapper.Constraint));
+      }
       if (command.subtype === 'AT_ColumnDefault') requireOption(command.def, 'DEFAULT 제거 마이그레이션은 지원하지 않습니다.');
       if (command.subtype === 'AT_SetIdentity') {
         const options = optionList(ast(ast(command.def).List).items);
@@ -451,8 +522,17 @@ class ImportCatalog {
       }
     }
     const table = this.table(rangeName(node.relation), entry);
-    this.requireNew(table);
+    if (!this.isNew(table.id)) {
+      if (!this.allowExistingChanges) this.requireNew(table);
+      if (commands.some(command => !['AT_AddColumn', 'AT_AddConstraint'].includes(text(command.subtype)))) {
+        throw new Error('기존 테이블에서는 컬럼과 제약조건 추가를 지원합니다 (' + table.physicalName + ').');
+      }
+    }
     for (const command of commands) {
+      if (command.subtype === 'AT_AddColumn') {
+        this.addColumn(table, ast(ast(command.def).ColumnDef), entry);
+        continue;
+      }
       if (command.subtype === 'AT_AddConstraint') {
         this.keys.push({ table, ast: ast(ast(command.def).Constraint), entry });
         continue;
@@ -497,6 +577,9 @@ class ImportCatalog {
   key(definition: ImportCatalog['keys'][number]): OmittedForeignKey | undefined {
     const { table, ast: node, entry, inline } = definition;
     const kind = text(node.contype);
+    if (kind === 'CONSTR_PRIMARY' && !this.isNew(table.id)) {
+      throw new Error('기존 테이블의 기본키와 컬럼 NULL 허용 상태는 변경할 수 없습니다 (' + table.physicalName + ').');
+    }
     const byNames = (list: unknown, inline?: Column) => list ? names(list).map(name => this.column(table, name)) : inline ? [inline] : [];
     let columns = kind === 'CONSTR_FOREIGN' ? byNames(node.fk_attrs, inline) : byNames(node.keys, inline);
     const schema = this.schemaNames.get(table.namespaceId)!;
@@ -507,6 +590,8 @@ class ImportCatalog {
       if (!adopted || adopted.tableId !== table.id || !adopted.unique) {
         throw new Error('USING INDEX에는 같은 테이블의 고유 B-tree 인덱스가 필요합니다 (' + adoptedName + ').');
       }
+      this.requireNew(adopted);
+      if (adopted.predicate) throw new Error('부분 인덱스는 PK 또는 UNIQUE 제약조건의 인덱스로 사용할 수 없습니다.');
       const byId = new Map([...this.columns.get(table.id)!.values()].map(column => [column.id, column]));
       columns = adopted.keys.map(key => {
         if (key.kind !== 'column') throw new Error('USING INDEX에서 식 인덱스를 사용할 수 없습니다.');
@@ -543,6 +628,7 @@ class ImportCatalog {
       const path = rangeName(node.pktable);
       const target = path.join('.');
       const referenced = this.find(this.tables, path, entry);
+      if (referenced && this.entries.get(referenced.id)?.result?.status === 'error') return;
       if (!referenced) {
         if (!columns.length || new Set(columns.map(column => column.id)).size !== columns.length ||
           (node.pk_attrs && names(node.pk_attrs).length !== columns.length)) {
@@ -631,9 +717,10 @@ class ImportCatalog {
     return { ...this.target, sql, references, referencesComplete: true };
   }
 
-  compile(value: unknown, mode: 'default' | 'check', table: Table, entry: Entry) {
-    const result = compileAstExpression(value, { mode, table, catalog: this.catalog, schema: this.schemaNames, searchPath: entry.path,
-      checkReference: (kind, path) => this.checkReference(kind, path, entry) });
+  compile(value: unknown, mode: ExpressionMode, table: Table, entry: Entry, name: string) {
+    const result = this.located(ast(Object.values(ast(value))[0]), table.physicalName + '.' + name, () =>
+      compileAstExpression(value, { mode, table, catalog: this.catalog, schema: this.schemaNames, searchPath: entry.path,
+        checkReference: (kind, path) => this.checkReference(kind, path, entry) }));
     return this.expression(result.sql, result.references);
   }
 }
@@ -687,8 +774,9 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
     const { offset, length } = range(raw.stmt_location ?? 0, raw.stmt_len ?? 0);
     return { kind, body: ast(ast(raw.stmt)[kind]), location: locate(offset, length), path: [defaultNamespace], creation: defaultNamespace };
   });
-  const model = new ImportCatalog(target, defaultNamespace, baseCatalog);
+  const model = new ImportCatalog(target, defaultNamespace, baseCatalog, Boolean(baseCatalog && request.allowExistingChanges));
   const losses: Diagnostic[] = [];
+  const locatedDiagnostics: { diagnostic: Diagnostic; offset: number }[] = [];
   function record(entry: Entry, status: StatementResult['status'], message?: string, objectId?: string) {
     entry.result = { kind: entry.kind, location: entry.location, status, message, objectId };
     if (status === 'unsupported') losses.push({ code: 'unsupported-statement', severity: 'warning',
@@ -699,7 +787,9 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
     if (error instanceof UnsupportedDdl) record(entry, 'unsupported', message);
     else {
       record(entry, 'error', message);
-      diagnostics.push(issue('invalid-ddl-definition', message, entry.location));
+      const diagnostic = issue('invalid-ddl-definition', message, entry.location);
+      diagnostics.push(diagnostic);
+      if (error instanceof LocatedExpressionError) locatedDiagnostics.push({ diagnostic, offset: error.offset });
     }
   }
   function run(entry: Entry, convert: () => Conversion) {
@@ -810,8 +900,8 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
     CreateEnumStmt: entry => model.createEnum(entry),
     CreateSeqStmt: entry => model.createSequence(entry),
     CreateStmt: entry => model.createTable(entry),
-    IndexStmt: entry => model.defineIndex(entry),
     AlterTableStmt: entry => model.alterTable(entry),
+    IndexStmt: entry => model.defineIndex(entry),
     AlterSeqStmt: entry => model.alterSequence(entry),
   };
   for (const [kind, convert] of Object.entries(phases)) {
@@ -839,11 +929,11 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
     try { model.setOwner(owner); } catch (error) { reject(owner.entry, error); }
   }
   for (const item of model.defaults.values()) {
-    try { item.column.default = model.compile(item.value, 'default', item.table, item.entry); }
+    try { item.column.default = model.compile(item.value, 'default', item.table, item.entry, item.column.physicalName); }
     catch (error) { reject(item.entry, error); }
   }
   for (const item of model.checks.values()) {
-    try { item.constraint.expression = model.compile(item.value, 'check', item.table, item.entry); }
+    try { item.constraint.expression = model.compile(item.value, 'check', item.table, item.entry, item.constraint.physicalName); }
     catch (error) { reject(item.entry, error); }
   }
   for (const entry of entries) {
@@ -854,8 +944,9 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
   }
   const catalog = model.catalog;
   const output = baseCatalog ? model.additions() : catalog;
-  if (baseCatalog && !output.tables.length && !diagnostics.some(item => item.severity === 'error')) {
-    diagnostics.push(issue('no-new-tables', diagnostics.some(item => item.code === 'existing-table-skipped')
+  const changes = baseCatalog && request.allowExistingChanges ? model.changes(output) : undefined;
+  if (baseCatalog && !output.tables.length && !changes?.length && !diagnostics.some(item => item.severity === 'error')) {
+    diagnostics.push(issue('no-new-tables', changes ? '추가하거나 변경할 테이블이 없습니다.' : diagnostics.some(item => item.code === 'existing-table-skipped')
       ? '현재 다이어그램에 추가할 새 테이블이 없습니다.' : '현재 다이어그램에 추가할 CREATE TABLE 정의가 필요합니다.'));
   } else if (!baseCatalog && !catalog.tables.length && !catalog.sequences.length && !catalog.enums.length && !catalog.namespaces.length) {
     diagnostics.push(issue('no-importable-objects', '변환할 스키마 또는 테이블 관련 객체가 없습니다.'));
@@ -869,7 +960,7 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
       const issues: Diagnostic[] = structure.length ? structure : [
         ...postgresqlEditor.validate(validation.data, { target }),
         ...(await preparePostgresqlExport({ document: validation.data, target,
-          tableIds: baseCatalog ? output.tables.map(table => table.id) : undefined })).diagnostics,
+          tableIds: baseCatalog ? [...output.tables.map(table => table.id), ...(changes?.map(change => change.tableId) ?? [])] : undefined })).diagnostics,
       ];
       for (const problem of issues) {
         if (baseCatalog && !structure.length && problem.objectId && !model.isNew(problem.objectId)) continue;
@@ -880,7 +971,11 @@ export async function importPostgresql(request: ParseRequest): Promise<ParseResu
     }
   }
   const statements = withOrdinals([...controls, ...entries.flatMap(entry => entry.result ? [entry.result] : [])]);
+  if (locatedDiagnostics.length) {
+    const offset = textOffsets(prepared.sql);
+    for (const entry of locatedDiagnostics.sort((a, b) => a.offset - b.offset)) entry.diagnostic.location = locate(offset(entry.offset));
+  }
   losses.sort((a, b) => (a.location?.offset ?? 0) - (b.location?.offset ?? 0));
   if (diagnostics.some(item => item.severity === 'error')) return { status: 'blocked', profile, statements, diagnostics, losses };
-  return { status: 'parsed', profile, catalog: output, statements, diagnostics, losses };
+  return { status: 'parsed', profile, catalog: output, statements, diagnostics, losses, changes };
 }

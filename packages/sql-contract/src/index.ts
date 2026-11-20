@@ -33,6 +33,7 @@ export interface ParseRequest {
   target: SqlTarget;
   defaultNamespace: string;
   baseCatalog?: Catalog;
+  allowExistingChanges?: boolean;
   limits?: ParseLimits;
   signal?: AbortSignal;
 }
@@ -47,7 +48,16 @@ export interface StatementResult {
 export type ParseResult =
   | { status: 'blocked' | 'not-implemented'; diagnostics: Diagnostic[]; profile?: EngineProfile; statements?: StatementResult[]; losses?: Diagnostic[] }
   | { status: 'parsed'; catalog: Catalog; diagnostics: Diagnostic[]; profile: EngineProfile;
-      statements: StatementResult[]; losses: Diagnostic[] };
+      statements: StatementResult[]; losses: Diagnostic[]; changes?: ImportTableChange[] };
+
+export interface ImportTableChange {
+  tableId: string;
+  schema: string;
+  table: string;
+  columns: { name: string; type: string; nullable: boolean }[];
+  constraints: { name: string; kind: Catalog['constraints'][number]['kind']; detail: string }[];
+  indexes: { name: string; unique: boolean; predicate?: string }[];
+}
 
 export interface GenerateRequest {
   document: ErdDocument;
@@ -147,13 +157,15 @@ export interface ParseJobOutput {
   losses?: Diagnostic[];
   catalog?: Catalog;
   lossFingerprint?: string;
+  changes?: ImportTableChange[];
+  changeFingerprint?: string;
 }
 
 export interface ParseSqlJob extends JobStatus {
   kind: 'parse';
   erdId: null;
   revision: null;
-  options: { defaultNamespace: string; append?: { erdId: string; baseRevision: number; viewId?: string } };
+  options: { defaultNamespace: string; append?: { erdId: string; baseRevision: number; viewId?: string; mode?: 'change' } };
   output: ParseJobOutput | null;
 }
 
@@ -163,4 +175,5 @@ export interface ImportApplied {
   revision: number;
   updatedAt: string;
   placement?: { viewId: string; instanceId: string };
+  mode?: 'change';
 }

@@ -7,7 +7,7 @@ import { renameDocument } from './support/editor-ui.js';
 import { withPostgres } from './support/postgres.js';
 import { freePort } from './support/tcp.js';
 
-it('loads UTF-8 SQL, applies a replacement, and confirms omissions in DDL table imports', async () => {
+it('loads UTF-8 SQL and verifies model-change approval alongside DDL table imports', async () => {
   await withPostgres(async cluster => {
     const pool = createDatabase(cluster.connectionString);
     await migrate(pool);
@@ -205,6 +205,48 @@ CREATE INDEX IF NOT EXISTS packages_shipment_idx ON public.packages (shipment_id
         const notice = page.getByText('추가한 테이블을 리비전 6에 저장했습니다.', { exact: true });
         await notice.waitFor();
         await notice.waitFor({ state: 'hidden', timeout: 5000 });
+
+        await button('가져오기').click();
+        await button('DDL로 모델 변경').click();
+        const change = page.getByRole('dialog', { name: 'DDL로 모델 변경' });
+        await change.getByLabel('DDL 입력').fill(`ALTER TABLE public.imported
+  ADD COLUMN confidence double precision,
+  ADD COLUMN details jsonb,
+  ADD COLUMN shipment_id bigint REFERENCES public.shipments (id),
+  ADD CONSTRAINT imported_details_ck CHECK (CASE WHEN details IS NULL
+    THEN num_nonnulls(confidence) = 0 ELSE jsonb_typeof(details) = 'object' END);
+CREATE UNIQUE INDEX imported_confidence_uq ON public.imported (confidence) WHERE confidence IS NOT NULL;`);
+        const submittedChange = page.waitForResponse(response => response.url().endsWith('/sql/jobs') && response.request().method() === 'POST');
+        await change.getByRole('button', { name: 'DDL 분석' }).click();
+        const changeJob = await (await submittedChange).json();
+        await change.getByRole('heading', { name: '모델 변경 미리보기' }).waitFor();
+        await change.getByRole('heading', { name: 'public.imported' }).waitFor();
+        const tableChanges = change.locator('.sql-table-change');
+        await tableChanges.getByText('imported_details_ck', { exact: true }).waitFor();
+        await tableChanges.getByText('imported_shipment_id_fkey', { exact: true }).waitFor();
+        await tableChanges.getByText(/WHERE.*confidence.*IS NOT NULL/).waitFor();
+        const applyChange = change.getByRole('button', { name: '확인하고 모델 변경' });
+        expect(await applyChange.isDisabled()).toBe(true);
+        expect(await (await page.request.post('/api/sql/jobs/' + changeJob.id + '/apply', {
+          headers: { origin, 'x-csrf-token': me.csrfToken },
+          data: { mode: 'change', erdId, baseRevision: 6, mutationId: randomUUID() },
+        })).json()).toMatchObject({ code: 'SQL_CHANGE_CONFIRMATION_REQUIRED' });
+        expect((await document()).document).toEqual(appended);
+        await change.getByLabel('위 모델 변경을 확인하고 적용하겠습니다.').check();
+        await applyChange.click();
+        await page.getByText('서버 저장됨 · 리비전 7', { exact: true }).waitFor();
+        const changed = (await document()).document;
+        expect(changed.views).toEqual(appended.views);
+        expect(changed.catalog.tables).toHaveLength(appended.catalog.tables.length);
+        expect(changed.catalog.tables[0].columnIds.slice(0, sourceTable.columnIds.length)).toEqual(sourceTable.columnIds);
+        expect(changed.catalog.columns).toEqual(expect.arrayContaining([
+          expect.objectContaining({ tableId: sourceTable.id, physicalName: 'confidence' }),
+        ]));
+        expect(changed.catalog.indexes).toEqual(expect.arrayContaining([
+          expect.objectContaining({ physicalName: 'imported_confidence_uq', predicate: expect.objectContaining({ sql: expect.stringContaining('IS NOT NULL') }) }),
+        ]));
+        expect((await pool.query("SELECT description FROM erd_revisions WHERE erd_id = $1 AND source_revision = 6", [erdId])).rows)
+          .toContainEqual({ description: 'DDL 모델 변경 전' });
         await button('ERD 목록').click();
         await page.locator('.thumbnail-box').first().waitFor();
         const thumbnail = await page.request.get('/api/erds/' + erdId + '/thumbnail');

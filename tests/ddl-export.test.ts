@@ -20,7 +20,7 @@ it('blocks unsupported options, types, indexes, and unverified selections withou
     status: 'blocked', diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'unknown-extension', objectId: 'a-self' })]),
   });
   serialized.catalog.constraints[3].extensions = undefined;
-  serialized.catalog.indexes[1].predicate = { ...exportTarget, sql: 'TRUE' };
+  serialized.catalog.indexes[1].keys = [{ kind: 'expression', expression: { ...exportTarget, sql: '1' } }];
   const blocked = await service.generate({ document: serialized, target: exportTarget, tableIds: ['b'] });
   expect(blocked).not.toHaveProperty('sql');
   expect(blocked).toMatchObject({ status: 'blocked', diagnostics: expect.arrayContaining([

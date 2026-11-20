@@ -13,6 +13,7 @@ export function literal(value: string) {
 type Type = Catalog['columns'][number]['type'];
 const systemNames = new Map([
   ['smallint', 'int2'], ['integer', 'int4'], ['bigint', 'int8'], ['boolean', 'bool'],
+  ['real', 'float4'], ['double precision', 'float8'],
 ]);
 
 export function builtinType(name: string, args: Type['arguments'], dimensions: number, namespace?: string) {

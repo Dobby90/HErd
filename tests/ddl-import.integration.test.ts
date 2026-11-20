@@ -5,6 +5,38 @@ import { createSqlRegistry } from '../apps/api/src/sql-registry.js';
 import { exportTarget } from '../packages/test-fixtures/src/ddl-export.js';
 import { withPostgres } from './support/postgres.js';
 
+it('recreates floating-point columns, expanded checks, and partial unique indexes with their predicates', async () => {
+  const service = new SqlService(createSqlRegistry());
+  const sql = `CREATE TABLE reading (
+    amount double precision CHECK (amount > '-Infinity'::float8),
+    time timestamp CHECK (time = date_trunc('minute', time)),
+    sources integer[] CHECK (cardinality(sources) < 10),
+    details jsonb,
+    enabled boolean,
+    CHECK (CASE WHEN enabled THEN num_nonnulls(amount, details) = 2 AND jsonb_typeof(details) = 'object' ELSE true END)
+  );
+  CREATE UNIQUE INDEX reading_amount_uq ON reading (amount) WHERE enabled;`;
+  const result = await service.parse({ sql, target: exportTarget, defaultNamespace: 'public' });
+  if (result.status !== 'parsed') throw new Error(JSON.stringify(result.diagnostics));
+  expect(result.losses).toEqual([]);
+  expect(result.catalog.indexes[0].predicate?.references).toEqual([result.catalog.columns[4].id]);
+  const native = result.catalog.columns[0].type.reference;
+  expect(native).toMatchObject({ kind: 'native', name: 'double precision' });
+  const document = { id: 'reading', name: 'Reading', formatVersion: 1 as const, target: exportTarget,
+    catalog: result.catalog, views: [], relationships: [], extensions: [] };
+  const generated = await service.generate({ document, target: exportTarget });
+  if (generated.status !== 'generated') throw new Error(JSON.stringify(generated.diagnostics));
+  await withPostgres(async cluster => {
+    cluster.query(generated.sql);
+    expect(cluster.query("SELECT pg_get_expr(indpred, indrelid) FROM pg_index WHERE indexrelid = 'reading_amount_uq'::regclass")).toBe('enabled');
+    expect(cluster.query(`INSERT INTO reading(amount,enabled) VALUES (1,false),(1,false);
+      INSERT INTO reading(amount,details,enabled) VALUES (1,'{}',true);
+      SELECT count(*) FROM reading;`)).toMatch(/3$/);
+    expect(() => cluster.query("INSERT INTO reading(amount,details,enabled) VALUES (1,'{}',true)")).toThrow(/duplicate key/);
+    expect(() => cluster.query("INSERT INTO reading(amount,details,enabled) VALUES (2,'[]',true)")).toThrow(/check constraint/);
+  });
+});
+
 it('imports the archived and freshly generated PostgreSQL 17 dumps and recreates the fixture schema', async () => {
   const service = new SqlService(createSqlRegistry());
   const parse = async (sql: string) => {

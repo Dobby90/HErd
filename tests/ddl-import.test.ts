@@ -6,6 +6,22 @@ import { exportDocument, exportTarget } from '../packages/test-fixtures/src/ddl-
 const service = new SqlService(createSqlRegistry());
 const parse = (sql: string, defaultNamespace = 'public') => service.parse({ sql, defaultNamespace, target: exportTarget });
 
+it('reports an unsupported column type or CHECK function at its own source location', async () => {
+  const sql = `-- 한글 😀
+CREATE TABLE metrics (
+  amount missing_type,
+  CONSTRAINT metrics_ck CHECK (
+    unknown_check(amount) = 1
+  )
+);`;
+  expect(await parse(sql)).toMatchObject({ status: 'blocked', diagnostics: [
+    { location: { line: 3, column: 10 }, message: expect.stringContaining('metrics.amount') },
+  ] });
+  expect(await parse(sql.replace('missing_type', 'float8'))).toMatchObject({ status: 'blocked', diagnostics: [
+    { location: { line: 5, column: 5 }, message: expect.stringContaining('metrics.metrics_ck · 지원 범위 밖의 함수 또는 인수입니다 (unknown_check)') },
+  ] });
+});
+
 it('reports only missing-table foreign keys at the exact source line and verifies the remaining model', async () => {
   const sql = `-- 한글과 😀가 포함된 입력
 CREATE TABLE parent (id integer PRIMARY KEY);

@@ -5,7 +5,8 @@ import { canonicalType, postgresqlTypes } from './ui.js';
 type Node = Record<string, unknown>;
 type Item = Catalog['enums'][number] | Catalog['sequences'][number];
 type Value = { sql: string; truth: boolean | 'unknown' };
-type Context = { mode: 'default' | 'check'; table: Catalog['tables'][number]; catalog: Catalog; schema: Map<string, string>; searchPath?: readonly string[];
+export type ExpressionMode = 'default' | 'check' | 'predicate';
+type Context = { mode: ExpressionMode; table: Catalog['tables'][number]; catalog: Catalog; schema: Map<string, string>; searchPath?: readonly string[];
   checkReference?(kind: 'type' | 'function' | 'operator', path: string[]): void;
 };
 
@@ -28,14 +29,19 @@ const functions = new Map([
   ['gen_random_uuid', [0]], ['now', [0]], ['transaction_timestamp', [0]], ['statement_timestamp', [0]],
   ['clock_timestamp', [0]], ['lower', [1]], ['upper', [1]], ['length', [1]], ['abs', [1]], ['round', [1, 2]],
   ['btrim', [1, 2]], ['jsonb_build_object', null], ['jsonb_build_array', null],
+  ['date_trunc', [2, 3]], ['cardinality', [1]], ['num_nonnulls', null], ['jsonb_typeof', [1]],
 ] as const);
+const predicateFunctions = new Set(['lower', 'upper', 'length', 'abs', 'round', 'btrim', 'cardinality', 'num_nonnulls', 'jsonb_typeof']);
 const clock = new Map([
   ['SVFOP_CURRENT_DATE', 'CURRENT_DATE'], ['SVFOP_CURRENT_TIME', 'CURRENT_TIME'], ['SVFOP_CURRENT_TIME_N', 'CURRENT_TIME'],
   ['SVFOP_CURRENT_TIMESTAMP', 'CURRENT_TIMESTAMP'], ['SVFOP_CURRENT_TIMESTAMP_N', 'CURRENT_TIMESTAMP'],
   ['SVFOP_LOCALTIME', 'LOCALTIME'], ['SVFOP_LOCALTIME_N', 'LOCALTIME'],
   ['SVFOP_LOCALTIMESTAMP', 'LOCALTIMESTAMP'], ['SVFOP_LOCALTIMESTAMP_N', 'LOCALTIMESTAMP'],
 ]);
-const unsupported = () => new Error('지원하는 DEFAULT·CHECK 식 문법을 사용하세요.');
+const unsupported = () => new Error('지원하는 PostgreSQL 식 문법을 사용하세요.');
+export class LocatedExpressionError extends Error {
+  constructor(message: string, readonly offset: number) { super(message); }
+}
 const requireTruth = (item: Value) => {
   if (item.truth === false) throw new Error('CHECK 조건에는 불리언 식이 필요합니다.');
   return item.sql;
@@ -85,12 +91,23 @@ export function compileAstExpression(input: unknown, context: Context) {
   function render(input: unknown, depth: number): Value {
     if (depth > 128) throw new Error('SQL 식의 중첩 깊이가 너무 큽니다.');
     const expression = node(input);
-    const child = (input: unknown) => render(input, depth + 1);
-    const children = (input: unknown) => list(input).map(child);
     const kinds = Object.keys(expression);
     if (kinds.length !== 1) throw unsupported();
     const kind = kinds[0];
     const part = node(expression[kind]);
+    try {
+      return renderPart(kind, part, depth);
+    } catch (error) {
+      if (error instanceof Error && !(error instanceof LocatedExpressionError) && typeof part.location === 'number' && part.location >= 0) {
+        throw new LocatedExpressionError(error.message, part.location);
+      }
+      throw error;
+    }
+  }
+
+  function renderPart(kind: string, part: Node, depth: number): Value {
+    const child = (input: unknown) => render(input, depth + 1);
+    const children = (input: unknown) => list(input).map(child);
     switch (kind) {
       case 'A_Const': {
         if (part.isnull) return value('NULL');
@@ -108,9 +125,9 @@ export function compileAstExpression(input: unknown, context: Context) {
         const fields = names(part.fields);
         const prefix = fields.slice(0, -1);
         const column = catalog.columns.find(column => column.tableId === table.id && column.physicalName === fields.at(-1));
-        if (mode !== 'check' || !column || (prefix.length && prefix.at(-1) !== table.physicalName) ||
+        if (mode === 'default' || !column || (prefix.length && prefix.at(-1) !== table.physicalName) ||
             prefix.length > 2 || (prefix.length === 2 && prefix[0] !== schema.get(table.namespaceId))) {
-          throw new Error('CHECK에서는 같은 테이블의 컬럼을 참조하세요. DEFAULT에는 컬럼 참조를 사용할 수 없습니다.');
+          throw new Error('같은 테이블의 컬럼을 참조하세요. DEFAULT에는 컬럼 참조를 사용할 수 없습니다.');
         }
         references.add(column.id);
         const type = column.type.reference;
@@ -162,13 +179,16 @@ export function compileAstExpression(input: unknown, context: Context) {
         }
         const arity = functions.get(name as Parameters<typeof functions.get>[0]);
         if (arity === undefined || (arity && !(arity as readonly number[]).includes(args.length)) ||
-            (name === 'jsonb_build_object' && args.length % 2 !== 0)) throw unsupported();
+            (name === 'jsonb_build_object' && args.length % 2 !== 0) || (name === 'num_nonnulls' && !args.length) ||
+            (mode === 'predicate' && !predicateFunctions.has(name))) {
+          throw new Error('지원 범위 밖의 함수 또는 인수입니다 (' + path.join('.') + ').');
+        }
         return value(qualified('pg_catalog', name) + '(' + args.map(item => child(item).sql).join(', ') + ')', false);
       }
       case 'SQLValueFunction': {
         const keyword = clock.get(String(part.op));
         const precision = part.op && String(part.op).endsWith('_N') ? Number(part.typmod ?? 0) : -1;
-        if (!keyword || precision > 6) throw unsupported();
+        if (!keyword || precision > 6 || mode === 'predicate') throw unsupported();
         return value(keyword + (precision >= 0 ? '(' + precision + ')' : ''), false);
       }
       case 'BoolExpr': {
@@ -191,6 +211,20 @@ export function compileAstExpression(input: unknown, context: Context) {
       case 'CoalesceExpr': {
         const args = children(part.args);
         return value('COALESCE(' + args.map(item => item.sql).join(', ') + ')', args.some(item => item.truth === false) ? false : 'unknown');
+      }
+      case 'CaseExpr': {
+        const subject = part.arg ? child(part.arg).sql : undefined;
+        const branches = list(part.args).map(item => {
+          const branch = node(node(item).CaseWhen);
+          const condition = child(branch.expr);
+          return { when: subject === undefined ? requireTruth(condition) : condition.sql, then: child(branch.result) };
+        });
+        if (!branches.length) throw unsupported();
+        const fallback = part.defresult ? child(part.defresult) : undefined;
+        const results = [...branches.map(branch => branch.then), ...(fallback ? [fallback] : [])];
+        return value('(CASE ' + (subject === undefined ? '' : subject + ' ') +
+          branches.map(branch => 'WHEN ' + branch.when + ' THEN ' + branch.then.sql).join(' ') +
+          (fallback ? ' ELSE ' + fallback.sql : '') + ' END)', results.every(result => result.truth === false) ? false : 'unknown');
       }
       case 'A_Expr': {
         const [operator, extra] = names(part.name);
@@ -229,5 +263,5 @@ export function compileAstExpression(input: unknown, context: Context) {
   }
 
   const rendered = render(input, 0);
-  return { sql: mode === 'check' ? requireTruth(rendered) : rendered.sql, references: [...references] };
+  return { sql: mode === 'default' ? rendered.sql : requireTruth(rendered), references: [...references] };
 }

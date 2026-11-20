@@ -36,19 +36,28 @@ function draft(catalog: Catalog, target: SqlTarget, id: string, name: string): E
   return duplicateDocument(candidate, id, name);
 }
 
-function appendTables(document: ErdDocument, added: Catalog, viewId?: string) {
+function appendTables(document: ErdDocument, added: Catalog, viewId: string | undefined, allowChanges: boolean) {
   const { namespaces, tables, columns, constraints, indexes, enums, sequences } = document.catalog;
+  const addedColumns = new Map<string, string[]>();
+  if (allowChanges) for (const column of added.columns) {
+    const ids = addedColumns.get(column.tableId) ?? [];
+    ids.push(column.id);
+    addedColumns.set(column.tableId, ids);
+  }
+  const updatedTables = tables.map(table => addedColumns.has(table.id)
+    ? { ...table, columnIds: [...table.columnIds, ...addedColumns.get(table.id)!] } : table);
   document.catalog = {
-    namespaces: [...namespaces, ...added.namespaces], tables: [...tables, ...added.tables], columns: [...columns, ...added.columns],
+    namespaces: [...namespaces, ...added.namespaces], tables: [...updatedTables, ...added.tables], columns: [...columns, ...added.columns],
     constraints: [...constraints, ...added.constraints], indexes: [...indexes, ...added.indexes], enums: [...enums, ...added.enums],
     sequences: [...sequences, ...added.sequences],
   };
+  if (allowChanges && !added.tables.length) return undefined;
   if (!document.views.length && !viewId) {
     document.views.push({ id: randomUUID(), name: '기본 다이어그램', instances: [], groups: [], notes: [] });
   }
   const view = viewId ? document.views.find(value => value.id === viewId) : document.views[0];
   if (!view || !added.tables.length) throw new ApiError(409, 'SQL_IMPORT_NOT_READY', '테이블을 추가하려면 SQL 분석 결과와 대상 다이어그램이 필요합니다.');
-  const tableSizes = new Map(tables.map(table => [table.id, table.columnIds.length]));
+  const tableSizes = new Map(updatedTables.map(table => [table.id, table.columnIds.length]));
   const bottom = [
     ...view.instances.map(instance => instance.y + Math.max(instance.size?.height ?? 0, 84 + (tableSizes.get(instance.tableId) ?? 0) * 50)),
     ...view.groups.map(group => group.y + (group.size?.height ?? 240)),
@@ -60,16 +69,19 @@ function appendTables(document: ErdDocument, added: Catalog, viewId?: string) {
 }
 
 function applyOptions(body: Record<string, unknown>) {
-  const { mode, lossFingerprint } = body;
+  const { mode, lossFingerprint, changeFingerprint } = body;
   if (lossFingerprint !== undefined && (typeof lossFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(lossFingerprint))) {
     throw new ApiError(400, 'INVALID_LOSS_FINGERPRINT', '분석 결과의 손실 확인 값을 사용하세요.');
   }
   if (mode === 'create') return { mode, name: title(body.name), lossFingerprint } as const;
+  if (changeFingerprint !== undefined && (typeof changeFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(changeFingerprint))) {
+    throw new ApiError(400, 'INVALID_CHANGE_FINGERPRINT', '기존 테이블 변경의 확인 값을 사용하세요.');
+  }
   const baseRevision = body.baseRevision;
-  if ((mode !== 'replace' && mode !== 'append') || typeof baseRevision !== 'number' || !Number.isSafeInteger(baseRevision) || baseRevision < 1 || baseRevision > 2147483647) {
+  if ((mode !== 'replace' && mode !== 'append' && mode !== 'change') || typeof baseRevision !== 'number' || !Number.isSafeInteger(baseRevision) || baseRevision < 1 || baseRevision > 2147483647) {
     throw new ApiError(400, 'INVALID_IMPORT_APPLY', '적용 방식과 기준 리비전을 확인하세요.');
   }
-  return { mode, erdId: uuid(body.erdId), baseRevision, lossFingerprint } as const;
+  return { mode, erdId: uuid(body.erdId), baseRevision, lossFingerprint, changeFingerprint } as const;
 }
 
 export function registerSqlImportApply(api: FastifyInstance, pool: Pool, authenticate: Authenticate, limits: DocumentLimits) {
@@ -103,13 +115,16 @@ export function registerSqlImportApply(api: FastifyInstance, pool: Pool, authent
         throw new ApiError(409, 'SQL_IMPORT_NOT_READY', '적용할 수 있는 분석 결과가 필요합니다.');
       }
       const append = job.options.append;
-      if (options.mode === 'append'
-        ? !append || append.erdId !== options.erdId || append.baseRevision !== options.baseRevision
+      if (options.mode === 'append' || options.mode === 'change'
+        ? !append || (append.mode ?? 'append') !== options.mode || append.erdId !== options.erdId || append.baseRevision !== options.baseRevision
         : Boolean(append)) {
         throw new ApiError(409, 'SQL_IMPORT_DESTINATION_MISMATCH', '분석한 ERD와 적용 대상 및 방식을 확인하세요.');
       }
       if ((job.output.losses?.length || options.lossFingerprint) && options.lossFingerprint !== job.output.lossFingerprint) {
         throw new ApiError(409, 'SQL_LOSS_CONFIRMATION_REQUIRED', '이 분석의 제외 항목을 확인해 주세요.');
+      }
+      if (options.mode === 'change' && (!job.output.changeFingerprint || options.changeFingerprint !== job.output.changeFingerprint)) {
+        throw new ApiError(409, 'SQL_CHANGE_CONFIRMATION_REQUIRED', '기존 테이블에 적용할 변경을 확인해 주세요.');
       }
       const { catalog } = job.output;
       let result: ImportApplied;
@@ -126,14 +141,16 @@ export function registerSqlImportApply(api: FastifyInstance, pool: Pool, authent
         if (original.target.dialectId !== job.target.dialectId || original.target.engineVersion !== job.target.engineVersion) {
           throw new ApiError(409, 'DOCUMENT_TARGET_MISMATCH', '분석과 대상 문서의 SQL 대상이 다릅니다.');
         }
-        const placement = append && appendTables(original, catalog, append.viewId);
+        const placement = append && appendTables(original, catalog, append.viewId, options.mode === 'change');
         const next = append ? original : { ...draft(catalog, original.target, row.id, original.name), canvasDisplay: original.canvasDisplay };
         const document = inputDocument(next, limits);
-        await insertSnapshot(client, user.id, row, 'before-import', append ? 'DDL 테이블 추가 전' : 'DDL 모델 교체 전');
+        await insertSnapshot(client, user.id, row, 'before-import', options.mode === 'change' ? 'DDL 모델 변경 전'
+          : append ? 'DDL 테이블 추가 전' : 'DDL 모델 교체 전');
         const { rows: [saved] } = await client.query<{ revision: number; updatedAt: Date }>(`UPDATE erds
           SET title = $2, payload = $3, revision = revision + 1, updated_by = $4, updated_at = clock_timestamp()
           WHERE id = $1 RETURNING revision, updated_at AS "updatedAt"`, [row.id, document.name, JSON.stringify(document), user.id]);
-        result = { erdId: row.id, revision: saved.revision, updatedAt: saved.updatedAt.toISOString(), placement };
+        result = { erdId: row.id, revision: saved.revision, updatedAt: saved.updatedAt.toISOString(), placement,
+          mode: options.mode === 'change' ? 'change' : undefined };
       }
       await client.query(`INSERT INTO sql_import_mutations (user_id, mutation_id, project_id, erd_id, request_hash, result)
         VALUES ($1,$2,$3,$4,$5,$6)`, [user.id, mutationId, jobScope.projectId, result.erdId, digest, JSON.stringify(result)]);

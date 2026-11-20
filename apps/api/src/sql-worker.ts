@@ -13,6 +13,10 @@ async function parseJob(service: SqlService, task: Extract<Task, { kind: 'parse'
   if (result.status === 'parsed') {
     output.catalog = result.catalog;
     output.lossFingerprint = createHash('sha256').update(JSON.stringify([task.jobId, result.losses])).digest('hex');
+    if (task.request.allowExistingChanges) {
+      output.changes = result.changes;
+      output.changeFingerprint = createHash('sha256').update(JSON.stringify([task.jobId, result.changes, result.catalog])).digest('hex');
+    }
   }
   return { state: result.status === 'parsed' ? 'succeeded' : 'failed', output };
 }

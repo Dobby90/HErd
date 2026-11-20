@@ -48,11 +48,15 @@ function parseInput(body: Record<string, unknown>, maxBytes: number) {
     throw new ApiError(413, 'SQL_INPUT_TOO_LARGE', 'SQL 입력 크기 한도를 초과했습니다.', { limitBytes: maxBytes });
   }
   const destination = body.append === undefined ? undefined : objectBody(body.append);
+  const mode = destination?.mode;
+  if (mode !== undefined && mode !== 'change') {
+    throw new ApiError(400, 'INVALID_SQL_REQUEST', 'DDL 가져오기 방식을 확인하세요.');
+  }
   const viewId = destination?.viewId;
   if (viewId !== undefined && (typeof viewId !== 'string' || !viewId || viewId.length > 1024)) {
     throw new ApiError(400, 'INVALID_SQL_REQUEST', '테이블을 추가할 다이어그램을 확인하세요.');
   }
-  const append = destination && { erdId: uuid(destination.erdId), baseRevision: revisionNumber(destination.baseRevision), viewId };
+  const append = destination && { erdId: uuid(destination.erdId), baseRevision: revisionNumber(destination.baseRevision), viewId, mode };
   return { kind: 'parse' as const, target: target.data, sql, options: { defaultNamespace, append } };
 }
 

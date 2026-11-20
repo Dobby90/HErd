@@ -78,12 +78,12 @@ it('flushes editor saves, previews dependencies, and downloads UTF-8 DDL for a s
         await dialog.getByRole('button', { name: '닫기', exact: true }).click();
 
         const blocked = structuredClone(fixture);
-        blocked.catalog.indexes[1].predicate = { ...blocked.target, sql: 'TRUE' };
+        blocked.catalog.indexes[1].keys = [{ kind: 'expression', expression: { ...blocked.target, sql: '1' } }];
         await pool.query('UPDATE erds SET revision = 5, payload = $2 WHERE id = $1', [fixture.id, JSON.stringify(blocked)]);
         await openExport(page, 'DDL');
         await dialog.getByRole('button', { name: '다시 생성', exact: true }).click();
         await dialog.getByText(/작업 실패 · 원본 리비전 5/).waitFor();
-        await dialog.getByText(/부분 인덱스와 식 인덱스/).waitFor();
+        await dialog.getByText(/식 인덱스의 DDL 내보내기/).waitFor();
         expect(await dialog.getByRole('button', { name: '.sql 다운로드' }).count()).toBe(0);
       }, { web: webPort, api: Number(new URL(address).port) });
     } finally {

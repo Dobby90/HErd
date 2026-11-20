@@ -5,7 +5,7 @@ import type { Diagnostic, DialectCapabilities, DialectMetadata, EditorDialect, R
 export const postgresqlMetadata: DialectMetadata = {
   id: 'postgresql',
   name: 'PostgreSQL',
-  adapterVersion: '0.3.0',
+  adapterVersion: '0.4.0',
   profiles: [{ version: '17', status: 'certified' }],
 };
 
@@ -25,7 +25,7 @@ export const postgresqlCapabilities = {
   default: editable,
   index: editable,
   expressionIndex: { ...editable, import: 'unsupported', export: 'unsupported' },
-  partialIndex: { ...editable, import: 'unsupported', export: 'unsupported' },
+  partialIndex: editable,
   comment: editable,
   enum: modeled,
   sequence: modeled,
@@ -34,7 +34,7 @@ export const postgresqlCapabilities = {
 } satisfies DialectCapabilities;
 
 export const postgresqlTypes = [
-  'smallint', 'integer', 'bigint', 'numeric', 'boolean', 'text', 'varchar', 'date',
+  'smallint', 'integer', 'bigint', 'numeric', 'real', 'double precision', 'boolean', 'text', 'varchar', 'date',
   'timestamp', 'timestamptz', 'uuid', 'jsonb', 'bytea',
 ] as const;
 
@@ -57,7 +57,7 @@ function referenceKeys(document: ErdDocument, tableId: string): ReferenceKey[] {
 type ColumnType = Catalog['columns'][number]['type'];
 
 const aliases = new Map(Object.entries({
-  int: 'integer', int2: 'smallint', int4: 'integer', int8: 'bigint', decimal: 'numeric',
+  int: 'integer', int2: 'smallint', int4: 'integer', int8: 'bigint', decimal: 'numeric', float4: 'real', float8: 'double precision',
   bool: 'boolean', 'character varying': 'varchar', 'timestamp without time zone': 'timestamp',
   'timestamp with time zone': 'timestamptz',
 }));
