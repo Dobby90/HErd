@@ -187,6 +187,18 @@ summary { cursor: pointer; }
   box-shadow: 0 7px 24px var(--shadow);
 }
 .action-menu-panel > button { justify-content: flex-start; border-color: transparent; white-space: nowrap; }
+.action-menu-panel:has(> .sql-import-option) { width: min(23rem, calc(100vw - 1.5rem)); }
+.action-menu-panel > .sql-import-option {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .15rem;
+  padding: .5rem .62rem;
+  text-align: left;
+  white-space: normal;
+  word-break: keep-all;
+}
+.sql-import-option small { color: var(--muted); font-size: .77rem; font-weight: 400; }
+.action-menu-panel > hr { width: 100%; margin: .14rem 0; border: 0; border-top: 1px solid var(--border); }
 .menu-chevron { display: inline-flex; color: var(--subtle); }
 .menu-chevron .ui-icon { width: 13px; height: 13px; }
 .primary .menu-chevron { color: inherit; }

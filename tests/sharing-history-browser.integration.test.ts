@@ -222,12 +222,12 @@ it('manages members, opens historical diagrams, safely retries restore, and lock
         await button('로그아웃').click();
         await button('OIDC 로그인').click();
         await heading('기준 모델');
-        await page.getByRole('button', { name: '가져오기', exact: true }).click();
-        await button('DDL로 모델 교체').waitFor();
+        await button('DDL 가져오기').click();
+        await button('모델 전체 교체').waitFor();
         expect((await api.inject({ method: 'PATCH', url: members + '/' + alice.id, headers, payload: { role: 'viewer' } })).statusCode).toBe(204);
         await page.evaluate(() => window.dispatchEvent(new Event('focus')));
         await status('읽기 전용 · 리비전 ' + after.revision);
-        expect(await button('DDL로 모델 교체').count()).toBe(0);
+        expect(await button('모델 전체 교체').count()).toBe(0);
         expect(await button('관계 추가').count()).toBe(0);
         expect(await button('캔버스에 테이블 추가').count()).toBe(0);
         expect(await button('실행 취소').count()).toBe(0);

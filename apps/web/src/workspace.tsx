@@ -93,6 +93,7 @@ function WorkspaceEditor({ entry, projectId, csrf, readOnly, suspended, topActio
       <SqlImport projectId={projectId} csrf={csrf} disabled={suspended} onApplied={onImported}
         destination={{ ...destination, mode: 'change', viewId, namespaces: document.catalog.namespaces,
           savedRevision: async () => (await editor.ensureSaved('모델을 변경하기')).revision }} />
+      <hr />
       <SqlImport projectId={projectId} csrf={csrf} disabled={suspended} onApplied={onImported}
         destination={{ ...destination, mode: 'replace', savedRevision: async () => (await editor.ensureSaved('모델을 교체하기')).revision }} />
     </>}

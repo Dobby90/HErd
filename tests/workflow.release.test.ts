@@ -66,12 +66,12 @@ it('imports with warnings, edits and downloads SQL, restores a replacement, and 
         expect(sql).toContain('FOREIGN KEY');
         await page.getByRole('dialog', { name: 'DDL 내보내기' }).getByRole('button', { name: '닫기' }).click();
 
-        await page.getByRole('button', { name: '가져오기', exact: true }).click();
-        await button('DDL로 모델 교체').click();
-        await page.getByRole('dialog', { name: 'DDL로 모델 교체' }).getByLabel('DDL 입력')
+        await button('DDL 가져오기').click();
+        await button('모델 전체 교체').click();
+        await page.getByRole('dialog', { name: '모델 전체 교체' }).getByLabel('DDL 입력')
           .fill('CREATE TABLE replacement (id integer PRIMARY KEY);');
         await button('DDL 분석').click();
-        await button('확인하고 모델 교체').click();
+        await button('모델 전체 교체').click();
         await status(3);
         await button('버전 이력').click();
         await button('DDL 교체 전 · 리비전 2').click();

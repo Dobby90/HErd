@@ -660,7 +660,7 @@ export function DocumentEditor({ session, readOnly = false, topActions, saveActi
             onClick={() => session.step('redo')}><Icon name="redo" /></button>
         </div>}
         <div className="actions secondary-actions">{topActions}</div>
-        {importAction && <ActionMenu label="가져오기" icon="import">{importAction(view?.id)}</ActionMenu>}
+        {importAction && <ActionMenu label="DDL 가져오기" icon="import">{importAction(view?.id)}</ActionMenu>}
         {(exportAction || view) && <ActionMenu label="내보내기" icon="export" primary>
           {exportAction?.(view?.id, openDiagnostic)}
           {view && <ImageExport document={document} view={view} dialect={dialect} selection={selectedInstances} verify={verifyImage} />}

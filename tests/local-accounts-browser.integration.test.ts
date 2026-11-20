@@ -62,9 +62,20 @@ it('uses DB-backed accounts and starts at the current user’s projects', async 
         expect(await page.locator('html').getAttribute('data-theme')).toBe('light');
         await page.setViewportSize({ width: 390, height: 844 });
         await version.waitFor();
-        await button('가져오기').click();
-        const importButton = await button('DDL로 테이블 추가').boundingBox();
-        expect(importButton && importButton.x >= 0 && importButton.x + importButton.width <= 390).toBe(true);
+        await button('DDL 가져오기').click();
+        for (const [name, description] of [
+          ['새 테이블만 추가', '기존 테이블을 유지하고'],
+          ['기존 테이블에 항목 추가', '컬럼·제약조건·인덱스'],
+          ['모델 전체 교체', '모든 테이블과 다이어그램 배치'],
+        ]) {
+          const option = button(name);
+          await option.getByText(description, { exact: false }).waitFor();
+          const bounds = await option.boundingBox();
+          expect(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 390).toBe(true);
+        }
+        const separator = page.locator('.action-menu-panel:visible').getByRole('separator');
+        await separator.waitFor();
+        expect(await separator.evaluate(line => line.nextElementSibling?.getAttribute('aria-label'))).toBe('모델 전체 교체');
         await page.keyboard.press('Escape');
         await button('로그아웃').click();
         const secondId = await signup('shared-owner', '두 번째 사용자');
